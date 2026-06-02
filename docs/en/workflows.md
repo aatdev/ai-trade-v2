@@ -23,6 +23,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 | [`core-portfolio-weekly`](#core-portfolio-weekly) — Core Portfolio Weekly | weekly | 60 | mixed | beginner |
 | [`market-regime-daily`](#market-regime-daily) — Market Regime Daily | daily | 15 | no-api-basic | beginner |
 | [`monthly-performance-review`](#monthly-performance-review) — Monthly Performance Review | monthly | 90 | no-api-basic | intermediate |
+| [`swing-execution-manage`](#swing-execution-manage) — Swing Execution & Management | daily | 20 | mixed | intermediate |
 | [`swing-opportunity-daily`](#swing-opportunity-daily) — Swing Opportunity Daily | daily | 30 | fmp-required | intermediate |
 | [`trade-memory-loop`](#trade-memory-loop) — Trade Memory Loop | ad-hoc | 30 | no-api-basic | beginner |
 
@@ -98,7 +99,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **Required skills:** `market-breadth-analyzer`, `uptrend-analyzer`, `exposure-coach`
 
-**Optional skills:** `market-top-detector`, `macro-regime-detector`
+**Optional skills:** `market-top-detector`, `macro-regime-detector`, `market-news-analyst`
 
 **Artifacts:**
 
@@ -107,7 +108,8 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 | `market_breadth_report` | 1 | yes | `swing-opportunity-daily`, `monthly-performance-review` |
 | `uptrend_report` | 2 | yes | — |
 | `top_risk_report` | 3 | no | — |
-| `exposure_decision` | 4 | yes | `swing-opportunity-daily` |
+| `news_context_report` | 4 | no | — |
+| `exposure_decision` | 5 | yes | `swing-opportunity-daily` |
 
 **Steps:**
 
@@ -123,9 +125,13 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 - produces: `top_risk_report`
 
-**Step 4: Decide exposure posture** (decision gate) → `exposure-coach`
+**Step 4: Review market-moving news** (optional) → `market-news-analyst`
 
-- consumes: `market_breadth_report`, `uptrend_report`, `top_risk_report`
+- produces: `news_context_report`
+
+**Step 5: Decide exposure posture** (decision gate) → `exposure-coach`
+
+- consumes: `market_breadth_report`, `uptrend_report`, `top_risk_report`, `news_context_report`
 - produces: `exposure_decision`
 - **Decision:** Given today's breadth, uptrend participation, and top risk, is new swing trade risk allowed, restricted, or cash-priority?
 
@@ -212,6 +218,87 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - `monthly_decision_log` — What trades worked / what did not, by category
 - `rule_changes_for_next_month` — Adjustments to position sizing, entry rules, regime gates
 - `skill_improvement_backlog` — Optional feedback into repo improvement loop (skills / workflows)
+
+**Journal destination:** `trader-memory-core`
+
+---
+
+## Swing Execution & Management {#swing-execution-manage}
+
+**`swing-execution-manage`** · daily · ~20 min · mixed · intermediate
+
+**When to run:** After swing-opportunity-daily has produced a registered thesis with an entry plan (entry / stop / target). Opens the position at the broker, manages it in-trade (trim / trail), and executes the planned exit. Bridges the gap between trade planning and the post-close trade-memory-loop.
+
+**When NOT to run:** Do not run without a registered thesis and entry plan from swing-opportunity-daily. Do not run on a cash-priority / restrictive regime day from market-regime-daily. Do not use to discover new candidates — this workflow only executes plans that already passed the validation and sizing gates.
+
+**Required skills:** `trader-memory-core`, `portfolio-manager`
+
+**Optional skills:** `position-sizer`
+
+**Prerequisite workflows (informational):**
+
+- `swing-opportunity-daily` expects `candidate_journal_entry` — Execution requires a registered thesis with a validated setup, entry, stop, target, and position size. This workflow does not screen or plan.
+- `market-regime-daily` expects `exposure_decision` — Only open new swing risk when the latest exposure decision is non-restrictive. Re-check the regime before every entry and during management.
+
+**Artifacts:**
+
+| Artifact | Produced by step | Required | Downstream hints |
+|---|---|---|---|
+| `live_position_sizing` | 1 | no | — |
+| `active_thesis` | 2 | yes | — |
+| `entry_order_confirmation` | 3 | yes | — |
+| `position_monitor_report` | 4 | yes | — |
+| `position_adjustments` | 5 | no | — |
+| `exit_execution` | 6 | yes | — |
+| `closed_thesis_record` | 7 | yes | `trade-memory-loop` |
+
+**Steps:**
+
+**Step 1: Re-check position size at live price** (optional) → `position-sizer`
+
+- produces: `live_position_sizing`
+
+**Step 2: Activate thesis and attach position** (decision gate) → `trader-memory-core`
+
+- consumes: `live_position_sizing`
+- produces: `active_thesis`
+- **Decision:** Has the regime gate (market-regime-daily) and the entry plan held since planning? Transition the thesis ENTRY_READY -> ACTIVE only if the setup and risk per trade are still valid at the current price.
+
+**Step 3: Place entry bracket order** (decision gate) → `portfolio-manager`
+
+- consumes: `active_thesis`
+- produces: `entry_order_confirmation`
+- **Decision:** Do the bracket parameters (entry/pivot, stop at base low, 2R target) match the plan, and is total portfolio heat within budget? Place the order manually; confirm the fill and update the thesis with actual price/date.
+
+**Step 4: Monitor open position and re-check regime** → `portfolio-manager`
+
+- consumes: `entry_order_confirmation`
+- produces: `position_monitor_report`
+
+**Step 5: Manage in-trade (trim / trail stop)** (optional) (decision gate) → `trader-memory-core`
+
+- consumes: `position_monitor_report`
+- produces: `position_adjustments`
+- **Decision:** At +2R, trim partial and trail the stop to breakeven? If the regime broke (SEVERE distribution / market-top signal) or the setup failed, reduce exposure ahead of the planned exit?
+
+**Step 6: Execute planned exit** (decision gate) → `portfolio-manager`
+
+- consumes: `position_adjustments`, `position_monitor_report`
+- produces: `exit_execution`
+- **Decision:** Has an exit trigger fired (stop hit, target reached, or setup break)? Execute the exit manually and capture the actual exit price and date.
+
+**Step 7: Record exit outcome** → `trader-memory-core`
+
+- consumes: `exit_execution`
+- produces: `closed_thesis_record`
+
+**Manual review:**
+
+- Confirm market-regime-daily exposure_decision still allows the open risk.
+- All orders are placed manually at the broker; no auto-execution.
+- Never widen a stop below the original base low to avoid being stopped out.
+- Honor the plan — do not improvise targets or sizing mid-trade.
+- After closing, run trade-memory-loop on the closed_thesis_record.
 
 **Journal destination:** `trader-memory-core`
 

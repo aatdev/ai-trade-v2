@@ -23,6 +23,7 @@ required_skills:
 optional_skills:
   - market-top-detector
   - macro-regime-detector
+  - market-news-analyst
 
 artifacts:
   - id: market_breadth_report
@@ -37,8 +38,11 @@ artifacts:
   - id: top_risk_report
     produced_by_step: 3
     required: false
-  - id: exposure_decision
+  - id: news_context_report
     produced_by_step: 4
+    required: false
+  - id: exposure_decision
+    produced_by_step: 5
     required: true
     mynotes_export: true
     downstream_hints:
@@ -68,12 +72,21 @@ steps:
     decision_gate: false
 
   - step: 4
+    name: Review market-moving news
+    skill: market-news-analyst
+    optional: true
+    produces:
+      - news_context_report
+    decision_gate: false
+
+  - step: 5
     name: Decide exposure posture
     skill: exposure-coach
     consumes:
       - market_breadth_report
       - uptrend_report
       - top_risk_report
+      - news_context_report
     produces:
       - exposure_decision
     decision_gate: true

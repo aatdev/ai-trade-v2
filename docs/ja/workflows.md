@@ -25,6 +25,7 @@ permalink: /ja/workflows/
 | [`core-portfolio-weekly`](#core-portfolio-weekly) — Core Portfolio Weekly | weekly | 60 | mixed | beginner |
 | [`market-regime-daily`](#market-regime-daily) — Market Regime Daily | daily | 15 | no-api-basic | beginner |
 | [`monthly-performance-review`](#monthly-performance-review) — Monthly Performance Review | monthly | 90 | no-api-basic | intermediate |
+| [`swing-execution-manage`](#swing-execution-manage) — Swing Execution & Management | daily | 20 | mixed | intermediate |
 | [`swing-opportunity-daily`](#swing-opportunity-daily) — Swing Opportunity Daily | daily | 30 | fmp-required | intermediate |
 | [`trade-memory-loop`](#trade-memory-loop) — Trade Memory Loop | ad-hoc | 30 | no-api-basic | beginner |
 
@@ -100,7 +101,7 @@ permalink: /ja/workflows/
 
 **必須スキル:** `market-breadth-analyzer`, `uptrend-analyzer`, `exposure-coach`
 
-**任意スキル:** `market-top-detector`, `macro-regime-detector`
+**任意スキル:** `market-top-detector`, `macro-regime-detector`, `market-news-analyst`
 
 **artifact 一覧:**
 
@@ -109,7 +110,8 @@ permalink: /ja/workflows/
 | `market_breadth_report` | 1 | あり | `swing-opportunity-daily`, `monthly-performance-review` |
 | `uptrend_report` | 2 | あり | — |
 | `top_risk_report` | 3 | なし | — |
-| `exposure_decision` | 4 | あり | `swing-opportunity-daily` |
+| `news_context_report` | 4 | なし | — |
+| `exposure_decision` | 5 | あり | `swing-opportunity-daily` |
 
 **ステップ:**
 
@@ -125,9 +127,13 @@ permalink: /ja/workflows/
 
 - produces: `top_risk_report`
 
-**ステップ 4: Decide exposure posture** （判断ゲート） → `exposure-coach`
+**ステップ 4: Review market-moving news** （任意） → `market-news-analyst`
 
-- consumes: `market_breadth_report`, `uptrend_report`, `top_risk_report`
+- produces: `news_context_report`
+
+**ステップ 5: Decide exposure posture** （判断ゲート） → `exposure-coach`
+
+- consumes: `market_breadth_report`, `uptrend_report`, `top_risk_report`, `news_context_report`
 - produces: `exposure_decision`
 - **判断:** Given today's breadth, uptrend participation, and top risk, is new swing trade risk allowed, restricted, or cash-priority?
 
@@ -214,6 +220,87 @@ permalink: /ja/workflows/
 - `monthly_decision_log` — What trades worked / what did not, by category
 - `rule_changes_for_next_month` — Adjustments to position sizing, entry rules, regime gates
 - `skill_improvement_backlog` — Optional feedback into repo improvement loop (skills / workflows)
+
+**Journal 出力先:** `trader-memory-core`
+
+---
+
+## Swing Execution & Management {#swing-execution-manage}
+
+**`swing-execution-manage`** · daily · ~20 min · mixed · intermediate
+
+**実行タイミング:** After swing-opportunity-daily has produced a registered thesis with an entry plan (entry / stop / target). Opens the position at the broker, manages it in-trade (trim / trail), and executes the planned exit. Bridges the gap between trade planning and the post-close trade-memory-loop.
+
+**実行してはいけないとき:** Do not run without a registered thesis and entry plan from swing-opportunity-daily. Do not run on a cash-priority / restrictive regime day from market-regime-daily. Do not use to discover new candidates — this workflow only executes plans that already passed the validation and sizing gates.
+
+**必須スキル:** `trader-memory-core`, `portfolio-manager`
+
+**任意スキル:** `position-sizer`
+
+**前提ワークフロー（informational）:**
+
+- `swing-opportunity-daily` が期待する artifact `candidate_journal_entry` — Execution requires a registered thesis with a validated setup, entry, stop, target, and position size. This workflow does not screen or plan.
+- `market-regime-daily` が期待する artifact `exposure_decision` — Only open new swing risk when the latest exposure decision is non-restrictive. Re-check the regime before every entry and during management.
+
+**artifact 一覧:**
+
+| Artifact | 生成ステップ | 必須 | 下流ヒント |
+|---|---|---|---|
+| `live_position_sizing` | 1 | なし | — |
+| `active_thesis` | 2 | あり | — |
+| `entry_order_confirmation` | 3 | あり | — |
+| `position_monitor_report` | 4 | あり | — |
+| `position_adjustments` | 5 | なし | — |
+| `exit_execution` | 6 | あり | — |
+| `closed_thesis_record` | 7 | あり | `trade-memory-loop` |
+
+**ステップ:**
+
+**ステップ 1: Re-check position size at live price** （任意） → `position-sizer`
+
+- produces: `live_position_sizing`
+
+**ステップ 2: Activate thesis and attach position** （判断ゲート） → `trader-memory-core`
+
+- consumes: `live_position_sizing`
+- produces: `active_thesis`
+- **判断:** Has the regime gate (market-regime-daily) and the entry plan held since planning? Transition the thesis ENTRY_READY -> ACTIVE only if the setup and risk per trade are still valid at the current price.
+
+**ステップ 3: Place entry bracket order** （判断ゲート） → `portfolio-manager`
+
+- consumes: `active_thesis`
+- produces: `entry_order_confirmation`
+- **判断:** Do the bracket parameters (entry/pivot, stop at base low, 2R target) match the plan, and is total portfolio heat within budget? Place the order manually; confirm the fill and update the thesis with actual price/date.
+
+**ステップ 4: Monitor open position and re-check regime** → `portfolio-manager`
+
+- consumes: `entry_order_confirmation`
+- produces: `position_monitor_report`
+
+**ステップ 5: Manage in-trade (trim / trail stop)** （任意） （判断ゲート） → `trader-memory-core`
+
+- consumes: `position_monitor_report`
+- produces: `position_adjustments`
+- **判断:** At +2R, trim partial and trail the stop to breakeven? If the regime broke (SEVERE distribution / market-top signal) or the setup failed, reduce exposure ahead of the planned exit?
+
+**ステップ 6: Execute planned exit** （判断ゲート） → `portfolio-manager`
+
+- consumes: `position_adjustments`, `position_monitor_report`
+- produces: `exit_execution`
+- **判断:** Has an exit trigger fired (stop hit, target reached, or setup break)? Execute the exit manually and capture the actual exit price and date.
+
+**ステップ 7: Record exit outcome** → `trader-memory-core`
+
+- consumes: `exit_execution`
+- produces: `closed_thesis_record`
+
+**手動レビュー:**
+
+- Confirm market-regime-daily exposure_decision still allows the open risk.
+- All orders are placed manually at the broker; no auto-execution.
+- Never widen a stop below the original base low to avoid being stopped out.
+- Honor the plan — do not improvise targets or sizing mid-trade.
+- After closing, run trade-memory-loop on the closed_thesis_record.
 
 **Journal 出力先:** `trader-memory-core`
 

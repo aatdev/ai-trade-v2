@@ -48,3 +48,5 @@ htmlcov/
 /tmp
 
 .claude/skills
+
+claude.sh
