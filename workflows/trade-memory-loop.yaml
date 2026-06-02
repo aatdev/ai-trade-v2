@@ -34,6 +34,7 @@ artifacts:
   - id: postmortem_findings
     produced_by_step: 2
     required: true
+    mynotes_export: true
     downstream_hints:
       - monthly-performance-review
   - id: performance_coach_report
@@ -52,6 +53,7 @@ artifacts:
   - id: lessons_log_entry
     produced_by_step: 5
     required: true
+    mynotes_export: true
     downstream_hints:
       - monthly-performance-review
 

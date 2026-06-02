@@ -40,6 +40,7 @@ artifacts:
   - id: exposure_decision
     produced_by_step: 4
     required: true
+    mynotes_export: true
     downstream_hints:
       - swing-opportunity-daily
 

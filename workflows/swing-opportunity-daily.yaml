@@ -48,17 +48,20 @@ artifacts:
   - id: validated_setups
     produced_by_step: 4
     required: true
+    mynotes_export: true
   - id: position_sizing
     produced_by_step: 5
     required: true
   - id: trade_plans
     produced_by_step: 6
     required: false
+    mynotes_export: true
     downstream_hints:
       - trade-memory-loop
   - id: candidate_journal_entry
     produced_by_step: 7
     required: true
+    mynotes_export: true
     downstream_hints:
       - trade-memory-loop
 

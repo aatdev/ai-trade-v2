@@ -47,21 +47,26 @@ artifacts:
   - id: active_thesis
     produced_by_step: 2
     required: true
+    mynotes_export: true
   - id: entry_order_confirmation
     produced_by_step: 3
     required: true
+    mynotes_export: true
   - id: position_monitor_report
     produced_by_step: 4
     required: true
   - id: position_adjustments
     produced_by_step: 5
     required: false
+    mynotes_export: true
   - id: exit_execution
     produced_by_step: 6
     required: true
+    mynotes_export: true
   - id: closed_thesis_record
     produced_by_step: 7
     required: true
+    mynotes_export: true
     downstream_hints:
       - trade-memory-loop
 

@@ -51,9 +51,11 @@ artifacts:
   - id: monthly_decision_log
     produced_by_step: 6
     required: true
+    mynotes_export: true
   - id: rule_changes_for_next_month
     produced_by_step: 6
     required: true
+    mynotes_export: true
   - id: skill_improvement_backlog
     produced_by_step: 6
     required: false

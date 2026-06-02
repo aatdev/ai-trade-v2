@@ -24,7 +24,7 @@ A workflow manifest has these main sections:
 1. **Header** — `id`, `display_name`, `cadence`, `estimated_minutes`, `target_users`, `difficulty`, `api_profile`, plus `when_to_run` / `when_not_to_run` guidance.
 2. **`required_skills` / `optional_skills`** — the skills you need installed to run this workflow. Required skills must appear in at least one non-optional step.
 3. **`prerequisite_workflows`** *(optional)* — informational hint that this workflow expects an artifact from another workflow upstream (e.g. `swing-opportunity-daily` expects `exposure_decision` from `market-regime-daily`). Validator does NOT enforce — see "Inter-workflow data flow" below.
-4. **`artifacts`** — every named output, with `produced_by_step`, `required` flag, and (optional) `downstream_hints` for navigation. The validator cross-checks `produced_by_step` against each step's `produces:` list.
+4. **`artifacts`** — every named output, with `produced_by_step`, `required` flag, and (optional) `downstream_hints` for navigation. The validator cross-checks `produced_by_step` against each step's `produces:` list. An optional `mynotes_export: true` flag marks artifacts worth persisting to a personal knowledge base (`~/Documents/MyNotes`) to visualize the decision trail — these are the decision-gate outputs and journal/postmortem records, not raw intermediate data. Informational only; the validator ignores it.
 5. **`steps`** — ordered execution. Each step names exactly one skill, may be `optional`, may be a `decision_gate` (which requires a `decision_question`), and declares what it `consumes` and `produces`.
 
 Below the steps:
