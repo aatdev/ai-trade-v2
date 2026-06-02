@@ -1,0 +1,1 @@
+/Applications/TradingView.app/Contents/MacOS/TradingView --remote-debugging-port=9222

@@ -23,10 +23,11 @@ Each skill keeps a thin `tv_client.py` subclass that only configures the knobs
 fallback here — the whole point is to drop FMP.
 
 Environment:
-  - TV_MCP_REPO : absolute path to the tradingview-mcp-jackson checkout. Used to
-                  locate state/sp500.csv and scripts/tv_earnings_calendar.mjs, and
-                  as a fallback `tv` CLI (node <repo>/src/cli/index.js) when the
-                  global `tv` is not on PATH. Defaults to the known dev path.
+  - TV_MCP_REPO : absolute path to the TradingView bridge checkout. Used to
+                  locate scripts/tv_earnings_calendar.mjs and the optional
+                  state/ cache, and as the `tv` CLI (node <repo>/src/cli/index.js)
+                  when the global `tv` is not on PATH. Defaults to the in-repo
+                  vendored copy at <repo>/vendor/tradingview-mcp.
   - TV_CLI      : explicit path to the `tv` CLI entry (overrides discovery).
 
 Data shape contract (matches FMPClient):
@@ -44,16 +45,28 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-# The source MCP repo holds state/sp500.csv and the earnings-calendar helper.
-# Override with TV_MCP_REPO; default to the known dev checkout so it works
-# out of the box on this machine.
-TV_MCP_REPO = os.environ.get(
-    "TV_MCP_REPO", "/Users/alex/Projects/Repos/tradingview-mcp-jackson"
+# Repo root (.../claude-trading-skills), resolved from this file's location so
+# the vendored TradingView bridge is found regardless of where a skill imports
+# the module from (skills/*/scripts/* symlink to scripts/lib/ → resolve()
+# follows the symlink back here).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# The TradingView bridge (node CLI, helper scripts, optional state cache) is
+# vendored in-repo under vendor/tradingview-mcp so the repository is
+# self-contained. Override with TV_MCP_REPO to point at an external checkout.
+TV_MCP_REPO = os.environ.get("TV_MCP_REPO") or str(
+    _REPO_ROOT / "vendor" / "tradingview-mcp"
 )
 STATE_DIR = os.path.join(TV_MCP_REPO, "state")
 EARNINGS_MJS = os.path.join(TV_MCP_REPO, "scripts", "tv_earnings_calendar.mjs")
+
+# S&P 500 constituents committed in-repo. The vendored copy lives under the
+# gitignored state/ tree, so this committed snapshot is the default source and
+# keeps the screeners working straight after a clone; falls back to STATE_DIR.
+SP500_CSV = str(_REPO_ROOT / "scripts" / "lib" / "data" / "sp500.csv")
 
 # metrics_cache.py is dropped in alongside this module (sibling import).
 try:
@@ -109,7 +122,7 @@ def _resolve_cli() -> list[str]:
     if os.path.exists(node_cli):
         return ["node", node_cli]
     raise ValueError(
-        "tv CLI not found: install it with `npm link` in tradingview-mcp-jackson, "
+        "tv CLI not found: run `npm install` in vendor/tradingview-mcp, "
         "or set TV_CLI / TV_MCP_REPO."
     )
 
@@ -180,7 +193,7 @@ class TVClient:
         Applies index_remap before the switch (e.g. ^GSPC -> SP:SPX). Returns
         bars NEWEST FIRST in FMP-compatible dict form, or []."""
         tv_symbol = self.index_remap.get(symbol, symbol)
-        self._cli("symbol", tv_symbol, parse=False)
+        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
         if not self._tf_set:
             self._cli("timeframe", "D", parse=False)
             self._tf_set = True
@@ -359,16 +372,20 @@ class TVClient:
         return ema
 
     def get_sp500_constituents(self) -> Optional[list[dict]]:
-        """S&P 500 constituents from <TV_MCP_REPO>/state/sp500.csv (the same
-        Wikipedia-derived snapshot scripts/collect_russell.js walks). Returns
+        """S&P 500 constituents from the committed scripts/lib/data/sp500.csv
+        (falling back to <TV_MCP_REPO>/state/sp500.csv) — the same
+        Wikipedia-derived snapshot scripts/collect_russell.js walks. Returns
         [{symbol, name, sector}]; dotted symbols (BRK.B) preserved."""
         cache_key = "sp500_constituents"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        csv_path = os.path.join(STATE_DIR, "sp500.csv")
+        csv_path = SP500_CSV if os.path.exists(SP500_CSV) else os.path.join(STATE_DIR, "sp500.csv")
         if not os.path.exists(csv_path):
-            print(f"  WARN: {csv_path} not found (set TV_MCP_REPO)", file=sys.stderr)
+            print(
+                f"  WARN: sp500.csv not found at {SP500_CSV} or {STATE_DIR} (set TV_MCP_REPO)",
+                file=sys.stderr,
+            )
             return None
 
         import csv as _csv
@@ -552,7 +569,7 @@ class TVClient:
         (falling back to `default_tv`). Bypasses the per-ticker metrics cache
         (indices aren't collected)."""
         tv_symbol = self.index_remap.get(fmp_symbol, default_tv)
-        self._cli("symbol", tv_symbol, parse=False)
+        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
         if not self._tf_set:
             self._cli("timeframe", "D", parse=False)
             self._tf_set = True
@@ -586,7 +603,7 @@ class TVClient:
     def _yield_series(self, tv_symbol: str) -> Optional[list[dict]]:
         """Raw {date, close} daily series for a TVC yield symbol, OLDEST first.
         Bypasses min_bars/cache (yields aren't in the metrics cache)."""
-        self._cli("symbol", tv_symbol, parse=False)
+        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
         if not self._tf_set:
             self._cli("timeframe", "D", parse=False)
             self._tf_set = True

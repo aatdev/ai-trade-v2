@@ -21,13 +21,15 @@ import os
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
-# The local-file fallback lives under the source MCP repo's state/metrics. The
+# The local-file fallback lives under the vendored bridge's state/metrics. The
 # OpenSearch backend below is the primary source and is path-independent, so this
-# only matters when OpenSearch is unreachable. Override the repo with TV_MCP_REPO.
-_REPO_ROOT = os.environ.get(
-    "TV_MCP_REPO", "/Users/alex/Projects/Repos/tradingview-mcp-jackson"
+# only matters when OpenSearch is unreachable. Override the repo with TV_MCP_REPO;
+# defaults to the in-repo vendored copy at <repo>/vendor/tradingview-mcp.
+_REPO_ROOT = os.environ.get("TV_MCP_REPO") or str(
+    Path(__file__).resolve().parents[2] / "vendor" / "tradingview-mcp"
 )
 METRICS_DIR = os.path.join(_REPO_ROOT, "state", "metrics")
 
