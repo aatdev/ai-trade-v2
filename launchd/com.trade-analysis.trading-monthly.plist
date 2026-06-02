@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Monthly performance review (~11:00 CET). launchd cannot express "first Sunday
+  of the month", so this fires EVERY Sunday (Weekday 0) and the script keeps
+  only the first Sunday (day 1-7), no-op'ing on the others.
+
+  SETUP: Replace $HOME and $PROJECT_DIR before installing.
+    sed "s|\$HOME|$HOME|g; s|\$PROJECT_DIR|$(pwd)|g" \
+      launchd/com.trade-analysis.trading-monthly.plist \
+      > ~/Library/LaunchAgents/com.trade-analysis.trading-monthly.plist
+    launchctl load ~/Library/LaunchAgents/com.trade-analysis.trading-monthly.plist
+-->
+<dict>
+	<key>Label</key>
+	<string>com.trade-analysis.trading-monthly</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>$PROJECT_DIR/scripts/run_trading_schedule.sh</string>
+		<string>--slot</string>
+		<string>monthly</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>$PROJECT_DIR</string>
+
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Weekday</key>
+		<integer>0</integer>
+		<key>Hour</key>
+		<integer>11</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>$HOME</string>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>$PROJECT_DIR/logs/launchd_trading_monthly.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>$PROJECT_DIR/logs/launchd_trading_monthly_error.log</string>
+
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

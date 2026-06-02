@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Post-US-close (~22:15 CET): full regime on fresh EOD data, and (only if the
+  exposure gate is `allow`) the swing-opportunity screen to build tomorrow's
+  watchlist. The script self-skips on non-trading days.
+
+  SETUP: Replace $HOME and $PROJECT_DIR before installing.
+    sed "s|\$HOME|$HOME|g; s|\$PROJECT_DIR|$(pwd)|g" \
+      launchd/com.trade-analysis.trading-evening-prep.plist \
+      > ~/Library/LaunchAgents/com.trade-analysis.trading-evening-prep.plist
+    launchctl load ~/Library/LaunchAgents/com.trade-analysis.trading-evening-prep.plist
+-->
+<dict>
+	<key>Label</key>
+	<string>com.trade-analysis.trading-evening-prep</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>$PROJECT_DIR/scripts/run_trading_schedule.sh</string>
+		<string>--slot</string>
+		<string>evening-prep</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>$PROJECT_DIR</string>
+
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>22</integer>
+		<key>Minute</key>
+		<integer>15</integer>
+	</dict>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>$HOME</string>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>$PROJECT_DIR/logs/launchd_trading_evening_prep.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>$PROJECT_DIR/logs/launchd_trading_evening_prep_error.log</string>
+
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>
