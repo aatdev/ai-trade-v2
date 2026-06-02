@@ -37,7 +37,8 @@ from calculators.ma50_calculator import calculate_ma50_position
 from calculators.ma200_calculator import calculate_ma200_position
 from calculators.pre_earnings_trend_calculator import calculate_pre_earnings_trend
 from calculators.volume_trend_calculator import calculate_volume_trend
-from fmp_client import ApiCallBudgetExceeded, FMPClient
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+from tv_client import ApiCallBudgetExceeded, TVClientListHistory as FMPClient
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import calculate_composite_score
 

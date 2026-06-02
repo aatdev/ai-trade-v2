@@ -22,7 +22,8 @@ from datetime import datetime
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
-from fmp_client import FMPClient
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+from tv_client import FMPClient
 from post_ftd_monitor import assess_post_ftd_health
 from rally_tracker import get_market_state
 from report_generator import generate_json_report, generate_markdown_report

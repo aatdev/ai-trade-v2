@@ -437,7 +437,8 @@ def run_live(args: argparse.Namespace, run_date: str) -> list[dict]:
     the bulk earnings-calendar fetch window. Per-symbol
     ``market_data_as_of`` is then derived from each symbol's latest bar.
     """
-    from fmp_client import FMPClient  # local import: only needed in live mode
+    import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+    from tv_client import FMPClient  # local import: only needed in live mode
 
     api_key = args.api_key or os.getenv("FMP_API_KEY")
     if not api_key:

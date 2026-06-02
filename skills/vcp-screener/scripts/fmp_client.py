@@ -143,6 +143,9 @@ class FMPClient:
         # Circuit breaker: track consecutive failures per endpoint URL prefix
         self._endpoint_failures: dict[str, int] = {}
         self._disabled_endpoints: set[str] = set()
+        # HTTP status of the most recent request (used to distinguish a
+        # subscription-gated symbol (402) from a dead endpoint).
+        self._last_http_status: Optional[int] = None
 
     def _rate_limited_get(
         self, url: str, params: Optional[dict] = None, quiet: bool = False
@@ -161,6 +164,7 @@ class FMPClient:
             response = self.session.get(url, params=params, timeout=30)
             self.last_call_time = time.time()
             self.api_calls_made += 1
+            self._last_http_status = response.status_code
 
             if response.status_code == 200:
                 self.retry_count = 0
@@ -205,6 +209,12 @@ class FMPClient:
             is_last = i == len(endpoints) - 1
             data = self._rate_limited_get(url, final_params, quiet=not is_last)
             if not data:  # falsy (None, [], {}) — try next endpoint
+                # HTTP 402 means the endpoint is healthy but this specific
+                # symbol/param is not in the key's subscription. Don't poison
+                # the circuit breaker and don't bother with the v3 fallback
+                # (it would only return a legacy-endpoint 403). Skip the symbol.
+                if self._last_http_status == 402:
+                    return None
                 self._record_endpoint_failure(base_url)
                 continue
 
@@ -308,13 +318,18 @@ class FMPClient:
         return data
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
-        """Fetch quotes for a list of symbols, batching up to 5 per request"""
+        """Fetch quotes for a list of symbols.
+
+        Multi-symbol (comma-separated) quotes are a premium-only feature on the
+        new `stable` tier and a sunset legacy endpoint on v3, so a comma batch
+        returns 402/403 for ordinary keys — and the repeated failures trip the
+        client's circuit breaker, disabling the (otherwise working) single-symbol
+        `stable/quote` endpoint too. Fetch one symbol per request instead, which
+        the stable tier serves and which never poisons the circuit breaker.
+        """
         results = {}
-        batch_size = 5
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i : i + batch_size]
-            batch_str = ",".join(batch)
-            quotes = self.get_quote(batch_str)
+        for symbol in symbols:
+            quotes = self.get_quote(symbol)
             if quotes:
                 for q in quotes:
                     results[q["symbol"]] = q

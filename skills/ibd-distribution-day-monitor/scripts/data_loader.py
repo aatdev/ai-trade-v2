@@ -94,6 +94,7 @@ def fetch_ohlcv(
 
 def build_fmp_client(api_key: str | None = None, max_api_calls: int = 200):
     """Lazy import to avoid pulling requests in unit tests that mock the client."""
-    from fmp_client import FMPClient
+    import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+    from tv_client import FMPClient
 
     return FMPClient(api_key=api_key, max_api_calls=max_api_calls)

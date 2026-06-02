@@ -42,3 +42,19 @@ state/
 htmlcov/
 .coverage
 # .secrets.baseline is tracked — needed by detect-secrets pre-commit hook
+.env
+/tmp/canslim/canslim_screener_2026-06-02_135908.json
+/tmp/canslim/canslim_screener_2026-06-02_135908.md
+/tmp/ftd/ftd_detector_2026-06-02_141011.json
+/tmp/ftd/ftd_detector_2026-06-02_141011.md
+/tmp/ibd/ibd_distribution_day_monitor_2026-06-02_142516.json
+/tmp/ibd/ibd_distribution_day_monitor_2026-06-02_142516.md
+/tmp/macro/macro_regime_2026-06-02_140146.json
+/tmp/macro/macro_regime_2026-06-02_140146.md
+/tmp/mtop/market_top_2026-06-02_140950.json
+/tmp/mtop/market_top_2026-06-02_140950.md
+/tmp/parabolic/parabolic_short_2026-06-02.json
+/tmp/parabolic/parabolic_short_2026-06-02.md
+/tmp/vcp/vcp_screener_2026-06-02_135817.json
+/tmp/vcp/vcp_screener_2026-06-02_135817.md
+/tmp/uni3.csv

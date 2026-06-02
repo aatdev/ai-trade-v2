@@ -46,7 +46,8 @@ from calculators.equity_bond_calculator import calculate_equity_bond
 from calculators.sector_rotation_calculator import calculate_sector_rotation
 from calculators.size_factor_calculator import calculate_size_factor
 from calculators.yield_curve_calculator import calculate_yield_curve
-from fmp_client import FMPClient
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+from tv_client import FMPClient
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import calculate_composite_score, check_regime_consistency, classify_regime
 

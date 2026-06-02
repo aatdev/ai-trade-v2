@@ -51,7 +51,8 @@ from calculators.leading_stock_calculator import (
     select_dynamic_basket,
 )
 from calculators.sentiment_calculator import calculate_sentiment
-from fmp_client import FMPClient
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+from tv_client import FMPClient
 from historical_comparator import compare_to_historical
 from report_generator import generate_json_report, generate_markdown_report
 from scenario_engine import generate_scenarios

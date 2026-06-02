@@ -151,6 +151,9 @@ class FMPClient:
         self._endpoint_failures: dict[str, int] = {}
         self._disabled_endpoints: set[str] = set()
         self._ENDPOINT_FAILURE_THRESHOLD = 3
+        # HTTP status of the most recent request, used to distinguish a
+        # subscription-gated symbol (402) from a genuinely dead endpoint.
+        self._last_http_status: Optional[int] = None
 
     def _rate_limited_get(
         self, url: str, params: Optional[dict] = None, quiet: bool = False
@@ -180,6 +183,7 @@ class FMPClient:
         try:
             response = self.session.get(url, params=params, timeout=30)
             self.last_call_time = time.time()
+            self._last_http_status = response.status_code
 
             if response.status_code == 200:
                 self.retry_count = 0  # Reset on success
@@ -225,6 +229,11 @@ class FMPClient:
             is_last = i == len(endpoints) - 1
             data = self._rate_limited_get(url, final_params, quiet=not is_last)
             if not data:
+                # HTTP 402 means the endpoint is healthy but this symbol/param
+                # is not in the key's subscription. Don't poison the circuit
+                # breaker and don't try the v3 fallback (a legacy 403); skip it.
+                if self._last_http_status == 402:
+                    return None
                 self._record_endpoint_failure(base_url)
                 continue
 

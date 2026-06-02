@@ -30,7 +30,8 @@ from calculators.leadership_calculator import calculate_leadership
 from calculators.market_calculator import calculate_market_direction
 from calculators.new_highs_calculator import calculate_newness
 from calculators.supply_demand_calculator import calculate_supply_demand
-from fmp_client import FMPClient
+import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
+from tv_client import FMPClient
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import (
     calculate_composite_score_phase3,
