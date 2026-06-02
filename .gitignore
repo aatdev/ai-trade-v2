@@ -21,7 +21,6 @@ node_modules/
 # Tool configurations
 .idea/
 .vscode/
-.claude/
 .envrc
 .mcp.json
 
@@ -48,3 +47,4 @@ htmlcov/
 .env
 /tmp
 
+.claude/skills
