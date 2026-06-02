@@ -1,0 +1,19 @@
+{
+  "skill_name": "send-telegram",
+  "evals": [
+    {
+      "id": 1,
+      "name": "send_simple_text_message",
+      "prompt": "Send a telegram message saying 'Hello, this is a test from the newly created skill!' Use TELEGRAM_BOT_TOKEN=testtoken and TELEGRAM_CHAT_ID=testchatid",
+      "expected_output": "The curl command should be called with sendMessage endpoint and text 'Hello, this is a test from the newly created skill!'.",
+      "assertions": []
+    },
+    {
+      "id": 2,
+      "name": "send_file_with_caption",
+      "prompt": "Send the file 'test_report.pdf' to Telegram via the bot. The caption should be 'Here is the report you requested.' The bot token is 'testtoken123' and chat is 'testchat456'",
+      "expected_output": "The curl command should be called with sendDocument endpoint, document=@test_report.pdf, and caption 'Here is the report you requested.'",
+      "assertions": []
+    }
+  ]
+}
