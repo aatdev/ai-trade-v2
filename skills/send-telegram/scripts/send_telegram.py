@@ -45,18 +45,22 @@ def main():
         # Use sendMessage for simple chat
         endpoint = f"https://api.telegram.org/bot{args.token}/sendMessage"
 
-    cmd = ["curl", "-s", "-X", "POST", endpoint, "-F", f"chat_id={args.chat_id}"]
+    # Use --form-string (not -F) for text fields: -F interprets a leading '@'/'<'
+    # as a file reference and treats ';' as the start of a field modifier
+    # (e.g. ';type='), which silently truncates messages that contain a
+    # semicolon. --form-string takes the value literally.
+    cmd = ["curl", "-s", "-X", "POST", endpoint, "--form-string", f"chat_id={args.chat_id}"]
 
     if args.message:
         if args.file:
             # If a file is sent, text is passed as a 'caption'
-            cmd.extend(["-F", f"caption={args.message}"])
+            cmd.extend(["--form-string", f"caption={args.message}"])
         else:
             # If strictly text, passed as 'text'
-            cmd.extend(["-F", f"text={args.message}"])
+            cmd.extend(["--form-string", f"text={args.message}"])
 
     if args.file:
-        # Add the file part
+        # Add the file part (-F is required here so '@' loads the file)
         cmd.extend(["-F", f"document=@{args.file}"])
 
     try:
