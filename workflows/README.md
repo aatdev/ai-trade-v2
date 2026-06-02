@@ -13,6 +13,7 @@ For the full schema, error codes, and validator rules, see [`docs/dev/metadata-a
 | [`market-regime-daily.yaml`](market-regime-daily.yaml) | daily (~15 min) | no-api-basic | market-breadth-analyzer, uptrend-analyzer, exposure-coach |
 | [`core-portfolio-weekly.yaml`](core-portfolio-weekly.yaml) | weekly (~60 min) | mixed | portfolio-manager, kanchi-dividend-review-monitor, trader-memory-core |
 | [`swing-opportunity-daily.yaml`](swing-opportunity-daily.yaml) | daily (~30 min) | fmp-required | vcp-screener, technical-analyst, position-sizer |
+| [`swing-execution-manage.yaml`](swing-execution-manage.yaml) | daily (~20 min) | mixed | trader-memory-core, portfolio-manager |
 | [`trade-memory-loop.yaml`](trade-memory-loop.yaml) | ad-hoc (per closed trade) | no-api-basic | trader-memory-core, signal-postmortem |
 | [`monthly-performance-review.yaml`](monthly-performance-review.yaml) | monthly (~90 min) | no-api-basic | trader-memory-core, signal-postmortem, backtest-expert |
 

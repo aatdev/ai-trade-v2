@@ -1,0 +1,155 @@
+schema_version: 1
+id: swing-execution-manage
+display_name: Swing Execution & Management
+cadence: daily
+estimated_minutes: 20
+target_users:
+  - part-time-swing-trader
+difficulty: intermediate
+api_profile: mixed
+
+when_to_run: >-
+  After swing-opportunity-daily has produced a registered thesis with an entry
+  plan (entry / stop / target). Opens the position at the broker, manages it
+  in-trade (trim / trail), and executes the planned exit. Bridges the gap
+  between trade planning and the post-close trade-memory-loop.
+when_not_to_run: >-
+  Do not run without a registered thesis and entry plan from
+  swing-opportunity-daily. Do not run on a cash-priority / restrictive regime
+  day from market-regime-daily. Do not use to discover new candidates — this
+  workflow only executes plans that already passed the validation and sizing
+  gates.
+
+required_skills:
+  - trader-memory-core
+  - portfolio-manager
+optional_skills:
+  - position-sizer
+
+# Informational only — validator does NOT enforce inter-workflow ordering.
+prerequisite_workflows:
+  - id: swing-opportunity-daily
+    artifact: candidate_journal_entry
+    rationale: >-
+      Execution requires a registered thesis with a validated setup, entry,
+      stop, target, and position size. This workflow does not screen or plan.
+  - id: market-regime-daily
+    artifact: exposure_decision
+    rationale: >-
+      Only open new swing risk when the latest exposure decision is
+      non-restrictive. Re-check the regime before every entry and during
+      management.
+
+artifacts:
+  - id: live_position_sizing
+    produced_by_step: 1
+    required: false
+  - id: active_thesis
+    produced_by_step: 2
+    required: true
+  - id: entry_order_confirmation
+    produced_by_step: 3
+    required: true
+  - id: position_monitor_report
+    produced_by_step: 4
+    required: true
+  - id: position_adjustments
+    produced_by_step: 5
+    required: false
+  - id: exit_execution
+    produced_by_step: 6
+    required: true
+  - id: closed_thesis_record
+    produced_by_step: 7
+    required: true
+    downstream_hints:
+      - trade-memory-loop
+
+steps:
+  - step: 1
+    name: Re-check position size at live price
+    skill: position-sizer
+    optional: true
+    produces:
+      - live_position_sizing
+    decision_gate: false
+
+  - step: 2
+    name: Activate thesis and attach position
+    skill: trader-memory-core
+    consumes:
+      - live_position_sizing
+    produces:
+      - active_thesis
+    decision_gate: true
+    decision_question: >-
+      Has the regime gate (market-regime-daily) and the entry plan held since
+      planning? Transition the thesis ENTRY_READY -> ACTIVE only if the setup
+      and risk per trade are still valid at the current price.
+
+  - step: 3
+    name: Place entry bracket order
+    skill: portfolio-manager
+    consumes:
+      - active_thesis
+    produces:
+      - entry_order_confirmation
+    decision_gate: true
+    decision_question: >-
+      Do the bracket parameters (entry/pivot, stop at base low, 2R target) match
+      the plan, and is total portfolio heat within budget? Place the order
+      manually; confirm the fill and update the thesis with actual price/date.
+
+  - step: 4
+    name: Monitor open position and re-check regime
+    skill: portfolio-manager
+    consumes:
+      - entry_order_confirmation
+    produces:
+      - position_monitor_report
+    decision_gate: false
+
+  - step: 5
+    name: Manage in-trade (trim / trail stop)
+    skill: trader-memory-core
+    optional: true
+    consumes:
+      - position_monitor_report
+    produces:
+      - position_adjustments
+    decision_gate: true
+    decision_question: >-
+      At +2R, trim partial and trail the stop to breakeven? If the regime broke
+      (SEVERE distribution / market-top signal) or the setup failed, reduce
+      exposure ahead of the planned exit?
+
+  - step: 6
+    name: Execute planned exit
+    skill: portfolio-manager
+    consumes:
+      - position_adjustments
+      - position_monitor_report
+    produces:
+      - exit_execution
+    decision_gate: true
+    decision_question: >-
+      Has an exit trigger fired (stop hit, target reached, or setup break)?
+      Execute the exit manually and capture the actual exit price and date.
+
+  - step: 7
+    name: Record exit outcome
+    skill: trader-memory-core
+    consumes:
+      - exit_execution
+    produces:
+      - closed_thesis_record
+    decision_gate: false
+
+manual_review:
+  - Confirm market-regime-daily exposure_decision still allows the open risk.
+  - All orders are placed manually at the broker; no auto-execution.
+  - Never widen a stop below the original base low to avoid being stopped out.
+  - Honor the plan — do not improvise targets or sizing mid-trade.
+  - After closing, run trade-memory-loop on the closed_thesis_record.
+
+journal_destination: trader-memory-core
