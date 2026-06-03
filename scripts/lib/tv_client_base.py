@@ -77,9 +77,15 @@ except ImportError:
 # Defaults. 400 daily bars ~= 18 months — comfortably covers a 200-day SMA
 # (+slope) and the 1-year (252d) relative-strength window every screener needs.
 BARS = 400
-# Seconds to wait after switching symbol before the chart's bars are ready. A
-# cold chart can take a few seconds, so the fetch retries with a longer settle.
+# Ceiling (seconds) for how long to wait after switching symbol before giving
+# up on the chart becoming ready. Rather than blindly sleeping this whole time,
+# the client polls the chart's current symbol every POLL_INTERVAL and proceeds
+# the instant the switch registers (typically ~0.2s on a warm chart), only
+# spending the full SETTLE on a cold/slow load. A cold chart that times out is
+# retried with a longer backoff.
 SETTLE = 2.5
+# How often to poll `tv symbol` while waiting for a symbol switch to register.
+POLL_INTERVAL = 0.1
 # Trend/RS calculators need a year of history; a stock with fewer daily bars
 # (recent IPO/spin-off) can't be evaluated and is skipped cleanly.
 MIN_BARS = 200
@@ -143,6 +149,7 @@ class TVClient:
         min_bars: int = MIN_BARS,
         bars: int = BARS,
         settle: float = SETTLE,
+        poll_interval: float = POLL_INTERVAL,
     ):
         # api_key accepted for interface parity with FMPClient; never used —
         # TradingView needs no key. max_api_calls is accepted (some skills pass
@@ -152,7 +159,12 @@ class TVClient:
         self.index_remap = index_remap or {}
         self.min_bars = min_bars
         self.bars = bars
+        # `settle` is now the *ceiling* the readiness poll waits before giving
+        # up (and the backoff for the cold-chart retry), not a blind sleep paid
+        # on every symbol. `poll_interval` is how often the chart's current
+        # symbol is checked while waiting for the switch to register.
         self.settle = settle
+        self.poll_interval = poll_interval
         self._cache_ok = metrics_cache is not None and not _truthy_env(cache_disable_env)
 
         self.cache: dict = {}
@@ -187,17 +199,46 @@ class TVClient:
         except (json.JSONDecodeError, ValueError):
             return None
 
+    @staticmethod
+    def _symbol_ready(tv_symbol: str, current: str) -> bool:
+        """True when the chart's reported `current` symbol matches the requested
+        `tv_symbol`. The chart returns exchange-qualified symbols ("NASDAQ:AAPL")
+        while callers may request a bare ticker ("AAPL") or an already-qualified
+        index ("SP:SPX"), so compare the part after the colon on both sides."""
+        if not current:
+            return False
+        cur, tgt = current.upper(), tv_symbol.upper()
+        return cur == tgt or cur.split(":")[-1] == tgt.split(":")[-1]
+
+    def _current_symbol(self) -> str:
+        data = self._cli("symbol")
+        return str(data.get("symbol", "")) if isinstance(data, dict) else ""
+
+    def _switch_symbol(self, tv_symbol: str) -> bool:
+        """Switch the chart to `tv_symbol` on the daily timeframe and wait until
+        the switch registers, polling the chart's current symbol instead of
+        blindly sleeping `settle`. Returns True once ready, False if the switch
+        hasn't registered within `settle` (callers still try to read bars and
+        fall through to their cold-chart retry)."""
+        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; poll below
+        if not self._tf_set:
+            self._cli("timeframe", "D", parse=False)
+            self._tf_set = True
+        deadline = time.perf_counter() + self.settle
+        while True:
+            if self._symbol_ready(tv_symbol, self._current_symbol()):
+                return True
+            if time.perf_counter() >= deadline:
+                return False
+            time.sleep(self.poll_interval)
+
     def _fetch_bars(self, symbol: str) -> list[dict]:
         """Switch the chart to `symbol` on the daily timeframe and pull bars.
 
         Applies index_remap before the switch (e.g. ^GSPC -> SP:SPX). Returns
         bars NEWEST FIRST in FMP-compatible dict form, or []."""
         tv_symbol = self.index_remap.get(symbol, symbol)
-        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
-        if not self._tf_set:
-            self._cli("timeframe", "D", parse=False)
-            self._tf_set = True
-        time.sleep(self.settle)
+        self._switch_symbol(tv_symbol)
         data = self._cli("ohlcv", "-n", str(self.bars))
 
         # Chart may still be loading right after a symbol switch — retry twice
@@ -569,11 +610,7 @@ class TVClient:
         (falling back to `default_tv`). Bypasses the per-ticker metrics cache
         (indices aren't collected)."""
         tv_symbol = self.index_remap.get(fmp_symbol, default_tv)
-        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
-        if not self._tf_set:
-            self._cli("timeframe", "D", parse=False)
-            self._tf_set = True
-        time.sleep(self.settle)
+        self._switch_symbol(tv_symbol)
         data = self._cli("ohlcv", "-n", "2")
         if not data or not data.get("bars"):
             time.sleep(self.settle * 1.5)
@@ -603,11 +640,7 @@ class TVClient:
     def _yield_series(self, tv_symbol: str) -> Optional[list[dict]]:
         """Raw {date, close} daily series for a TVC yield symbol, OLDEST first.
         Bypasses min_bars/cache (yields aren't in the metrics cache)."""
-        self._cli("symbol", tv_symbol, "--nowait", parse=False)  # skip ~10s DOM wait; settle below covers load
-        if not self._tf_set:
-            self._cli("timeframe", "D", parse=False)
-            self._tf_set = True
-        time.sleep(self.settle)
+        self._switch_symbol(tv_symbol)
         data = self._cli("ohlcv", "-n", str(self.bars))
         if not data or not data.get("bars"):
             time.sleep(self.settle * 1.5)

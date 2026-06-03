@@ -3,9 +3,10 @@
 Reader for the per-ticker metrics cache written by scripts/collect_russell.js.
 
 Skills use this as a fast path: a fresh metrics snapshot serves quote,
-fundamentals, indicators and price stats without driving the live chart. Past
-STALE_DAYS the snapshot is considered stale and callers should fall back to a
-live fetch.
+fundamentals, indicators and price stats without driving the live chart. Once a
+snapshot is older than STALE_HOURS (default 3h, override with
+METRICS_STALE_HOURS) it is considered stale and callers fall back to a live
+fetch.
 
 Source order: OpenSearch first (indices my_tw_metrics + my_tw_candles_1d, see
 scripts/lib/opensearch.js), then the local file (state/metrics/TICKER/) when
@@ -16,13 +17,14 @@ The two `cached_*` helpers below return data already shaped like the FMP/scanner
 payloads the screeners' tv_client expects, so wiring is a one-line cache check.
 """
 
+import http.client
 import json
 import os
-import urllib.error
-import urllib.request
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 # The local-file fallback lives under the vendored bridge's state/metrics. The
 # OpenSearch backend below is the primary source and is path-independent, so this
@@ -33,7 +35,15 @@ _REPO_ROOT = os.environ.get("TV_MCP_REPO") or str(
 )
 METRICS_DIR = os.path.join(_REPO_ROOT, "state", "metrics")
 
-STALE_DAYS = 2
+# Freshness window for the cache fast path. A snapshot is only trusted if it was
+# collected within the last STALE_HOURS; anything older falls through to a live
+# chart fetch. Expressed in hours (override with METRICS_STALE_HOURS) and kept as
+# fractional days in STALE_DAYS because age_days()/is_fresh() work in days.
+try:
+    STALE_HOURS = float(os.environ.get("METRICS_STALE_HOURS", "3"))
+except ValueError:
+    STALE_HOURS = 3.0
+STALE_DAYS = STALE_HOURS / 24.0
 
 # ─── OpenSearch backend ──────────────────────────────────────────────────────
 # Mirrors scripts/lib/opensearch.js: read OpenSearch first, fall back to files.
@@ -49,36 +59,95 @@ _MAX_CANDLE_HITS = 2000
 # a 2000-ticker scan doesn't pay the timeout on every ticker.
 _os_down = False
 
+# Persistent keep-alive connection. The TCP handshake to the OpenSearch host can
+# cost ~1s; with urlopen() opening (and closing) a socket per request, EVERY
+# cached_* lookup paid that handshake — the dominant cost of a cache-backed scan.
+# Reusing one connection pays the handshake once, then each request is ~10ms.
+# Guarded by a lock so concurrent callers don't interleave on the shared socket.
+_conn: Optional[http.client.HTTPConnection] = None
+_conn_lock = threading.Lock()
+
 
 def _os_active() -> bool:
     return OS_ENABLED and not _os_down
 
 
+def _make_conn() -> http.client.HTTPConnection:
+    """Open a fresh keep-alive connection to the OpenSearch host."""
+    u = urlparse(OS_BASE)
+    host = u.hostname or "localhost"
+    if u.scheme == "https":
+        port = u.port or 443
+        return http.client.HTTPSConnection(host, port, timeout=_OS_TIMEOUT)
+    port = u.port or 80
+    return http.client.HTTPConnection(host, port, timeout=_OS_TIMEOUT)
+
+
+def _reset_backend_state() -> None:
+    """Drop the persistent connection, reset the breaker and the read memo.
+
+    Used by tests and available to long-running callers that want to force a
+    fresh connection (e.g. after a known network blip)."""
+    global _conn, _os_down
+    with _conn_lock:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except OSError:
+                pass
+        _conn = None
+    _os_down = False
+    _metrics_memo.clear()
+
+
 def _os_request(method: str, path: str, body: Optional[dict] = None) -> Optional[dict]:
-    """Low-level OpenSearch request; returns parsed JSON, or None on any failure
-    (a connection error also trips the breaker)."""
-    global _os_down
+    """Low-level OpenSearch request over a persistent keep-alive connection.
+
+    Returns parsed JSON, or None on failure. A single transport error (e.g. the
+    server closed an idle keep-alive socket) reconnects and retries once; a
+    second failure trips the process-wide breaker. JSON/decode errors return
+    None without reconnecting or tripping the breaker."""
+    global _os_down, _conn
     if not _os_active():
         return None
-    url = f"{OS_BASE}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(
-        url, data=data, method=method, headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=_OS_TIMEOUT) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        # 404 (missing doc/index) is a normal "not found", not a connection failure.
-        if e.code == 404:
+    headers = {"Content-Type": "application/json"}
+
+    with _conn_lock:
+        raw: Optional[bytes] = None
+        status: Optional[int] = None
+        for attempt in range(2):
             try:
-                return json.loads(e.read().decode("utf-8"))
-            except (ValueError, OSError):
-                return None
-        return None
-    except (urllib.error.URLError, OSError, ValueError):
-        _os_down = True
-        return None
+                if _conn is None:
+                    _conn = _make_conn()
+                _conn.request(method, path, body=data, headers=headers)
+                resp = _conn.getresponse()
+                raw = resp.read()
+                status = resp.status
+                break
+            except (http.client.HTTPException, OSError):
+                # Socket may be stale (server dropped keep-alive) — discard it
+                # and retry on a fresh connection. Trip the breaker only if the
+                # reconnect also fails, so one dead socket ≠ "OpenSearch down".
+                if _conn is not None:
+                    try:
+                        _conn.close()
+                    except OSError:
+                        pass
+                _conn = None
+                if attempt == 1:
+                    _os_down = True
+                    return None
+
+        if status is None:
+            return None
+        # 404 (missing doc/index) carries a normal body; other 4xx/5xx are errors.
+        if status >= 400 and status != 404:
+            return None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
 
 
 def _safe_token(ticker: str) -> str:
@@ -172,18 +241,35 @@ def _read_json(path: str) -> Optional[dict]:
     if not os.path.exists(path):
         return None
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return None
 
 
+# Per-ticker memo for the metrics doc. cached_quote / cached_fundamentals /
+# cached_indicators each call read_metrics for the SAME ticker (e.g.
+# get_company_profile needs both the quote and fundamentals projection), so
+# without memoization one profile lookup fetched the same `_doc` 2-3 times.
+# Snapshots are a daily collection, so caching for the process lifetime is safe
+# and matches the client-level cache that already pins shaped results per symbol.
+_metrics_memo: dict = {}
+
+
 def read_metrics(ticker: str) -> Optional[dict]:
-    """Metrics snapshot — OpenSearch first, then the local file. None if neither."""
+    """Metrics snapshot — OpenSearch first, then the local file. None if neither.
+
+    Memoizes a found doc per ticker so repeat lookups within a run don't re-hit
+    the backend; misses are NOT memoized so a transient failure stays retryable.
+    """
+    if ticker in _metrics_memo:
+        return _metrics_memo[ticker]
     m = os_read_metrics(ticker)
+    if m is None:
+        m = _read_json(metrics_path(ticker))
     if m is not None:
-        return m
-    return _read_json(metrics_path(ticker))
+        _metrics_memo[ticker] = m
+    return m
 
 
 def read_ohlcv(ticker: str) -> Optional[dict]:
@@ -330,8 +416,8 @@ if __name__ == "__main__":
             {
                 "found": snap is not None,
                 "fresh": is_fresh(snap),
-                "age_days": None if snap is None else round(age_days(snap), 2),
-                "stale_days": STALE_DAYS,
+                "age_hours": None if snap is None else round(age_days(snap) * 24, 2),
+                "stale_hours": STALE_HOURS,
                 "metrics": snap,
             },
             indent=2,
