@@ -908,13 +908,13 @@
       "id": "value-dividend-screener",
       "integrations": [
         {
-          "id": "fmp",
+          "id": "tradingview",
           "requirement": "required",
           "type": "market_data"
         },
         {
           "id": "finviz",
-          "requirement": "recommended",
+          "requirement": "optional",
           "type": "screener"
         }
       ],

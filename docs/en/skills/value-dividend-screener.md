@@ -11,10 +11,10 @@ permalink: /en/skills/value-dividend-screener/
 # Value Dividend Screener
 {: .no_toc }
 
-Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B ratio under 2), attractive yields (3% or higher), and consistent growth (dividend/revenue/EPS trending up over 3 years). Supports two-stage screening using FINVIZ Elite API for efficient pre-filtering followed by FMP API for detailed analysis. Use when user requests dividend stock screening, income portfolio ideas, or quality value stocks with strong fundamentals.
+Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B ratio under 2), attractive yields (3% or higher), and consistent growth (dividend/revenue/EPS trending up over 3 years). Uses the local TradingView data layer (no API key); optional FINVIZ Elite pre-screen widens the universe beyond the S&P 500. Use when user requests dividend stock screening, income portfolio ideas, or quality value stocks with strong fundamentals.
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span>
+<span class="badge badge-free">No API Key</span> <span class="badge badge-optional">FINVIZ Optional</span>
 
 [Download Skill Package (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/value-dividend-screener.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/value-dividend-screener){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -30,14 +30,14 @@ Screen US stocks for high-quality dividend opportunities combining value charact
 
 ## 1. Overview
 
-This skill identifies high-quality dividend stocks that combine value characteristics, attractive income generation, and consistent growth using a **two-stage screening approach**:
+This skill identifies high-quality dividend stocks that combine value characteristics, attractive income generation, and consistent growth.
 
-1. **FINVIZ Elite API (Optional but Recommended)**: Pre-screen stocks with basic criteria (fast, cost-effective)
-2. **Financial Modeling Prep (FMP) API**: Detailed fundamental analysis of candidates
+Two screening modes:
 
-Screen US equities based on quantitative criteria including valuation ratios, dividend metrics, financial health, and profitability. Generate comprehensive reports ranking stocks by composite quality scores with detailed fundamental analysis.
+1. **TradingView data layer (default)**: Walks the S&P 500 universe reading fundamentals, annual DPS history, and daily bars from a live TradingView Desktop chart via the shared `tv_client` data layer — **no API key, no request quota**.
+2. **FINVIZ Elite pre-screen (optional)**: A single FINVIZ Elite API call pre-filters the whole US market (mid-cap+) with value/dividend criteria, then TradingView supplies the detailed analysis. Widens the universe beyond the S&P 500.
 
-**Efficiency Advantage**: Using FINVIZ pre-screening can reduce FMP API calls by 90%, making this approach ideal for free-tier API users.
+Screen US equities based on quantitative criteria including valuation ratios, dividend metrics, financial health, and profitability. Generate comprehensive reports ranking stocks by composite quality scores; oversold names (RSI ≤ 40) are preferred in the final ranking.
 
 ---
 
@@ -55,149 +55,91 @@ Invoke this skill when the user requests:
 
 ## 3. Prerequisites
 
-- **FMP API key** required (`FMP_API_KEY` environment variable)
-- **FINVIZ Elite** optional (improves performance)
-- FMP for analysis; FINVIZ reduces execution time by 70-80%
-- Python 3.9+ recommended
+- **TradingView data layer** required: a running TradingView Desktop chart (CDP on :9222) or a fresh `state/metrics` snapshot cache — **no API key, no request quota**
+- **FINVIZ Elite** optional (widens the universe beyond the S&P 500)
+- Python 3.9+ recommended; `requests` needed only for the FINVIZ pre-screen
+- Legacy `FMP_API_KEY` / `--fmp-api-key` inputs are accepted but ignored
 
 ---
 
 ## 4. Quick Start
 
 ```bash
-# Two-stage screening (RECOMMENDED - 70-80% faster)
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
+# S&P 500 universe via TradingView (default, no API key)
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py
 
-# FMP-only screening (no FINVIZ required)
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py
+# Two-stage screening with FINVIZ pre-screen (wider universe)
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
 
 # Custom parameters
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py \
-  --use-finviz \
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py \
   --top 50 \
-  --output custom_results.json
+  --output-dir reports/
 ```
 
 ---
 
 ## 5. Workflow
 
-### Step 1: Verify API Key Availability
+### Step 1: Choose the Universe
 
-**For Two-Stage Screening (Recommended):**
+#### S&P 500 via TradingView (default)
 
-Check if both API keys are available:
+No setup needed beyond a running TradingView Desktop chart. The screener walks the committed S&P 500 constituents list and reads everything (fundamentals, annual DPS history, daily bars) from the TradingView scanner.
 
-```python
-import os
-fmp_api_key = os.environ.get('FMP_API_KEY')
-finviz_api_key = os.environ.get('FINVIZ_API_KEY')
-```
+#### FINVIZ Pre-Screen (optional, wider universe)
 
-If not available, ask user to provide API keys or set environment variables:
 ```bash
-export FMP_API_KEY=your_fmp_key_here
 export FINVIZ_API_KEY=your_finviz_key_here
 ```
 
-**For FMP-Only Screening:**
-
-Check if FMP API key is available:
-
-```python
-import os
-api_key = os.environ.get('FMP_API_KEY')
-```
-
-If not available, ask user to provide API key or set environment variable:
-```bash
-export FMP_API_KEY=your_key_here
-```
+**Why FINVIZ?**
+- Pre-screens the whole US market (mid-cap+) with value/dividend filters in 1 API call
+- TradingView then supplies the detailed analysis for the pre-screened candidates
 
 **FINVIZ Elite API Key:**
 - Requires FINVIZ Elite subscription (~$40/month or ~$330/year)
 - Provides access to CSV export of pre-screened results
-- Highly recommended for reducing FMP API usage
 
-Provide instructions from `references/fmp_api_guide.md` if needed.
+### Step 2: Execute Screening
 
-### Step 2: Execute Screening Script
+**Default S&P 500 screening:**
 
-Run the screening script with appropriate parameters:
-
-#### **Two-Stage Screening (RECOMMENDED)**
-
-Uses FINVIZ for pre-screening, then FMP for detailed analysis:
-
-**Default execution (Top 20 stocks):**
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py
 ```
 
-**With explicit API keys:**
+**Two-Stage Screening (FINVIZ + TradingView):**
+
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz \
-  --fmp-api-key $FMP_API_KEY \
-  --finviz-api-key $FINVIZ_API_KEY
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
 ```
 
-**Custom top N:**
+FINVIZ filters applied in one call: Market cap mid+, Dividend yield 3%+, Dividend growth (3Y) 5%+, EPS growth (3Y) positive, P/B under 2, P/E under 20, Sales growth (3Y) positive, USA.
+
+**Custom top N / output location / candidate cap:**
+
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz --top 50
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py \
+  --top 50 --output-dir reports/ --max-candidates 200
 ```
 
-**Custom output location:**
-```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz --output /path/to/results.json
-```
-
-**Script behavior (Two-Stage):**
-1. FINVIZ Elite pre-screening:
-   - Market cap: Mid-cap or higher
-   - Dividend yield: 3%+
-   - Dividend growth (3Y): 5%+
-   - EPS growth (3Y): Positive
-   - P/B: Under 2
-   - P/E: Under 20
-   - Sales growth (3Y): Positive
-   - Geography: USA
-2. FMP detailed analysis of FINVIZ results (typically 20-50 stocks):
-   - Dividend growth rate calculation (3-year CAGR)
-   - Revenue and EPS trend analysis
-   - Dividend sustainability assessment (payout ratios, FCF coverage)
-   - Financial health metrics (debt-to-equity, current ratio)
-   - Quality scoring (ROE, profit margins)
+**Script behavior:**
+1. Universe: S&P 500 constituents (default) or FINVIZ pre-screened symbols (`--use-finviz`)
+2. Per-symbol detailed analysis via TradingView:
+   - Market cap ≥ $2B; valuation filters P/E ≤ 20, P/B ≤ 2 (scanner snapshot)
+   - Dividend yield ≥ 3.0% (verified as last completed fiscal-year DPS / current price)
+   - Dividend growth rate calculation (3-year CAGR ≥ 4%) from the scanner's annual DPS history
+   - Dividend stability check (volatility, consecutive years of growth)
+   - Revenue and EPS trend analysis (annual fiscal-year series, positive over 3 years)
+   - Dividend sustainability assessment (scanner payout ratio; DPS×shares / FCF coverage; REITs use OCF≈FFO proxy)
+   - Financial health (snapshot debt-to-equity, current ratio)
+   - Quality scoring (ROE, net profit margin)
+   - 14-period RSI from daily bars (oversold RSI ≤ 40 preferred in final ranking)
 3. Composite scoring and ranking
-4. Output top N stocks to JSON file
+4. Output top N stocks to JSON file in `reports/`
 
-**Expected runtime (Two-Stage):** 2-3 minutes for 30-50 FINVIZ candidates (much faster than FMP-only)
-
-#### **FMP-Only Screening (Original Method)**
-
-Uses only FMP Stock Screener API (higher API usage):
-
-**Default execution:**
-```bash
-python3 scripts/screen_dividend_stocks.py
-```
-
-**With explicit API key:**
-```bash
-python3 scripts/screen_dividend_stocks.py --fmp-api-key $FMP_API_KEY
-```
-
-**Script behavior (FMP-Only):**
-1. Initial screening using FMP Stock Screener API (dividend yield >=3.0%, P/E <=20, P/B <=2)
-2. Detailed analysis of candidates (typically 100-300 stocks):
-   - Same detailed analysis as two-stage approach
-3. Composite scoring and ranking
-4. Output top N stocks to JSON file
-
-**Expected runtime (FMP-Only):** 5-15 minutes for 100-300 candidates (rate limiting applies)
-
-**API Usage Comparison:**
-- Two-Stage: ~50-100 FMP API calls (FINVIZ pre-filters to ~30 stocks)
-- FMP-Only: ~500-1500 FMP API calls (analyzes all screener results)
+**Expected runtime:** with a fresh metrics cache most symbols are served without touching the chart (seconds); a cold cache falls back to live chart reads (~2s per symbol that passes the cheap pre-filters).
 
 ### Step 3: Parse and Analyze Results
 
@@ -206,7 +148,7 @@ Read the generated JSON file:
 ```python
 import json
 
-with open('dividend_screener_results.json', 'r') as f:
+with open('reports/value_dividend_results_YYYY-MM-DD.json', 'r') as f:
     data = json.load(f)
 
 metadata = data['metadata']
@@ -216,6 +158,7 @@ stocks = data['stocks']
 **Key data points per stock:**
 - Basic info: `symbol`, `company_name`, `sector`, `market_cap`, `price`
 - Valuation: `dividend_yield`, `pe_ratio`, `pb_ratio`
+- Technical: `rsi`
 - Growth metrics: `dividend_cagr_3y`, `revenue_cagr_3y`, `eps_cagr_3y`
 - Sustainability: `payout_ratio`, `fcf_payout_ratio`, `dividend_sustainable`
 - Financial health: `debt_to_equity`, `current_ratio`, `financially_healthy`
@@ -232,17 +175,17 @@ Create structured markdown report for user with following sections:
 # Value Dividend Stock Screening Report
 
 **Generated:** [Timestamp]
+**Data Source:** TradingView data layer (no API key)
 **Screening Criteria:**
-- Dividend Yield: >= 3.5%
+- Dividend Yield: >= 3.0%
 - P/E Ratio: <= 20
 - P/B Ratio: <= 2
-- Dividend Growth (3Y CAGR): >= 5%
+- Dividend Growth (3Y CAGR): >= 4%
 - Revenue Trend: Positive over 3 years
 - EPS Trend: Positive over 3 years
 
 **Total Results:** [N] stocks
-
----
+```
 
 ---
 
@@ -250,8 +193,8 @@ Create structured markdown report for user with following sections:
 
 **References:**
 
-- `skills/value-dividend-screener/references/fmp_api_guide.md`
 - `skills/value-dividend-screener/references/screening_methodology.md`
+- `skills/value-dividend-screener/references/fmp_api_guide.md` (legacy, historical)
 
 **Scripts:**
 

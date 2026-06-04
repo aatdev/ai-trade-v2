@@ -11,10 +11,10 @@ permalink: /ja/skills/value-dividend-screener/
 # Value Dividend Screener
 {: .no_toc }
 
-バリュー特性（PER 20倍以下、PBR 2倍以下）、魅力的な利回り（3%以上）、安定した成長（配当/売上/EPSが3年間上昇トレンド）を組み合わせて、高品質な配当銘柄をスクリーニングするスキルです。FINVIZ Elite APIによる効率的なプレフィルタリングとFMP APIによる詳細分析の2段階スクリーニングに対応。配当株スクリーニング、インカムポートフォリオのアイデア、ファンダメンタルズの優れたバリュー銘柄の検索時に使用します。
+バリュー特性（PER 20倍以下、PBR 2倍以下）、魅力的な利回り（3%以上）、安定した成長（配当/売上/EPSが3年間上昇トレンド）を組み合わせて、高品質な配当銘柄をスクリーニングするスキルです。ローカルTradingViewデータレイヤーを使用（APIキー不要）。任意のFINVIZ Eliteプレスクリーンで対象ユニバースをS&P 500以外にも拡大できます。配当株スクリーニング、インカムポートフォリオのアイデア、ファンダメンタルズの優れたバリュー銘柄の検索時に使用します。
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP必須</span> <span class="badge badge-optional">FINVIZ任意</span>
+<span class="badge badge-free">APIキー不要</span> <span class="badge badge-optional">FINVIZ任意</span>
 
 [スキルパッケージをダウンロード (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/value-dividend-screener.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [GitHubでソースを見る](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/value-dividend-screener){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -30,14 +30,14 @@ permalink: /ja/skills/value-dividend-screener/
 
 ## 1. 概要
 
-**2段階スクリーニングアプローチ** で、バリュー特性、魅力的なインカム、安定した成長を兼ね備えた高品質配当銘柄を特定するスキルです：
+バリュー特性、魅力的なインカム、安定した成長を兼ね備えた高品質配当銘柄を特定するスキルです。
 
-1. **FINVIZ Elite API（任意だが推奨）**: 基本条件でのプレスクリーニング（高速・低コスト）
-2. **Financial Modeling Prep (FMP) API**: 候補銘柄の詳細ファンダメンタル分析
+2つのスクリーニングモード：
 
-バリュエーション比率、配当指標、財務健全性、収益性などの定量基準に基づいて米国株をスクリーニングし、複合品質スコアによるランキングと詳細なファンダメンタル分析を含む包括的なレポートを生成します。
+1. **TradingViewデータレイヤー（デフォルト）**: S&P 500ユニバースを走査し、ファンダメンタルズ、年次DPS履歴、日足バーを稼働中のTradingView Desktopチャートから共有 `tv_client` データレイヤー経由で取得 — **APIキー不要・リクエスト上限なし**。
+2. **FINVIZ Eliteプレスクリーン（任意）**: FINVIZ Elite APIの1回の呼び出しで米国市場全体（ミッドキャップ以上）をバリュー/配当条件でプレフィルタし、その後TradingViewが詳細分析を提供。ユニバースをS&P 500以外にも拡大。
 
-**効率面のメリット**: FINVIZプレスクリーニングによりFMP API呼び出しを90%削減でき、無料ティアのAPIユーザーに最適です。
+バリュエーション比率、配当指標、財務健全性、収益性などの定量基準に基づいて米国株をスクリーニングし、複合品質スコアによるランキングレポートを生成します。最終ランキングでは売られ過ぎ銘柄（RSI ≤ 40）が優先されます。
 
 ---
 
@@ -55,149 +55,91 @@ permalink: /ja/skills/value-dividend-screener/
 
 ## 3. 前提条件
 
-- **FMP APIキー** 必須（`FMP_API_KEY` 環境変数）
-- **FINVIZ Elite** 任意（パフォーマンス向上）
-- FMPは分析用、FINVIZにより実行時間を70-80%短縮
-- Python 3.9+ 推奨
+- **TradingViewデータレイヤー** 必須: 稼働中のTradingView Desktopチャート（CDP :9222）または新鮮な `state/metrics` スナップショットキャッシュ — **APIキー不要・リクエスト上限なし**
+- **FINVIZ Elite** 任意（ユニバースをS&P 500以外に拡大）
+- Python 3.9+ 推奨。`requests` はFINVIZプレスクリーン使用時のみ必要
+- レガシーの `FMP_API_KEY` / `--fmp-api-key` 入力は受け付けるが無視される
 
 ---
 
 ## 4. クイックスタート
 
 ```bash
-# 2段階スクリーニング（推奨 - 70-80%高速）
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
+# S&P 500ユニバース via TradingView（デフォルト、APIキー不要）
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py
 
-# FMPのみスクリーニング（FINVIZ不要）
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py
+# FINVIZプレスクリーンによる2段階スクリーニング（より広いユニバース）
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
 
 # カスタムパラメータ
-python3 value-dividend-screener/scripts/screen_dividend_stocks.py \
-  --use-finviz \
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py \
   --top 50 \
-  --output custom_results.json
+  --output-dir reports/
 ```
 
 ---
 
 ## 5. ワークフロー
 
-### ステップ1: APIキーの確認
+### ステップ1: ユニバースの選択
 
-**2段階スクリーニング（推奨）の場合：**
+#### S&P 500 via TradingView（デフォルト）
 
-両方のAPIキーが利用可能か確認：
+稼働中のTradingView Desktopチャート以外のセットアップは不要。スクリーナーはコミット済みのS&P 500構成銘柄リストを走査し、すべてのデータ（ファンダメンタルズ、年次DPS履歴、日足バー）をTradingViewスキャナーから読み取ります。
 
-```python
-import os
-fmp_api_key = os.environ.get('FMP_API_KEY')
-finviz_api_key = os.environ.get('FINVIZ_API_KEY')
-```
+#### FINVIZプレスクリーン（任意、より広いユニバース）
 
-利用できない場合は、APIキーの提供または環境変数の設定を案内：
 ```bash
-export FMP_API_KEY=your_fmp_key_here
 export FINVIZ_API_KEY=your_finviz_key_here
 ```
 
-**FMPのみスクリーニングの場合：**
-
-FMP APIキーが利用可能か確認：
-
-```python
-import os
-api_key = os.environ.get('FMP_API_KEY')
-```
-
-利用できない場合は、APIキーの提供または環境変数の設定を案内：
-```bash
-export FMP_API_KEY=your_key_here
-```
+**FINVIZを使う理由：**
+- 1回のAPI呼び出しで米国市場全体（ミッドキャップ以上）をバリュー/配当条件でプレスクリーニング
+- その後TradingViewがプレスクリーン済み候補の詳細分析を提供
 
 **FINVIZ Elite APIキー：**
 - FINVIZ Eliteサブスクリプションが必要（月額約$40または年額約$330）
 - プレスクリーニング結果のCSVエクスポートへのアクセスを提供
-- FMP API使用量の削減に強く推奨
 
-必要に応じて `references/fmp_api_guide.md` の手順を案内。
+### ステップ2: スクリーニングの実行
 
-### ステップ2: スクリーニングスクリプトの実行
+**デフォルトのS&P 500スクリーニング：**
 
-適切なパラメータでスクリーニングスクリプトを実行：
-
-#### **2段階スクリーニング（推奨）**
-
-FINVIZでプレスクリーニング、FMPで詳細分析：
-
-**デフォルト実行（上位20銘柄）：**
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py
 ```
 
-**明示的なAPIキー指定：**
+**2段階スクリーニング（FINVIZ + TradingView）：**
+
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz \
-  --fmp-api-key $FMP_API_KEY \
-  --finviz-api-key $FINVIZ_API_KEY
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py --use-finviz
 ```
 
-**カスタム上位N件：**
+FINVIZフィルタ（1回の呼び出し）: 時価総額ミッドキャップ以上、配当利回り3%以上、配当成長率（3年）5%以上、EPS成長率（3年）プラス、PBR 2倍以下、PER 20倍以下、売上成長率（3年）プラス、米国。
+
+**カスタム上位N件 / 出力先 / 候補数上限：**
+
 ```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz --top 50
+python3 skills/value-dividend-screener/scripts/screen_dividend_stocks.py \
+  --top 50 --output-dir reports/ --max-candidates 200
 ```
 
-**カスタム出力先：**
-```bash
-python3 scripts/screen_dividend_stocks.py --use-finviz --output /path/to/results.json
-```
-
-**スクリプトの動作（2段階）：**
-1. FINVIZ Eliteプレスクリーニング：
-   - 時価総額: ミッドキャップ以上
-   - 配当利回り: 3%以上
-   - 配当成長率（3年）: 5%以上
-   - EPS成長率（3年）: プラス
-   - PBR: 2倍以下
-   - PER: 20倍以下
-   - 売上成長率（3年）: プラス
-   - 地域: 米国
-2. FINVIZ結果のFMP詳細分析（通常20-50銘柄）：
-   - 配当成長率の計算（3年CAGR）
-   - 売上・EPSトレンド分析
-   - 配当持続可能性評価（配当性向、FCFカバレッジ）
-   - 財務健全性指標（負債比率、流動比率）
-   - 品質スコアリング（ROE、利益率）
+**スクリプトの動作：**
+1. ユニバース: S&P 500構成銘柄（デフォルト）またはFINVIZプレスクリーン済み銘柄（`--use-finviz`）
+2. TradingView経由の銘柄ごとの詳細分析：
+   - 時価総額 ≥ $2B、バリュエーションフィルタ PER ≤ 20、PBR ≤ 2（スキャナースナップショット）
+   - 配当利回り ≥ 3.0%（直近完了会計年度のDPS / 現在価格で検証）
+   - 配当成長率の計算（3年CAGR ≥ 4%）— スキャナーの年次DPS履歴から
+   - 配当安定性チェック（ボラティリティ、連続増配年数）
+   - 売上・EPSトレンド分析（年次会計年度系列、3年間プラス）
+   - 配当持続可能性評価（スキャナー配当性向、DPS×株式数 / FCFカバレッジ、REITはOCF≈FFO代理）
+   - 財務健全性（スナップショットの負債比率、流動比率）
+   - 品質スコアリング（ROE、純利益率）
+   - 日足バーから14期間RSI（最終ランキングで売られ過ぎ RSI ≤ 40 を優先）
 3. 複合スコアリングとランキング
-4. 上位N銘柄をJSONファイルに出力
+4. 上位N銘柄をJSONファイルとして `reports/` に出力
 
-**想定実行時間（2段階）：** 30-50のFINVIZ候補に対して2-3分（FMPのみより大幅に高速）
-
-#### **FMPのみスクリーニング（従来方式）**
-
-FMP Stock Screener APIのみを使用（API使用量が多い）：
-
-**デフォルト実行：**
-```bash
-python3 scripts/screen_dividend_stocks.py
-```
-
-**明示的なAPIキー指定：**
-```bash
-python3 scripts/screen_dividend_stocks.py --fmp-api-key $FMP_API_KEY
-```
-
-**スクリプトの動作（FMPのみ）：**
-1. FMP Stock Screener APIで初期スクリーニング（配当利回り>=3.0%、PER<=20、PBR<=2）
-2. 候補の詳細分析（通常100-300銘柄）：
-   - 2段階アプローチと同じ詳細分析
-3. 複合スコアリングとランキング
-4. 上位N銘柄をJSONファイルに出力
-
-**想定実行時間（FMPのみ）：** 100-300候補に対して5-15分（レート制限あり）
-
-**API使用量比較：**
-- 2段階: FMP API呼び出し約50-100回（FINVIZが約30銘柄にプレフィルタ）
-- FMPのみ: FMP API呼び出し約500-1500回（全スクリーナー結果を分析）
+**想定実行時間：** 新鮮なメトリクスキャッシュがあればほとんどの銘柄はチャートに触れずに処理（数秒）。コールドキャッシュではライブチャート読み取りにフォールバック（プレフィルタ通過銘柄あたり約2秒）。
 
 ### ステップ3: 結果のパースと分析
 
@@ -206,7 +148,7 @@ python3 scripts/screen_dividend_stocks.py --fmp-api-key $FMP_API_KEY
 ```python
 import json
 
-with open('dividend_screener_results.json', 'r') as f:
+with open('reports/value_dividend_results_YYYY-MM-DD.json', 'r') as f:
     data = json.load(f)
 
 metadata = data['metadata']
@@ -216,6 +158,7 @@ stocks = data['stocks']
 **銘柄ごとの主要データ：**
 - 基本情報: `symbol`, `company_name`, `sector`, `market_cap`, `price`
 - バリュエーション: `dividend_yield`, `pe_ratio`, `pb_ratio`
+- テクニカル: `rsi`
 - 成長指標: `dividend_cagr_3y`, `revenue_cagr_3y`, `eps_cagr_3y`
 - 持続可能性: `payout_ratio`, `fcf_payout_ratio`, `dividend_sustainable`
 - 財務健全性: `debt_to_equity`, `current_ratio`, `financially_healthy`
@@ -232,11 +175,12 @@ stocks = data['stocks']
 # Value Dividend Stock Screening Report
 
 **Generated:** [タイムスタンプ]
+**Data Source:** TradingView data layer (no API key)
 **Screening Criteria:**
-- Dividend Yield: >= 3.5%
+- Dividend Yield: >= 3.0%
 - P/E Ratio: <= 20
 - P/B Ratio: <= 2
-- Dividend Growth (3Y CAGR): >= 5%
+- Dividend Growth (3Y CAGR): >= 4%
 - Revenue Trend: Positive over 3 years
 - EPS Trend: Positive over 3 years
 
@@ -249,8 +193,8 @@ stocks = data['stocks']
 
 **リファレンス：**
 
-- `skills/value-dividend-screener/references/fmp_api_guide.md`
 - `skills/value-dividend-screener/references/screening_methodology.md`
+- `skills/value-dividend-screener/references/fmp_api_guide.md`（レガシー、参考用）
 
 **スクリプト：**
 

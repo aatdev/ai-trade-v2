@@ -81,7 +81,7 @@ permalink: /ja/skills/
 | [Uptrend Analyzer]({{ '/ja/skills/uptrend-analyzer/' | relative_url }}) | Analyzes market breadth using Monty's Uptrend Ratio Dashboard data to diagnose the current market environment | <span class="badge badge-free">API不要</span> |
 | [US Market Bubble Detector]({{ '/ja/skills/us-market-bubble-detector/' | relative_url }}) ★ | Evaluates market bubble risk through quantitative data-driven analysis using the revised Minsky/Kindleberger framewor... | <span class="badge badge-free">API不要</span> |
 | [US Stock Analysis]({{ '/ja/skills/us-stock-analysis/' | relative_url }}) ★ | Comprehensive US stock analysis including fundamental analysis (financial metrics, business quality, valuation), tech... | <span class="badge badge-free">API不要</span> |
-| [Value Dividend Screener]({{ '/ja/skills/value-dividend-screener/' | relative_url }}) | Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B rat... | <span class="badge badge-api">FMP必須</span> <span class="badge badge-optional">FINVIZ任意</span> |
+| [Value Dividend Screener]({{ '/ja/skills/value-dividend-screener/' | relative_url }}) | Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B rat... | <span class="badge badge-free">API不要</span> <span class="badge badge-optional">FINVIZ任意</span> |
 | [VCP Screener]({{ '/ja/skills/vcp-screener/' | relative_url }}) ★ | Screen S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP) | <span class="badge badge-api">FMP必須</span> |
 
 ★ = 使用例・トラブルシューティング・CLIリファレンスを含む詳細ガイド

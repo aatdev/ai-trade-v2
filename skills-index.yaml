@@ -1113,14 +1113,14 @@ skills:
   timeframe: weekly
   difficulty: intermediate
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
     requirement: required
-    note: Financial Modeling Prep API
+    note: S&P 500 dividend fundamentals + daily bars via local TradingView data layer (no API key)
   - id: finviz
     type: screener
-    requirement: recommended
-    note: FINVIZ Elite API
+    requirement: optional
+    note: FINVIZ Elite pre-screen widens universe beyond S&P 500
   inputs:
   - dividend_universe
   - value_filters
