@@ -151,8 +151,7 @@ rather than assuming.
 
 What they do, lock files, git-safety preconditions (clean tree / on `main` /
 `pull --ff-only`), quality-gate rollback, and PR creation are documented in
-`CLAUDE.md` → *Skill Self-Improvement Loop* and *Skill Auto-Generation
-Pipeline*. State / logs:
+[`automation-pipelines.md`](automation-pipelines.md). State / logs:
 
 - Improvement: `logs/.skill_improvement.lock`,
   `logs/.skill_improvement_state.json`, `logs/skill_improvement.log`,
