@@ -44,6 +44,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 |-------|-------------|-----------------|
 | **[CANSLIM Screener]({{ '/en/skills/canslim-screener/' | relative_url }})** | Full 7-component CANSLIM growth stock scoring (C, A, N, S, L, I, M). Composite 0-100 ratings with bear market protection. Phase 3 implements 100% of O'Neil's methodology | <span class="badge badge-api">FMP Required</span> |
 | **[VCP Screener]({{ '/en/skills/vcp-screener/' | relative_url }})** | Detects Mark Minervini's Volatility Contraction Pattern. 3-phase pipeline: Pre-filter, Trend Template, VCP Detection with pivot points and trade setups | <span class="badge badge-api">FMP Required</span> |
+| **[Swing Short Screener]({{ '/en/skills/swing-short-screener/' | relative_url }})** | Short-side mirror of VCP Screener. Detects Stage 4 downtrend weakness via a 5-factor weighted score (trend structure, relative strength, base breakdown on volume, lower highs, liquidity/borrow), assigns A/B/C/D grades. Detection-only | <span class="badge badge-api">FMP Required</span> |
 | **[FinViz Screener]({{ '/en/skills/finviz-screener/' | relative_url }})** | Translates natural language (Japanese/English) into FinViz filter URLs. 500+ filter codes across fundamentals, technicals, and descriptives. **Theme cross-screening** (30+ themes × 268 sub-themes) for narrative-based searches like "AI × Logistics" or "Data Centers × Power". Opens results in Chrome | <span class="badge badge-free">No API</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Value Dividend Screener** | Multi-phase dividend stock screening: value characteristics (P/E, P/B), income (yield), growth (3-year trends), sustainability, and quality scoring | <span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Dividend Growth Pullback Screener** | Finds dividend growth stocks (12%+ annual growth, 1.5%+ yield) at oversold technical levels (RSI <= 40). Two-stage FINVIZ + FMP pipeline | <span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span> |
@@ -200,6 +201,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 |-------|-----|-------------|--------|
 | CANSLIM Screener | Required | -- | -- |
 | VCP Screener | Required | -- | -- |
+| Swing Short Screener | Required | -- | -- |
 | FinViz Screener | -- | Optional | -- |
 | Value Dividend Screener | Required | Recommended | -- |
 | Dividend Growth Pullback Screener | Required | Recommended | -- |
@@ -256,5 +258,8 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Parabolic Short Trade Planner | -- | -- | -- |
 | Trading Skills Navigator | -- | -- | -- |
 | Trade Performance Coach | -- | -- | -- |
+| Send Telegram | -- | -- | -- |
+| Signals Alerts | -- | -- | -- |
+| Ticker Analysis | -- | -- | -- |
 
 "--" means not required. "Optional" means functionality is enhanced but the skill works without it.
