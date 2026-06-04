@@ -8,3 +8,4 @@
 - [TradingView Chart Setup](reference_tradingview_chart_setup.md) — Активные индикаторы на чарте пользователя, форматы тикеров NASDAQ/NYSE/MOEX
 - [Create alerts in TV](feedback-create-alerts.md) - create alerts in TV
 - [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
+- [Use tradingview-screener, not finviz](use-tradingview-screener-not-finviz.md) — для скрининга всегда tradingview-screener; finviz-screener только по явной просьбе
