@@ -7,3 +7,4 @@
 - [Ticker analysis → per-ticker MyNotes subdir](ticker-analysis-mynotes-per-ticker-subdir.md) — save ticker analyses under Финансы/Анализ-тикеров/<TICKER>/
 - [TradingView Chart Setup](reference_tradingview_chart_setup.md) — Активные индикаторы на чарте пользователя, форматы тикеров NASDAQ/NYSE/MOEX
 - [Create alerts in TV](feedback-create-alerts.md) - create alerts in TV
+- [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
