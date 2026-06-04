@@ -28,71 +28,62 @@ Use this skill when:
 
 ## Prerequisites
 
-- **FMP API key** (required): Set `FMP_API_KEY` environment variable or pass `--fmp-api-key`. Free tier (250 calls/day) is sufficient for FMP-only mode (≤40 stocks). [Sign up](https://site.financialmodelingprep.com/developer/docs).
-- **FINVIZ Elite API key** (optional, recommended): Set `FINVIZ_API_KEY` environment variable or pass `--finviz-api-key`. Reduces execution time from 10–15 min to 2–3 min. [Sign up](https://elite.finviz.com/).
-- Python 3.8+ with `requests` and `pandas` libraries installed.
+- **TradingView data layer** (required): a running TradingView Desktop chart (CDP on :9222) or a fresh `state/metrics` snapshot cache. The screener routes all data (annual DPS history, fundamentals, daily bars for RSI) through the shared `scripts/lib/tv_client.py` — **no API key and no request quota**.
+- **FINVIZ Elite API key** (optional): Set `FINVIZ_API_KEY` environment variable or pass `--finviz-api-key`. Widens the screening universe beyond the S&P 500 with a pre-filtered candidate list. [Sign up](https://elite.finviz.com/).
+- Python 3.8+. The `requests` library is needed only for the optional FINVIZ pre-screen.
+
+> Legacy `FMP_API_KEY` / `--fmp-api-key` inputs are accepted but ignored — the FMP data path was replaced by TradingView.
 
 ## Screening Workflow
 
-### Step 1: Set API Keys
+### Step 1: Choose the Universe
 
-#### Two-Stage Approach (RECOMMENDED)
+#### S&P 500 via TradingView (default)
 
-For optimal performance, use FINVIZ Elite API for pre-screening + FMP API for detailed analysis:
+No setup needed beyond a running TradingView Desktop chart. The screener walks the committed S&P 500 constituents list and reads everything from the TradingView scanner + chart bars.
+
+#### FINVIZ Pre-Screen (optional, wider universe)
 
 ```bash
-# Set both API keys as environment variables
-export FMP_API_KEY=your_fmp_key_here
 export FINVIZ_API_KEY=your_finviz_key_here
 ```
 
-**Why Two-Stage?**
-- **FINVIZ**: Fast pre-screening with RSI filter (1 API call → ~10-50 candidates)
-- **FMP**: Detailed fundamental analysis only on pre-screened candidates
-- **Result**: Analyze more stocks with fewer FMP API calls (stays within free tier limits)
-
-#### FMP-Only Approach (Original Method)
-
-If you don't have FINVIZ Elite access:
-
-```bash
-export FMP_API_KEY=your_key_here
-```
-
-**Limitation**: FMP free tier (250 requests/day) limits analysis to ~40 stocks. Use `--max-candidates 40` to stay within limits.
+**Why FINVIZ?**
+- Pre-screens the whole US market (mid-cap+) with dividend-growth and RSI filters in 1 API call
+- TradingView then supplies the detailed analysis for the ~10-50 pre-screened candidates
 
 ### Step 2: Execute Screening
 
-**Two-Stage Screening (RECOMMENDED):**
+**Default S&P 500 screening:**
+
+```bash
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py
+```
+
+This executes:
+1. Cheap pre-filter on scanner current yield, then annual-DPS dividend CAGR verification (12%+)
+2. 14-period RSI from daily bars; oversold filter (RSI ≤40)
+3. Revenue/EPS trend, financial health, and payout sustainability checks
+
+**Two-Stage Screening (FINVIZ + TradingView):**
 
 ```bash
 python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
 ```
 
-This executes:
 1. FINVIZ pre-screen: Dividend yield 0.5-3%, Dividend growth 10%+, EPS growth 5%+, Sales growth 5%+, RSI <40
-2. FMP detailed analysis: Verify 12%+ dividend CAGR, calculate exact RSI, analyze fundamentals
-
-**FMP-Only Screening:**
-
-```bash
-python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --max-candidates 40
-```
+2. TradingView detailed analysis: Verify 12%+ dividend CAGR, calculate exact RSI, analyze fundamentals
 
 **Customization Options:**
 
 ```bash
-# Two-stage with custom parameters
+# Custom thresholds
 python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
-  --use-finviz --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
+  --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
 
-# FMP-only with custom parameters
+# Limit the number of analyzed candidates / change output location
 python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
-  --min-yield 2.0 --min-div-growth 10.0 --max-candidates 30
-
-# Provide API keys as arguments (instead of environment variables)
-python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
-  --use-finviz --fmp-api-key YOUR_FMP_KEY --finviz-api-key YOUR_FINVIZ_KEY
+  --max-candidates 100 --output-dir reports/
 ```
 
 ### Step 3: Review Results
@@ -134,7 +125,7 @@ For each qualified stock, the report includes:
 
 ## Output
 
-The script saves two files to the current working directory (or `--output-dir` if specified):
+The script saves two files to the repository `reports/` directory (or `--output-dir` if specified):
 
 | File | Description |
 |---|---|
@@ -149,17 +140,17 @@ The script saves two files to the current working directory (or `--output-dir` i
 
 ## Screening Criteria Details
 
-### Phase 1: Fundamental Screening (FMP API)
+### Phase 1: Fundamental Screening (TradingView scanner)
 
 **Initial Filter:**
-- Dividend Yield ≥ 1.5% (calculated from actual dividend payments)
+- Dividend Yield ≥ 1.5% (verified against the last completed fiscal-year DPS / current price)
 - Market Cap ≥ $2 billion (liquidity and stability)
-- Exchange: NYSE, NASDAQ (excludes OTC/pink sheets)
+- Universe: S&P 500 constituents (or FINVIZ pre-screened symbols with `--use-finviz`)
 
 **Dividend Growth Analysis:**
-- 3-Year Dividend CAGR ≥ 12% (doubles dividend in 6 years)
+- 3-Year Dividend CAGR ≥ 12% (doubles dividend in 6 years), computed from the scanner's annual DPS history (~20 fiscal years)
 - Dividend Consistency: No cuts in past 4 years
-- Payout Ratio < 100% (sustainability check)
+- Payout Ratio < 100% (sustainability check; REITs use an OCF≈FFO proxy)
 
 **Financial Health:**
 - Positive revenue growth over 3 years
@@ -173,7 +164,7 @@ The script saves two files to the current working directory (or `--output-dir` i
 - 14-period RSI using daily closing prices
 - Formula: RSI = 100 - (100 / (1 + RS))
   - RS = Average Gain / Average Loss over 14 periods
-- Data source: FMP historical prices (past 30 days)
+- Data source: TradingView daily bars (most recent ~30 sessions)
 
 **RSI Filter:**
 - RSI ≤ 40 (oversold/pullback condition)
@@ -250,36 +241,21 @@ Stocks ranked by composite score. Top scorers combine exceptional dividend growt
 - Lower dividend growth: `--min-div-growth 10.0` (still excellent growth)
 - Lower minimum yield: `--min-yield 1.0` (capture more growth stocks)
 
-### API Rate Limit Reached
+### TradingView Data Layer Unavailable
 
-**FMP Free Tier Limits:**
-- 250 requests/day
-- Each stock analyzed requires 6 API calls (quote, dividend, prices, income, balance, cashflow, metrics)
-- Maximum ~40 stocks per day in FMP-only mode
+**Symptoms:** `tv CLI not found`, repeated "No profile data" / "No dividend history", or a hung run.
+
+**Possible Causes:**
+1. TradingView Desktop is not running, or remote debugging (CDP on :9222) is off
+2. The `tv` CLI is not resolvable (no global `tv`, no `TV_CLI`, vendored copy not installed)
+3. The metrics snapshot cache is stale and the live chart path is unreachable
 
 **Solutions:**
+- Start TradingView Desktop with remote debugging enabled (see `vendor/tradingview-mcp/scripts/launch_tv_debug_mac.sh`)
+- Run `npm install` in `vendor/tradingview-mcp`, or set `TV_CLI` / `TV_MCP_REPO`
+- Refresh the snapshot cache: `node vendor/tradingview-mcp/scripts/collect_russell.js --source snp500 --update`
 
-**1. Use FINVIZ Two-Stage Approach (RECOMMENDED)**
-```bash
-python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
-```
-- FINVIZ pre-screening: 1 API call → 10-50 candidates (already filtered by RSI)
-- FMP analysis: 6 calls × 10-50 stocks = 60-300 FMP calls
-- **Advantage**: FINVIZ RSI filter dramatically reduces candidates, staying within FMP limits
-
-**2. Limit FMP-Only Candidates**
-```bash
-python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --max-candidates 40
-```
-
-**3. Wait 24 Hours for Rate Limit Reset**
-- FMP resets at UTC midnight
-
-**4. Upgrade to FMP Paid Plan**
-- Starter ($14/month): 500 requests/day
-- Professional ($29/month): 1,000 requests/day
-
-**Note:** FINVIZ Elite subscription ($40/month) + FMP free tier is more cost-effective than FMP paid plans for this use case.
+**Performance note:** with a fresh metrics cache most symbols are served without touching the chart; a cold cache falls back to live chart reads (~2s per symbol that passes the yield pre-filter).
 
 ### RSI Calculation Errors
 
@@ -315,8 +291,8 @@ python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_
 ### scripts/
 
 **screen_dividend_growth_rsi.py** - Main screening script
-- Integrates FMP API for fundamental data
-- Calculates 14-period RSI from historical prices
+- Reads fundamentals and annual DPS history from the TradingView scanner via the shared `tv_client` data layer (no API key)
+- Calculates 14-period RSI from TradingView daily bars
 - Applies multi-phase filtering and ranking
 - Outputs JSON and markdown reports
 
@@ -334,11 +310,9 @@ python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_
 - Historical examples (MSFT, V, MA, AAPL)
 - Quality characteristics of dividend growth stocks
 
-**fmp_api_guide.md** - API usage documentation
-- API key setup and management
-- Endpoint documentation for screening
-- Rate limiting strategies
-- Error handling and troubleshooting
+**fmp_api_guide.md** - Legacy FMP API documentation (historical)
+- Kept for reference; the screener now sources all data from TradingView
+- Relevant only if reverting to an FMP-based data layer
 
 ---
 

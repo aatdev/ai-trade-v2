@@ -14,7 +14,7 @@ permalink: /en/skills/dividend-growth-pullback-screener/
 Use this skill to find high-quality dividend growth stocks (12%+ annual dividend growth, 1.5%+ yield) that are experiencing temporary pullbacks, identified by RSI oversold conditions (RSI ≤40). This skill combines fundamental dividend analysis with technical timing indicators to identify buying opportunities in strong dividend growers during short-term weakness.
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span>
+<span class="badge badge-free">No API Key</span> <span class="badge badge-optional">FINVIZ Optional</span>
 
 [Download Skill Package (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/dividend-growth-pullback-screener.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/dividend-growth-pullback-screener){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -55,26 +55,26 @@ Use this skill when:
 
 ## 3. Prerequisites
 
-- **FMP API key** required (`FMP_API_KEY` environment variable)
-- **FINVIZ Elite** optional (improves performance)
-- FMP for analysis; FINVIZ for RSI pre-screening
-- Python 3.9+ recommended
+- **TradingView data layer** required: a running TradingView Desktop chart (CDP on :9222) or a fresh `state/metrics` snapshot cache — **no API key, no request quota**
+- **FINVIZ Elite** optional (widens the universe beyond the S&P 500)
+- TradingView for analysis; FINVIZ for RSI pre-screening
+- Python 3.9+ recommended; `requests` needed only for the FINVIZ pre-screen
+- Legacy `FMP_API_KEY` / `--fmp-api-key` inputs are accepted but ignored
 
 ---
 
 ## 4. Quick Start
 
 ```bash
-# Two-stage screening with RSI filter (RECOMMENDED)
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py --use-finviz
+# S&P 500 universe via TradingView (default, no API key)
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py
 
-# FMP-only screening (limited to ~40 stocks due to API limits)
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py --max-candidates 40
+# Two-stage screening with FINVIZ pre-screen (wider universe)
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
 
 # Custom RSI threshold and dividend growth requirements
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py \
-  --use-finviz \
-  --rsi-threshold 35 \
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
+  --rsi-max 35 \
   --min-div-growth 15
 ```
 
@@ -82,63 +82,54 @@ python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py \
 
 ## 5. Workflow
 
-### Step 1: Set API Keys
+### Step 1: Choose the Universe
 
-#### Two-Stage Approach (RECOMMENDED)
+#### S&P 500 via TradingView (default)
 
-For optimal performance, use FINVIZ Elite API for pre-screening + FMP API for detailed analysis:
+No setup needed beyond a running TradingView Desktop chart. The screener walks the committed S&P 500 constituents list and reads everything (annual DPS history, fundamentals, daily bars) from the TradingView scanner.
+
+#### FINVIZ Pre-Screen (optional, wider universe)
 
 ```bash
-# Set both API keys as environment variables
-export FMP_API_KEY=your_fmp_key_here
 export FINVIZ_API_KEY=your_finviz_key_here
 ```
 
-**Why Two-Stage?**
-- **FINVIZ**: Fast pre-screening with RSI filter (1 API call → ~10-50 candidates)
-- **FMP**: Detailed fundamental analysis only on pre-screened candidates
-- **Result**: Analyze more stocks with fewer FMP API calls (stays within free tier limits)
-
-#### FMP-Only Approach (Original Method)
-
-If you don't have FINVIZ Elite access:
-
-```bash
-export FMP_API_KEY=your_key_here
-```
-
-**Limitation**: FMP free tier (250 requests/day) limits analysis to ~40 stocks. Use `--max-candidates 40` to stay within limits.
+**Why FINVIZ?**
+- Pre-screens the whole US market (mid-cap+) with dividend-growth and RSI filters in 1 API call
+- TradingView then supplies the detailed analysis for the ~10-50 pre-screened candidates
 
 ### Step 2: Execute Screening
 
-**Two-Stage Screening (RECOMMENDED):**
+**Default S&P 500 screening:**
 
 ```bash
-cd dividend-growth-pullback-screener/scripts
-python3 screen_dividend_growth_rsi.py --use-finviz
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py
 ```
 
 This executes:
-1. FINVIZ pre-screen: Dividend yield 0.5-3%, Dividend growth 10%+, EPS growth 5%+, Sales growth 5%+, RSI <40
-2. FMP detailed analysis: Verify 12%+ dividend CAGR, calculate exact RSI, analyze fundamentals
+1. Cheap pre-filter on scanner current yield, then annual-DPS dividend CAGR verification (12%+)
+2. 14-period RSI from daily bars; oversold filter (RSI ≤40)
+3. Revenue/EPS trend, financial health, and payout sustainability checks
 
-**FMP-Only Screening:**
+**Two-Stage Screening (FINVIZ + TradingView):**
 
 ```bash
-python3 screen_dividend_growth_rsi.py --max-candidates 40
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
 ```
+
+1. FINVIZ pre-screen: Dividend yield 0.5-3%, Dividend growth 10%+, EPS growth 5%+, Sales growth 5%+, RSI <40
+2. TradingView detailed analysis: Verify 12%+ dividend CAGR, calculate exact RSI, analyze fundamentals
 
 **Customization Options:**
 
 ```bash
-# Two-stage with custom parameters
-python3 screen_dividend_growth_rsi.py --use-finviz --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
+# Custom thresholds
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
+  --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
 
-# FMP-only with custom parameters
-python3 screen_dividend_growth_rsi.py --min-yield 2.0 --min-div-growth 10.0 --max-candidates 30
-
-# Provide API keys as arguments (instead of environment variables)
-python3 screen_dividend_growth_rsi.py --use-finviz --fmp-api-key YOUR_FMP_KEY --finviz-api-key YOUR_FINVIZ_KEY
+# Limit candidates / change output location
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
+  --max-candidates 100 --output-dir reports/
 ```
 
 ### Step 3: Review Results

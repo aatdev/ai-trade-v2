@@ -47,7 +47,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | **[Swing Short Screener]({{ '/en/skills/swing-short-screener/' | relative_url }})** | Short-side mirror of VCP Screener. Detects Stage 4 downtrend weakness via a 5-factor weighted score (trend structure, relative strength, base breakdown on volume, lower highs, liquidity/borrow), assigns A/B/C/D grades. Detection-only | <span class="badge badge-api">FMP Required</span> |
 | **[FinViz Screener]({{ '/en/skills/finviz-screener/' | relative_url }})** | Translates natural language (Japanese/English) into FinViz filter URLs. 500+ filter codes across fundamentals, technicals, and descriptives. **Theme cross-screening** (30+ themes × 268 sub-themes) for narrative-based searches like "AI × Logistics" or "Data Centers × Power". Opens results in Chrome | <span class="badge badge-free">No API</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Value Dividend Screener** | Multi-phase dividend stock screening: value characteristics (P/E, P/B), income (yield), growth (3-year trends), sustainability, and quality scoring | <span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span> |
-| **Dividend Growth Pullback Screener** | Finds dividend growth stocks (12%+ annual growth, 1.5%+ yield) at oversold technical levels (RSI <= 40). Two-stage FINVIZ + FMP pipeline | <span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">FINVIZ Optional</span> |
+| **Dividend Growth Pullback Screener** | Finds dividend growth stocks (12%+ annual growth, 1.5%+ yield) at oversold technical levels (RSI <= 40). TradingView data layer (no API key); optional FINVIZ pre-screen widens the universe | <span class="badge badge-free">No API Key</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Earnings Trade Analyzer** | Scores post-earnings stocks using 5 weighted factors: Gap Size (25%), Pre-Earnings Trend (30%), Volume Trend (20%), MA200 Position (15%), MA50 Position (10%). A/B/C/D grades | <span class="badge badge-api">FMP Required</span> |
 | **PEAD Screener** | Screens for Post-Earnings Announcement Drift patterns using weekly candle analysis. Stage-based monitoring: MONITORING, SIGNAL_READY, BREAKOUT, EXPIRED | <span class="badge badge-api">FMP Required</span> |
 | **FTD Detector** | Detects Follow-Through Day signals for market bottom confirmation using William O'Neil's methodology. Dual-index tracking with quality scoring (0-100) | <span class="badge badge-api">FMP Required</span> |
@@ -204,7 +204,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Swing Short Screener | Required | -- | -- |
 | FinViz Screener | -- | Optional | -- |
 | Value Dividend Screener | Required | Recommended | -- |
-| Dividend Growth Pullback Screener | Required | Recommended | -- |
+| Dividend Growth Pullback Screener | -- | Optional | -- |
 | Earnings Trade Analyzer | Required | -- | -- |
 | PEAD Screener | Required | -- | -- |
 | FTD Detector | Required | -- | -- |

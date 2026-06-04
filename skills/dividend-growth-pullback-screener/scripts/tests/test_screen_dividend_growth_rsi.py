@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,12 +21,13 @@ SCRIPT_PATH = Path(__file__).resolve().parents[1] / "screen_dividend_growth_rsi.
 
 
 def _load_script() -> ModuleType:
-    """Import screen_dividend_growth_rsi as a module."""
+    """Import screen_dividend_growth_rsi as a module.
+
+    No `requests`/`pandas` stubs needed anymore: the TradingView-backed
+    script imports neither at module level (requests is lazy inside the
+    optional FINVIZ client)."""
     spec = importlib.util.spec_from_file_location("screen_dg", SCRIPT_PATH)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    # Stub heavy imports that are not needed for unit tests
-    sys.modules.setdefault("requests", MagicMock())
-    sys.modules.setdefault("pandas", MagicMock())
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
     return mod
 

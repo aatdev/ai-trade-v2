@@ -88,13 +88,13 @@
       "id": "dividend-growth-pullback-screener",
       "integrations": [
         {
-          "id": "fmp",
+          "id": "tradingview",
           "requirement": "required",
           "type": "market_data"
         },
         {
           "id": "finviz",
-          "requirement": "recommended",
+          "requirement": "optional",
           "type": "screener"
         }
       ],
@@ -737,6 +737,22 @@
       "timeframe": "research"
     },
     {
+      "category": "swing-opportunity",
+      "difficulty": "advanced",
+      "display_name": "Swing Short Screener",
+      "id": "swing-short-screener",
+      "integrations": [
+        {
+          "id": "fmp",
+          "requirement": "required",
+          "type": "market_data"
+        }
+      ],
+      "status": "production",
+      "summary": "Screen S&P 500 (or a custom universe) for Stage 4 downtrend weakness using a 5-factor weighted weakness score, and emit a graded A/B/C/D short-side watchlist.",
+      "timeframe": "daily"
+    },
+    {
       "category": "trade-planning",
       "difficulty": "intermediate",
       "display_name": "Technical Analyst",
@@ -1073,7 +1089,8 @@
       "id": "market-regime-daily",
       "optional_skills": [
         "market-top-detector",
-        "macro-regime-detector"
+        "macro-regime-detector",
+        "market-news-analyst"
       ],
       "prerequisite_workflows": [],
       "required_skills": [
@@ -1107,6 +1124,59 @@
         "part-time-swing-trader",
         "long-term-investor",
         "growth-investor"
+      ]
+    },
+    {
+      "api_profile": "mixed",
+      "cadence": "daily",
+      "difficulty": "advanced",
+      "display_name": "Short Opportunity Daily",
+      "estimated_minutes": 30,
+      "id": "short-opportunity-daily",
+      "optional_skills": [
+        "ibd-distribution-day-monitor",
+        "macro-regime-detector",
+        "ftd-detector",
+        "downtrend-duration-analyzer",
+        "market-news-analyst",
+        "parabolic-short-trade-planner",
+        "portfolio-manager"
+      ],
+      "prerequisite_workflows": [
+        "market-regime-daily"
+      ],
+      "required_skills": [
+        "market-top-detector",
+        "exposure-coach",
+        "swing-short-screener",
+        "technical-analyst",
+        "position-sizer",
+        "trader-memory-core"
+      ],
+      "target_users": [
+        "part-time-swing-trader"
+      ]
+    },
+    {
+      "api_profile": "mixed",
+      "cadence": "daily",
+      "difficulty": "intermediate",
+      "display_name": "Swing Execution & Management",
+      "estimated_minutes": 20,
+      "id": "swing-execution-manage",
+      "optional_skills": [
+        "position-sizer"
+      ],
+      "prerequisite_workflows": [
+        "swing-opportunity-daily",
+        "market-regime-daily"
+      ],
+      "required_skills": [
+        "trader-memory-core",
+        "portfolio-manager"
+      ],
+      "target_users": [
+        "part-time-swing-trader"
       ]
     },
     {

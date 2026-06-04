@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """
-Dividend Growth Pullback Screener using FINVIZ + Financial Modeling Prep API
+Dividend Growth Pullback Screener — TradingView data layer (no FMP key).
 
-Two-stage screening approach:
-1. FINVIZ Elite API: Pre-screen stocks with dividend growth + RSI criteria (fast, cost-effective)
-2. FMP API: Detailed analysis of pre-screened candidates (comprehensive)
+Two screening modes:
+1. Default: S&P 500 universe, all data (annual DPS history, fundamentals,
+   daily bars for RSI) from a live TradingView Desktop chart via the shared
+   tv_client data layer. No API key, no request quota.
+2. --use-finviz: FINVIZ Elite pre-screen narrows the universe beyond the
+   S&P 500 (dividend growth + RSI filters), then TradingView supplies the
+   detailed analysis. Requires FINVIZ_API_KEY.
 
 Screens for high-quality dividend growth stocks (12%+ dividend CAGR, 1.5%+ yield)
 that are experiencing temporary pullbacks identified by RSI oversold conditions (RSI ≤40).
 
 Usage:
-    # Two-stage screening with FINVIZ (RECOMMENDED)
-    python3 screen_dividend_growth_rsi.py --use-finviz
-
-    # FMP-only screening (original method)
+    # S&P 500 universe via TradingView (default)
     python3 screen_dividend_growth_rsi.py
 
+    # Two-stage screening with FINVIZ pre-screen
+    python3 screen_dividend_growth_rsi.py --use-finviz
+
 Environment variables:
-    export FMP_API_KEY=your_fmp_key_here
     export FINVIZ_API_KEY=your_finviz_key_here  # Required for --use-finviz
 """
 
@@ -27,11 +30,15 @@ import io
 import json
 import os
 import sys
-import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
-import requests
+# Shared TradingView data layer (drop-in FMPClient replacement).
+sys.path.insert(
+    0,
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"),
+)
+from tv_client import FMPClient  # noqa: E402
 
 
 class FINVIZClient:
@@ -40,8 +47,13 @@ class FINVIZClient:
     BASE_URL = "https://elite.finviz.com/export.ashx"
 
     def __init__(self, api_key: str):
+        # requests is only needed for the optional FINVIZ pre-screen, so the
+        # TradingView-only default path runs without it installed.
+        import requests
+
         self.api_key = api_key
         self.session = requests.Session()
+        self._requests = requests
 
     def screen_stocks(self) -> set[str]:
         """
@@ -103,270 +115,9 @@ class FINVIZClient:
                 print(f"ERROR: FINVIZ API request failed: {response.status_code}", file=sys.stderr)
                 return set()
 
-        except requests.exceptions.RequestException as e:
+        except self._requests.exceptions.RequestException as e:
             print(f"ERROR: FINVIZ request exception: {e}", file=sys.stderr)
             return set()
-
-
-# --- FMP endpoint fallback: stable (new users) -> v3 (legacy users) ---
-_FMP_HIST_ENDPOINTS = [
-    ("https://financialmodelingprep.com/stable/historical-price-eod/full", True),
-    ("https://financialmodelingprep.com/api/v3/historical-price-full", False),
-]
-
-
-class FMPClient:
-    """Financial Modeling Prep API client with rate limiting."""
-
-    BASE_URL = "https://financialmodelingprep.com/api/v3"
-    STABLE_URL = "https://financialmodelingprep.com/stable"
-
-    _ENDPOINT_FAILURE_THRESHOLD = 3
-    # v3 path-style endpoints whose trailing symbol moves to a ?symbol= query
-    # on /stable (e.g. v3 income-statement/AAPL -> stable income-statement?symbol=AAPL)
-    _SYMBOL_QUERY_ENDPOINTS = (
-        "income-statement",
-        "balance-sheet-statement",
-        "cash-flow-statement",
-        "key-metrics",
-        "ratios",
-        "profile",
-        "quote",
-    )
-
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({"apikey": self.api_key})
-        self.rate_limit_reached = False
-        self.retry_count = 0
-        self._endpoint_failures: dict[str, int] = {}
-        self._disabled_endpoints: set[str] = set()
-
-    def _request(self, url: str, params: dict, quiet: bool = False) -> Optional[dict]:
-        """Single rate-limited GET. Returns parsed JSON, or None on failure.
-
-        Non-final endpoints pass quiet=True to suppress the expected 403 a new
-        key gets on the v3 fallback.
-        """
-        if self.rate_limit_reached:
-            return None
-        try:
-            response = self.session.get(url, params=params or {}, timeout=30)
-            if response.status_code == 200:
-                self.retry_count = 0
-                time.sleep(0.3)  # Rate limiting: 0.3s between requests
-                return response.json()
-            elif response.status_code == 429:
-                self.retry_count += 1
-                if self.retry_count <= 1:
-                    print("WARNING: Rate limit exceeded. Waiting 60 seconds...", file=sys.stderr)
-                    time.sleep(60)
-                    return self._request(url, params, quiet=quiet)
-                print("ERROR: Daily API rate limit reached. Stopping analysis.", file=sys.stderr)
-                self.rate_limit_reached = True
-                return None
-            else:
-                if not quiet:
-                    print(
-                        f"WARNING: API request failed ({response.status_code}): {url}",
-                        file=sys.stderr,
-                    )
-                return None
-        except Exception as e:
-            if not quiet:
-                print(f"ERROR: Request failed for {url}: {e}", file=sys.stderr)
-            return None
-
-    def _stable_spec(self, endpoint: str, params: dict) -> Optional[tuple]:
-        """Map a v3 path-style endpoint to its (stable_url, stable_params).
-
-        Returns None when there is no known /stable equivalent.
-        """
-        p = dict(params or {})
-        if endpoint == "stock-screener":
-            return f"{self.STABLE_URL}/company-screener", p
-        if endpoint.startswith("historical-price-full/stock_dividend/"):
-            p["symbol"] = endpoint.rsplit("/", 1)[-1]
-            return f"{self.STABLE_URL}/dividends", p
-        head, _, sym = endpoint.partition("/")
-        if sym and head in self._SYMBOL_QUERY_ENDPOINTS:
-            p["symbol"] = sym
-            return f"{self.STABLE_URL}/{head}", p
-        return None
-
-    @staticmethod
-    def _normalize(endpoint: str, data):
-        """Reshape /stable responses to match the v3 shapes callers expect."""
-        if data is None:
-            return None
-        # Dividends: /stable returns a flat list; v3 returned {"historical": [...]}.
-        if endpoint.startswith("historical-price-full/stock_dividend/"):
-            return {"historical": data} if isinstance(data, list) else data
-        # key-metrics: /stable renamed roe -> returnOnEquity (same ratio scale).
-        if endpoint.startswith("key-metrics/") and isinstance(data, list):
-            for rec in data:
-                if isinstance(rec, dict) and "roe" not in rec and "returnOnEquity" in rec:
-                    rec["roe"] = rec["returnOnEquity"]
-        # cash-flow: /stable renamed dividendsPaid -> netDividendsPaid (same
-        # negative-outflow value; callers take abs()).
-        if endpoint.startswith("cash-flow-statement/") and isinstance(data, list):
-            for rec in data:
-                if (
-                    isinstance(rec, dict)
-                    and "dividendsPaid" not in rec
-                    and "netDividendsPaid" in rec
-                ):
-                    rec["dividendsPaid"] = rec["netDividendsPaid"]
-        return data
-
-    def _get(self, endpoint: str, params: Optional[dict] = None) -> Optional[dict]:
-        """GET an FMP endpoint, preferring /stable with a v3 path-style fallback.
-
-        Callers still pass the legacy v3 path-style `endpoint` strings (e.g.
-        "income-statement/AAPL"); this routes them to the /stable query-style
-        equivalents and normalizes the response back to the v3 shape. Keys
-        issued after 2025-08-31 only work on /stable; legacy keys fall back to v3.
-        """
-        if self.rate_limit_reached:
-            return None
-        params = params or {}
-        attempts = []
-        spec = self._stable_spec(endpoint, params)
-        if spec:
-            attempts.append(spec)  # /stable first
-        attempts.append((f"{self.BASE_URL}/{endpoint}", dict(params)))  # v3 fallback
-        for i, (url, req_params) in enumerate(attempts):
-            quiet = i < len(attempts) - 1
-            data = self._request(url, req_params, quiet=quiet)
-            if data is not None:
-                return self._normalize(endpoint, data)
-        return None
-
-    def screen_stocks(self, min_market_cap: int = 2000000000, exchange: str = None) -> list[dict]:
-        """Screen stocks by market cap and exchange."""
-        params = {"marketCapMoreThan": min_market_cap}
-        if exchange:
-            params["exchange"] = exchange
-
-        result = self._get("stock-screener", params)
-        return result if result else []
-
-    def get_historical_prices(self, symbol: str, days: int = 30) -> Optional[list[dict]]:
-        """Get historical daily prices, most-recent-first (/stable, v3 fallback).
-
-        /stable/historical-price-eod/full returns a flat list of OHLCV bars and
-        is bounded with from/to; the v3 fallback returns {"historical": [...]}.
-        """
-        for base_url, is_stable in _FMP_HIST_ENDPOINTS:
-            if base_url in self._disabled_endpoints:
-                continue
-            if is_stable:
-                url = base_url
-                today = datetime.now().date()
-                params = {
-                    "symbol": symbol,
-                    # ~days trading days needs ~2x calendar days; +10 for slack.
-                    "from": (today - timedelta(days=days * 2 + 10)).isoformat(),
-                    "to": today.isoformat(),
-                }
-            else:
-                url = f"{base_url}/{symbol}"
-                params = {"timeseries": days}
-            try:
-                response = self.session.get(url, params=params, timeout=30)
-                time.sleep(0.3)
-                if response.status_code != 200:
-                    self._record_endpoint_failure(base_url)
-                    continue
-                data = response.json()
-                # /stable: flat list of bars (most-recent-first).
-                if isinstance(data, list):
-                    if data:
-                        self._endpoint_failures[base_url] = 0
-                        return data[:days]
-                    self._record_endpoint_failure(base_url)
-                    continue
-                # v3: {"symbol": ..., "historical": [...]}.
-                if isinstance(data, dict) and "historical" in data:
-                    self._endpoint_failures[base_url] = 0
-                    return data["historical"]
-                if isinstance(data, dict) and "historicalStockList" in data:
-                    for entry in data["historicalStockList"]:
-                        if entry.get("symbol", "").replace("-", ".") == symbol.replace("-", "."):
-                            self._endpoint_failures[base_url] = 0
-                            return entry.get("historical", [])
-                self._record_endpoint_failure(base_url)
-            except Exception:
-                self._record_endpoint_failure(base_url)
-        return None
-
-    def _record_endpoint_failure(self, base_url: str) -> None:
-        """Track consecutive failures and disable endpoint after threshold."""
-        failures = self._endpoint_failures.get(base_url, 0) + 1
-        self._endpoint_failures[base_url] = failures
-        if failures >= self._ENDPOINT_FAILURE_THRESHOLD:
-            self._disabled_endpoints.add(base_url)
-
-    def get_dividend_history(self, symbol: str) -> Optional[dict]:
-        """Get historical dividend payments."""
-        result = self._get(f"historical-price-full/stock_dividend/{symbol}")
-        return result
-
-    def get_income_statement(self, symbol: str, limit: int = 5) -> Optional[list[dict]]:
-        """Get income statement data."""
-        result = self._get(f"income-statement/{symbol}", {"limit": limit})
-        return result if result else []
-
-    def get_balance_sheet(self, symbol: str, limit: int = 5) -> Optional[list[dict]]:
-        """Get balance sheet data."""
-        result = self._get(f"balance-sheet-statement/{symbol}", {"limit": limit})
-        return result if result else []
-
-    def get_cash_flow(self, symbol: str, limit: int = 5) -> Optional[list[dict]]:
-        """Get cash flow statement data."""
-        result = self._get(f"cash-flow-statement/{symbol}", {"limit": limit})
-        return result if result else []
-
-    def get_key_metrics(self, symbol: str, limit: int = 5) -> Optional[list[dict]]:
-        """Get key financial metrics."""
-        result = self._get(f"key-metrics/{symbol}", {"limit": limit})
-        return result if result else []
-
-    def get_company_profile(self, symbol: str) -> Optional[dict]:
-        """Get company profile including sector information."""
-        result = self._get(f"profile/{symbol}")
-        if result and isinstance(result, list) and len(result) > 0:
-            return result[0]
-        return None
-
-    def get_quote_with_profile(self, symbol: str) -> Optional[dict]:
-        """
-        Get quote data merged with profile data to include sector information.
-
-        Returns:
-            Dict with quote data + sector/companyName from profile, or None on error
-        """
-        # First get quote data
-        quote = self._get(f"quote/{symbol}")
-        if not quote or not isinstance(quote, list) or len(quote) == 0:
-            return None
-
-        quote_data = quote[0].copy()
-
-        # Then get profile for sector information
-        profile = self.get_company_profile(symbol)
-        if profile:
-            # Merge profile data into quote (profile has more accurate sector/companyName)
-            quote_data["sector"] = profile.get("sector", "Unknown")
-            quote_data["companyName"] = profile.get("companyName", quote_data.get("name", ""))
-            quote_data["industry"] = profile.get("industry", "")
-        else:
-            # Fallback if profile fetch fails
-            quote_data["sector"] = quote_data.get("sector", "Unknown")
-            quote_data["companyName"] = quote_data.get("name", quote_data.get("companyName", ""))
-
-        return quote_data
 
 
 class RSICalculator:
@@ -506,98 +257,46 @@ class StockAnalyzer:
         return False
 
     @staticmethod
-    def calculate_ffo(cash_flows: list[dict]) -> Optional[float]:
+    def calculate_payout_ratios_from_metrics(key_metrics: dict, is_reit: bool = False) -> dict:
         """
-        Calculate Funds From Operations (FFO) for REITs.
+        Calculate payout ratios from the TradingView key-metrics snapshot.
 
-        FFO = Net Income + Depreciation & Amortization
-        (Simplified formula - does not include gains/losses on property sales)
+        Dividends paid are reconstructed as annual DPS x shares outstanding
+        (the scanner serves no cash-flow dividendsPaid line).
+
+        For REITs the net-income payout ratio is meaningless, so operating
+        cash flow stands in for FFO (the scanner exposes no D&A line); for
+        non-REITs the scanner's own payout ratio (dividends / net income)
+        is used directly.
 
         Args:
-            cash_flows: List of cash flow statements (newest first)
-
-        Returns:
-            FFO value or None if data is missing
-        """
-        if not cash_flows:
-            return None
-
-        latest_cf = cash_flows[0]
-        net_income = latest_cf.get("netIncome", 0)
-        depreciation = latest_cf.get("depreciationAndAmortization", 0)
-
-        if net_income == 0 and depreciation == 0:
-            return None
-
-        return net_income + depreciation
-
-    @staticmethod
-    def calculate_ffo_payout_ratio(cash_flows: list[dict]) -> Optional[float]:
-        """
-        Calculate FFO payout ratio for REITs.
-
-        FFO Payout Ratio = Dividends Paid / FFO
-
-        Args:
-            cash_flows: List of cash flow statements (newest first)
-
-        Returns:
-            FFO payout ratio as percentage, or None if calculation fails
-        """
-        if not cash_flows:
-            return None
-
-        ffo = StockAnalyzer.calculate_ffo(cash_flows)
-        if not ffo or ffo <= 0:
-            return None
-
-        latest_cf = cash_flows[0]
-        dividends_paid = abs(latest_cf.get("dividendsPaid", 0))
-
-        if dividends_paid <= 0:
-            return None
-
-        return round((dividends_paid / ffo) * 100, 1)
-
-    @staticmethod
-    def calculate_payout_ratios(
-        income_stmts: list[dict], cash_flows: list[dict], is_reit: bool = False
-    ) -> dict:
-        """
-        Calculate payout ratios using dividendsPaid from cash flow statement.
-
-        For REITs, uses FFO-based payout ratio instead of net income-based.
-
-        Args:
-            income_stmts: List of income statements (newest first)
-            cash_flows: List of cash flow statements (newest first)
-            is_reit: Whether the stock is a REIT (uses FFO for payout calculation)
+            key_metrics: Single key-metrics dict from tv_client.get_key_metrics
+            is_reit: Whether the stock is a REIT (uses OCF≈FFO for payout)
 
         Returns:
             Dict with payout_ratio and fcf_payout_ratio (as percentages)
         """
         result = {"payout_ratio": None, "fcf_payout_ratio": None}
-
-        if not cash_flows:
+        if not key_metrics:
             return result
 
-        latest_cf = cash_flows[0]
-        dividends_paid = abs(latest_cf.get("dividendsPaid", 0))
-        fcf = latest_cf.get("freeCashFlow", 0)
+        dps = key_metrics.get("annualDividendPerShare") or 0
+        shares = key_metrics.get("sharesOutstanding") or 0
+        dividends_paid = dps * shares
+        fcf = key_metrics.get("freeCashFlow") or 0
+        ocf = key_metrics.get("operatingCashFlow") or 0
 
-        # For REITs, use FFO-based payout ratio
         if is_reit:
-            result["payout_ratio"] = StockAnalyzer.calculate_ffo_payout_ratio(cash_flows)
+            # OCF ≈ FFO proxy (net income + non-cash charges) — close enough
+            # for a sustainability check.
+            if ocf > 0 and dividends_paid > 0:
+                result["payout_ratio"] = round((dividends_paid / ocf) * 100, 1)
         else:
-            # For non-REITs, use traditional net income-based payout ratio
-            if income_stmts:
-                latest_income = income_stmts[0]
-                net_income = latest_income.get("netIncome", 0)
+            payout = key_metrics.get("payoutRatio")
+            if payout is not None and payout > 0:
+                result["payout_ratio"] = round(payout * 100, 1)
 
-                if net_income > 0 and dividends_paid > 0:
-                    result["payout_ratio"] = round((dividends_paid / net_income) * 100, 1)
-
-        # Calculate FCF payout ratio (same for both REIT and non-REIT)
+        # FCF payout ratio (same for both REIT and non-REIT)
         if fcf > 0 and dividends_paid > 0:
             result["fcf_payout_ratio"] = round((dividends_paid / fcf) * 100, 1)
 
@@ -627,22 +326,19 @@ class StockAnalyzer:
         return None
 
     @staticmethod
-    def analyze_financial_health(balance_sheet: list[dict]) -> dict:
-        """Analyze financial health metrics."""
-        if not balance_sheet:
+    def analyze_financial_health(key_metrics: dict) -> dict:
+        """Analyze financial health from the scanner's snapshot ratios
+        (debt_to_equity_fq / current_ratio_fq, already computed by
+        TradingView — no balance-sheet arithmetic needed)."""
+        if not key_metrics:
             return {}
 
-        latest = balance_sheet[0]
-
-        total_debt = latest.get("totalDebt", 0)
-        total_equity = latest.get("totalStockholdersEquity", 0)
-        current_assets = latest.get("totalCurrentAssets", 0)
-        current_liabilities = latest.get("totalCurrentLiabilities", 0)
-
-        debt_to_equity = round(total_debt / total_equity, 2) if total_equity > 0 else None
-        current_ratio = (
-            round(current_assets / current_liabilities, 2) if current_liabilities > 0 else None
-        )
+        debt_to_equity = key_metrics.get("debtToEquity")
+        current_ratio = key_metrics.get("currentRatio")
+        if debt_to_equity is not None:
+            debt_to_equity = round(debt_to_equity, 2)
+        if current_ratio is not None:
+            current_ratio = round(current_ratio, 2)
 
         financially_healthy = (debt_to_equity is None or debt_to_equity < 2.0) and (
             current_ratio is None or current_ratio > 1.0
@@ -699,9 +395,12 @@ class StockAnalyzer:
             score += 5
 
         # Financial Quality Score (30 points max)
-        roe = stock_data.get("roe", 0)
-        profit_margin = stock_data.get("profit_margin", 0)
-        debt_to_equity = stock_data.get("debt_to_equity", 999)
+        roe = stock_data.get("roe") or 0
+        profit_margin = stock_data.get("profit_margin") or 0
+        # None = unknown (e.g. negative equity) — treat as no leverage bonus
+        debt_to_equity = stock_data.get("debt_to_equity")
+        if debt_to_equity is None:
+            debt_to_equity = 999
 
         if roe >= 20:
             score += 12
@@ -759,7 +458,7 @@ class StockAnalyzer:
 
 
 def screen_dividend_growth_pullbacks(
-    api_key: str,
+    api_key: Optional[str] = None,
     min_yield: float = 1.5,
     min_div_growth: float = 12.0,
     rsi_max: float = 40.0,
@@ -767,10 +466,10 @@ def screen_dividend_growth_pullbacks(
     finviz_symbols: Optional[set[str]] = None,
 ) -> list[dict]:
     """
-    Main screening function.
+    Main screening function (TradingView data layer).
 
     Args:
-        api_key: FMP API key
+        api_key: Unused; accepted for interface parity (TradingView needs no key)
         min_yield: Minimum dividend yield % (default 1.5%)
         min_div_growth: Minimum 3-year dividend CAGR % (default 12%)
         rsi_max: Maximum RSI value (default 40)
@@ -780,19 +479,18 @@ def screen_dividend_growth_pullbacks(
     Returns:
         List of qualified stocks with full analysis
     """
-    client = FMPClient(api_key)
+    client = FMPClient(api_key)  # TVClient drop-in; no key, no request quota
     analyzer = StockAnalyzer()
     rsi_calc = RSICalculator()
 
     print(f"\n{'=' * 80}", file=sys.stderr)
-    print("Dividend Growth Pullback Screener", file=sys.stderr)
+    print("Dividend Growth Pullback Screener (TradingView data layer)", file=sys.stderr)
     print(f"{'=' * 80}", file=sys.stderr)
     print("\nCriteria:", file=sys.stderr)
     print(f"  - Dividend Yield ≥ {min_yield}%", file=sys.stderr)
     print(f"  - Dividend Growth (3Y CAGR) ≥ {min_div_growth}%", file=sys.stderr)
     print(f"  - RSI ≤ {rsi_max}", file=sys.stderr)
     print("  - Market Cap ≥ $2B", file=sys.stderr)
-    print("  - Exchange: NYSE, NASDAQ", file=sys.stderr)
     print(f"\n{'=' * 80}\n", file=sys.stderr)
 
     # Step 1: Get candidate list
@@ -801,71 +499,59 @@ def screen_dividend_growth_pullbacks(
             f"Step 1: Using FINVIZ pre-screened symbols ({len(finviz_symbols)} stocks)...",
             file=sys.stderr,
         )
-        # Convert FINVIZ symbols to candidate format for FMP analysis
-        # We'll fetch quote data with profile to get sector information
-        candidates = []
-        print("Fetching quote and profile data from FMP for FINVIZ symbols...", file=sys.stderr)
-        for symbol in finviz_symbols:
-            stock_data = client.get_quote_with_profile(symbol)
-            if stock_data:
-                candidates.append(stock_data)
-
-            if client.rate_limit_reached:
-                print(
-                    f"⚠️  FMP rate limit reached while fetching quotes. Using {len(candidates)} symbols.",
-                    file=sys.stderr,
-                )
-                break
-
-        print(
-            f"Retrieved quote and profile data for {len(candidates)} symbols from FMP",
-            file=sys.stderr,
-        )
+        symbols = sorted(finviz_symbols)
     else:
-        print("Step 1: Initial screening using FMP Stock Screener...", file=sys.stderr)
-        candidates = client.screen_stocks(min_market_cap=2000000000)
-        print(f"Found {len(candidates)} initial candidates", file=sys.stderr)
+        print("Step 1: S&P 500 universe via TradingView...", file=sys.stderr)
+        constituents = client.get_sp500_constituents() or []
+        symbols = [c["symbol"] for c in constituents]
+        print(f"Found {len(symbols)} constituents", file=sys.stderr)
 
-    if not candidates:
-        print("ERROR: No candidates found or API error", file=sys.stderr)
+    if not symbols:
+        print("ERROR: No candidates found", file=sys.stderr)
         return []
 
     # Limit candidates if specified
-    if max_candidates and not finviz_symbols:
-        candidates = candidates[:max_candidates]
+    if max_candidates:
+        symbols = symbols[:max_candidates]
         print(f"Limiting analysis to first {max_candidates} candidates", file=sys.stderr)
 
     print("\nStep 2: Detailed analysis of candidates...", file=sys.stderr)
-    print("Note: Analysis will continue until API rate limit is reached\n", file=sys.stderr)
 
     results = []
 
-    for i, stock in enumerate(candidates, 1):
-        symbol = stock.get("symbol", "")
-        company_name = stock.get("companyName", "")
+    for i, symbol in enumerate(symbols, 1):
+        print(f"[{i}/{len(symbols)}] Analyzing {symbol}...", file=sys.stderr)
 
-        print(f"[{i}/{len(candidates)}] Analyzing {symbol} - {company_name}...", file=sys.stderr)
+        # Profile carries sector/industry (REIT detection), market cap, price.
+        stock = client.get_company_profile(symbol)
+        if not stock:
+            print("  ⚠️  No profile data", file=sys.stderr)
+            continue
+        company_name = stock.get("companyName") or symbol
 
-        # Check rate limit
-        if client.rate_limit_reached:
-            print(f"\n⚠️  API rate limit reached after analyzing {i - 1} stocks.", file=sys.stderr)
-            print(
-                f"Returning results collected so far: {len(results)} qualified stocks",
-                file=sys.stderr,
-            )
-            break
+        market_cap = stock.get("mktCap") or 0
+        if market_cap < 2_000_000_000:
+            print("  ⚠️  Market cap below $2B", file=sys.stderr)
+            continue
 
         # Get current price
-        current_price = stock.get("price", 0)
+        current_price = stock.get("price") or 0
         if current_price <= 0:
             print("  ⚠️  No valid price data", file=sys.stderr)
             continue
 
-        # Fetch dividend history
-        dividend_history = client.get_dividend_history(symbol)
-        if client.rate_limit_reached:
-            break
+        # Cheap pre-filter on the scanner's current yield (same snapshot the
+        # profile came from — no extra fetch). 0.7x slack so borderline names
+        # still reach the exact DPS/price check below.
+        key_metrics = client.get_key_metrics(symbol, limit=1)
+        latest_metrics = key_metrics[0] if key_metrics else {}
+        yield_now = latest_metrics.get("dividendYield")
+        if yield_now is None or yield_now < min_yield * 0.7:
+            print(f"  ⚠️  Current yield {yield_now}% too low (pre-filter)", file=sys.stderr)
+            continue
 
+        # Fetch dividend history (annual DPS series from the scanner)
+        dividend_history = client.get_dividend_history(symbol)
         if not dividend_history:
             print("  ⚠️  No dividend history", file=sys.stderr)
             continue
@@ -895,12 +581,13 @@ def screen_dividend_growth_pullbacks(
             f"  ✓ Dividend: {actual_dividend_yield:.2f}% yield, {div_cagr}% CAGR", file=sys.stderr
         )
 
-        # Fetch historical prices for RSI
-        historical_prices = client.get_historical_prices(symbol, days=30)
-        if client.rate_limit_reached:
-            break
+        # Fetch historical prices for RSI (newest-first bars; slice the
+        # ~30-day window the FMP version used so RSI smoothing matches)
+        price_data = client.get_historical_prices(symbol, days=30)
+        historical_prices = (price_data or {}).get("historical") or []
+        historical_prices = historical_prices[:30]
 
-        if not historical_prices or len(historical_prices) < 20:
+        if len(historical_prices) < 20:
             print("  ⚠️  Insufficient price data for RSI calculation", file=sys.stderr)
             continue
 
@@ -918,22 +605,8 @@ def screen_dividend_growth_pullbacks(
 
         print(f"  ✓ RSI: {rsi} (oversold)", file=sys.stderr)
 
-        # Fetch additional fundamental data
-        income_stmts = client.get_income_statement(symbol, limit=5)
-        if client.rate_limit_reached:
-            break
-
-        balance_sheet = client.get_balance_sheet(symbol, limit=5)
-        if client.rate_limit_reached:
-            break
-
-        cash_flow = client.get_cash_flow(symbol, limit=5)
-        if client.rate_limit_reached:
-            break
-
-        key_metrics = client.get_key_metrics(symbol, limit=1)
-        if client.rate_limit_reached:
-            break
+        # Annual income statements (scanner fiscal-year series)
+        income_stmts = client.get_income_statement(symbol, period="annual", limit=5)
 
         # Analyze growth metrics
         growth_metrics = analyzer.analyze_growth_metrics(income_stmts if income_stmts else [])
@@ -950,32 +623,22 @@ def screen_dividend_growth_pullbacks(
             print("  ⚠️  Negative EPS growth", file=sys.stderr)
             continue
 
-        # Analyze financial health
-        health_metrics = analyzer.analyze_financial_health(balance_sheet if balance_sheet else [])
+        # Analyze financial health (snapshot D/E and current ratio)
+        health_metrics = analyzer.analyze_financial_health(latest_metrics)
 
         if not health_metrics.get("financially_healthy", False):
             print("  ⚠️  Financial health concerns", file=sys.stderr)
             continue
 
-        # Extract additional metrics
-        income_stmts[0] if income_stmts else {}
-        latest_metrics = key_metrics[0] if key_metrics else {}
-
         # Check if this is a REIT (uses different payout ratio calculation)
         is_reit = analyzer.is_reit(stock)
 
-        # Calculate payout ratios using the new method
-        payout_ratios = analyzer.calculate_payout_ratios(
-            income_stmts if income_stmts else [], cash_flow if cash_flow else [], is_reit=is_reit
+        # Calculate payout ratios from the key-metrics snapshot
+        payout_ratios = analyzer.calculate_payout_ratios_from_metrics(
+            latest_metrics, is_reit=is_reit
         )
         payout_ratio = payout_ratios["payout_ratio"]
         fcf_payout_ratio = payout_ratios["fcf_payout_ratio"]
-
-        # Fallback to key_metrics if calculation failed (only for non-REITs)
-        if payout_ratio is None and not is_reit:
-            payout_ratio = analyzer.get_payout_ratio_from_metrics(
-                key_metrics if key_metrics else []
-            )
 
         # Determine dividend sustainability
         # Sustainable if payout ratio < 80% and FCF covers dividends
@@ -989,16 +652,16 @@ def screen_dividend_growth_pullbacks(
         result = {
             "symbol": symbol,
             "company_name": company_name,
-            "sector": stock.get("sector", "Unknown"),
-            "market_cap": stock.get("marketCap", 0),
+            "sector": stock.get("sector") or "Unknown",
+            "market_cap": market_cap,
             "price": current_price,
             "dividend_yield": round(actual_dividend_yield, 2),
             "annual_dividend": round(annual_dividend, 2),
             "dividend_cagr_3y": div_cagr,
             "dividend_consistent": div_consistent,
             "rsi": rsi,
-            "pe_ratio": latest_metrics.get("peRatio", 0),
-            "pb_ratio": latest_metrics.get("pbRatio", 0),
+            "pe_ratio": latest_metrics.get("peRatio") or 0,
+            "pb_ratio": latest_metrics.get("pbRatio") or 0,
             "revenue_cagr_3y": revenue_cagr,
             "eps_cagr_3y": eps_cagr,
             "payout_ratio": payout_ratio,
@@ -1008,8 +671,10 @@ def screen_dividend_growth_pullbacks(
             "debt_to_equity": health_metrics.get("debt_to_equity"),
             "current_ratio": health_metrics.get("current_ratio"),
             "financially_healthy": health_metrics.get("financially_healthy", False),
-            "roe": latest_metrics.get("roe", 0),
-            "profit_margin": latest_metrics.get("netProfitMargin", 0),
+            # PERCENT values (TradingView native scale — matches the
+            # composite-score thresholds, e.g. roe >= 20)
+            "roe": latest_metrics.get("roe") or 0,
+            "profit_margin": latest_metrics.get("netProfitMargin") or 0,
         }
 
         # Calculate composite score
@@ -1249,30 +914,32 @@ High dividend growth stocks (12%+ CAGR) compound wealth through rising dividends
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Screen dividend growth stocks with RSI oversold using FINVIZ + FMP API (two-stage approach)",
+        description="Screen dividend growth stocks with RSI oversold using the TradingView data layer (no API key required)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Two-stage screening: FINVIZ pre-screen + FMP detailed analysis (RECOMMENDED)
-  python3 screen_dividend_growth_rsi.py --use-finviz
-
-  # FMP-only screening (original method)
+  # S&P 500 universe via TradingView (default, no API key)
   python3 screen_dividend_growth_rsi.py
 
-  # Provide API keys as arguments
-  python3 screen_dividend_growth_rsi.py --use-finviz --fmp-api-key YOUR_FMP_KEY --finviz-api-key YOUR_FINVIZ_KEY
+  # Two-stage screening: FINVIZ pre-screen + TradingView detailed analysis
+  python3 screen_dividend_growth_rsi.py --use-finviz
 
   # Custom parameters
-  python3 screen_dividend_growth_rsi.py --use-finviz --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
+  python3 screen_dividend_growth_rsi.py --min-yield 2.0 --min-div-growth 15.0 --rsi-max 35
 
 Environment Variables:
-  FMP_API_KEY       - Financial Modeling Prep API key
   FINVIZ_API_KEY    - FINVIZ Elite API key (required for --use-finviz)
+
+Requires a running TradingView Desktop chart (CDP on :9222) or a fresh
+state/metrics cache; the legacy FMP_API_KEY / --fmp-api-key inputs are
+accepted but ignored.
         """,
     )
 
     parser.add_argument(
-        "--fmp-api-key", type=str, help="FMP API key (or set FMP_API_KEY environment variable)"
+        "--fmp-api-key",
+        type=str,
+        help="DEPRECATED: ignored (TradingView data layer needs no FMP key)",
     )
     parser.add_argument(
         "--finviz-api-key",
@@ -1282,7 +949,7 @@ Environment Variables:
     parser.add_argument(
         "--use-finviz",
         action="store_true",
-        help="Use FINVIZ Elite API for pre-screening (recommended to reduce FMP API calls)",
+        help="Use FINVIZ Elite API for pre-screening (widens the universe beyond the S&P 500)",
     )
     parser.add_argument(
         "--min-yield", type=float, default=1.5, help="Minimum dividend yield %% (default: 1.5)"
@@ -1300,19 +967,22 @@ Environment Variables:
         "--max-candidates",
         type=int,
         default=None,
-        help="Maximum candidates to analyze (default: all, only applies to FMP-only mode)",
+        help="Maximum candidates to analyze (default: all)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory for JSON/Markdown outputs (default: <repo>/reports)",
     )
 
     args = parser.parse_args()
 
-    # Get FMP API key
-    fmp_api_key = args.fmp_api_key or os.environ.get("FMP_API_KEY")
-    if not fmp_api_key:
+    if args.fmp_api_key or os.environ.get("FMP_API_KEY"):
         print(
-            "ERROR: FMP API key required. Provide via --fmp-api-key or FMP_API_KEY environment variable",
+            "NOTE: FMP key detected but ignored — data comes from TradingView.",
             file=sys.stderr,
         )
-        sys.exit(1)
 
     # FINVIZ pre-screening (optional)
     finviz_symbols = None
@@ -1340,7 +1010,6 @@ Environment Variables:
 
     # Run screening
     results = screen_dividend_growth_pullbacks(
-        api_key=fmp_api_key,
         min_yield=args.min_yield,
         min_div_growth=args.min_div_growth,
         rsi_max=args.rsi_max,
@@ -1360,12 +1029,15 @@ Environment Variables:
     # Generate outputs
     today = date.today().isoformat()
 
-    # Determine output directory (project root logs/ folder)
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    # Navigate from skills/dividend-growth-pullback-screener/scripts to project root
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
-    logs_dir = os.path.join(project_root, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
+    # Determine output directory (repo reports/ by convention, or --output-dir)
+    if args.output_dir:
+        out_dir = args.output_dir
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        # Navigate from skills/dividend-growth-pullback-screener/scripts to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+        out_dir = os.path.join(project_root, "reports")
+    os.makedirs(out_dir, exist_ok=True)
 
     # JSON output
     json_output = {
@@ -1377,14 +1049,14 @@ Environment Variables:
         "stocks": results,
     }
 
-    json_path = os.path.join(logs_dir, f"dividend_growth_pullback_results_{today}.json")
+    json_path = os.path.join(out_dir, f"dividend_growth_pullback_results_{today}.json")
     with open(json_path, "w") as f:
         json.dump(json_output, f, indent=2)
 
     print(f"✅ JSON results saved: {json_path}", file=sys.stderr)
 
     # Markdown report
-    md_path = os.path.join(logs_dir, f"dividend_growth_pullback_screening_{today}.md")
+    md_path = os.path.join(out_dir, f"dividend_growth_pullback_screening_{today}.md")
     generate_markdown_report(results, criteria, md_path)
 
     print(f"\n{'=' * 80}", file=sys.stderr)

@@ -14,7 +14,7 @@ permalink: /ja/skills/dividend-growth-pullback-screener/
 年間配当成長率12%以上、利回り1.5%以上の高品質な配当成長株のうち、RSIオーバーソールド（RSI≤40）による一時的な押し目を経験している銘柄を検索するスキルです。ファンダメンタルの配当分析とテクニカルのタイミング指標を組み合わせ、短期的な弱さの中にある強い配当成長銘柄の買い機会を特定します。
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP必須</span> <span class="badge badge-optional">FINVIZ任意</span>
+<span class="badge badge-free">APIキー不要</span> <span class="badge badge-optional">FINVIZ任意</span>
 
 [スキルパッケージをダウンロード (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/dividend-growth-pullback-screener.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [GitHubでソースを見る](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/dividend-growth-pullback-screener){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -55,26 +55,26 @@ permalink: /ja/skills/dividend-growth-pullback-screener/
 
 ## 3. 前提条件
 
-- **FMP APIキー**が必要（`FMP_API_KEY` 環境変数）
-- **FINVIZ Elite** は任意（パフォーマンス向上に有効）
-- FMPは分析用、FINVIZはRSIプレスクリーニング用
-- Python 3.9+ 推奨
+- **TradingViewデータレイヤー**が必要：起動中のTradingView Desktopチャート（CDP :9222）または新鮮な `state/metrics` スナップショットキャッシュ — **APIキー不要、リクエスト制限なし**
+- **FINVIZ Elite** は任意（S&P 500を超えてユニバースを拡大）
+- TradingViewは分析用、FINVIZはRSIプレスクリーニング用
+- Python 3.9+ 推奨（`requests` はFINVIZプレスクリーン使用時のみ必要）
+- 旧来の `FMP_API_KEY` / `--fmp-api-key` 入力は受け付けられますが無視されます
 
 ---
 
 ## 4. クイックスタート
 
 ```bash
-# RSIフィルター付き2段階スクリーニング（推奨）
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py --use-finviz
+# TradingView経由のS&P 500ユニバース（デフォルト、APIキー不要）
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py
 
-# FMPのみのスクリーニング（APIリミットにより最大約40銘柄）
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py --max-candidates 40
+# FINVIZプレスクリーン付き2段階スクリーニング（より広いユニバース）
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
 
 # カスタムRSI閾値と配当成長要件
-python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py \
-  --use-finviz \
-  --rsi-threshold 35 \
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py \
+  --rsi-max 35 \
   --min-div-growth 15
 ```
 
@@ -82,51 +82,43 @@ python3 dividend-growth-pullback-screener/scripts/screen_dividend_growth.py \
 
 ## 5. ワークフロー
 
-### ステップ1: APIキーの設定
+### ステップ1: ユニバースの選択
 
-#### 2段階アプローチ（推奨）
+#### TradingView経由のS&P 500（デフォルト）
 
-最適なパフォーマンスのために、FINVIZ Elite APIでプレスクリーニング + FMP APIで詳細分析を行います：
+起動中のTradingView Desktopチャート以外のセットアップは不要です。スクリーナーはコミット済みのS&P 500構成銘柄リストを走査し、すべてのデータ（年間DPS履歴、ファンダメンタルズ、日足バー）をTradingViewスキャナーから読み取ります。
+
+#### FINVIZプレスクリーン（任意、より広いユニバース）
 
 ```bash
-# 両方のAPIキーを環境変数として設定
-export FMP_API_KEY=your_fmp_key_here
 export FINVIZ_API_KEY=your_finviz_key_here
 ```
 
-**なぜ2段階なのか？**
-- **FINVIZ**: RSIフィルター付きの高速プレスクリーニング（1回のAPIコール→候補約10〜50銘柄）
-- **FMP**: プレスクリーニング済み候補のみの詳細ファンダメンタル分析
-- **結果**: より少ないFMP APIコールでより多くの銘柄を分析（無料枠内に収まる）
-
-#### FMPのみのアプローチ（従来の方法）
-
-FINVIZ Eliteのアクセスがない場合：
-
-```bash
-export FMP_API_KEY=your_key_here
-```
-
-**制限**: FMP無料枠（250リクエスト/日）では分析が約40銘柄に限定されます。`--max-candidates 40` を使用してリミット内に収めてください。
+**なぜFINVIZなのか？**
+- 米国市場全体（ミッドキャップ以上）を配当成長＋RSIフィルターで1回のAPIコールでプレスクリーニング
+- プレスクリーニング済みの約10〜50候補に対してTradingViewが詳細分析を提供
 
 ### ステップ2: スクリーニングの実行
 
-**2段階スクリーニング（推奨）:**
+**デフォルトのS&P 500スクリーニング:**
 
 ```bash
-cd dividend-growth-pullback-screener/scripts
-python3 screen_dividend_growth_rsi.py --use-finviz
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py
 ```
 
 以下を実行します：
-1. FINVIZプレスクリーン: 配当利回り0.5〜3%、配当成長10%+、EPS成長5%+、売上成長5%+、RSI<40
-2. FMP詳細分析: 12%+配当CAGRの検証、正確なRSI計算、ファンダメンタル分析
+1. スキャナーの現在利回りによる軽量プレフィルター、その後年間DPSによる配当CAGR検証（12%+）
+2. 日足バーから14期間RSIを計算、オーバーソールドフィルター（RSI≤40）
+3. 売上・EPSトレンド、財務健全性、配当性向の持続性チェック
 
-**FMPのみのスクリーニング:**
+**2段階スクリーニング（FINVIZ + TradingView）:**
 
 ```bash
-python3 screen_dividend_growth_rsi.py --max-candidates 40
+python3 skills/dividend-growth-pullback-screener/scripts/screen_dividend_growth_rsi.py --use-finviz
 ```
+
+1. FINVIZプレスクリーン: 配当利回り0.5〜3%、配当成長10%+、EPS成長5%+、売上成長5%+、RSI<40
+2. TradingView詳細分析: 12%+配当CAGRの検証、正確なRSI計算、ファンダメンタル分析
 
 ### ステップ3: 結果のレビュー
 

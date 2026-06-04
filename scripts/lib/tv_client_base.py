@@ -57,9 +57,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # The TradingView bridge (node CLI, helper scripts, optional state cache) is
 # vendored in-repo under vendor/tradingview-mcp so the repository is
 # self-contained. Override with TV_MCP_REPO to point at an external checkout.
-TV_MCP_REPO = os.environ.get("TV_MCP_REPO") or str(
-    _REPO_ROOT / "vendor" / "tradingview-mcp"
-)
+TV_MCP_REPO = os.environ.get("TV_MCP_REPO") or str(_REPO_ROOT / "vendor" / "tradingview-mcp")
 STATE_DIR = os.path.join(TV_MCP_REPO, "state")
 EARNINGS_MJS = os.path.join(TV_MCP_REPO, "scripts", "tv_earnings_calendar.mjs")
 
@@ -382,9 +380,7 @@ class TVClient:
                 results[sym] = q[0] if self.quote_as_list else q
         return results
 
-    def get_batch_historical(
-        self, symbols: list[str], days: int = 260
-    ) -> dict[str, list[dict]]:
+    def get_batch_historical(self, symbols: list[str], days: int = 260) -> dict[str, list[dict]]:
         results = {}
         for sym in symbols:
             data = self._history(sym)
@@ -465,11 +461,27 @@ class TVClient:
                 self.cache[cache_key] = cf
                 return cf
 
-        # Put the chart on this symbol so `tv fundamentals` (no arg) reads it
-        # with the correct exchange. get_quote is cached, so this is cheap.
-        self.get_quote(symbol)
+        return self._fundamentals_live(symbol)
+
+    def _fundamentals_live(self, symbol: str) -> Optional[dict]:
+        """Fetch scanner fundamentals from the live chart, bypassing the
+        metrics-cache fast path, and pin the payload in the client cache.
+        Used directly when a cached snapshot predates newly added scanner
+        fields (e.g. the dividend history series).
+
+        Switches the chart explicitly — get_quote's metrics-cache fast path
+        never touches the chart, so relying on it would read whatever symbol
+        the chart happens to show. The returned payload's symbol is verified
+        before caching so a lagging chart can't poison the cache."""
+        cache_key = f"fund_{symbol}"
+        tv_symbol = self.index_remap.get(symbol, symbol)
+        self._switch_symbol(tv_symbol)
         data = self._cli("fundamentals", "--history")
-        if not data or not data.get("success"):
+        if (
+            not data
+            or not data.get("success")
+            or not self._symbol_ready(tv_symbol, str(data.get("symbol") or ""))
+        ):
             self.cache[cache_key] = None
             return None
         self.cache[cache_key] = data
@@ -571,6 +583,75 @@ class TVClient:
             for i in range(n)
         ]
 
+    def get_dividend_history(self, symbol: str) -> Optional[dict]:
+        """FMP-shaped dividend history from the scanner's annual DPS series
+        (`dps_common_stock_prim_issue_fy_h`, most-recent-first, ~20 fiscal
+        years). Returns {"symbol", "historical": [{date, dividend,
+        adjDividend}]} NEWEST FIRST, one synthetic year-end entry per
+        completed fiscal year (labelled back from the last completed calendar
+        year) — annual aggregation callers do on FMP's per-payment series
+        works unchanged, with no partial-year distortion to exclude.
+
+        Metrics-cache snapshots collected before the dividend fields were
+        added lack the series; those fall through to a live scanner fetch."""
+        data = self._fundamentals(symbol)
+        dps = ((data or {}).get("history") or {}).get("dps_common_stock_prim_issue_fy_h")
+        if not dps:
+            data = self._fundamentals_live(symbol)
+            dps = ((data or {}).get("history") or {}).get("dps_common_stock_prim_issue_fy_h")
+        if not dps:
+            return None
+        last_completed = datetime.now(timezone.utc).year - 1
+        historical = [
+            {"date": f"{last_completed - i}-12-31", "dividend": d, "adjDividend": d}
+            for i, d in enumerate(dps)
+            if d is not None
+        ]
+        if not historical:
+            return None
+        return {"symbol": symbol, "historical": historical}
+
+    def get_key_metrics(self, symbol: str, limit: int = 1) -> Optional[list[dict]]:
+        """FMP-key-metrics-shaped snapshot built from scanner fundamentals.
+        Returns a single-entry list (TradingView serves no key-metrics
+        history; `limit` is accepted for signature parity).
+
+        Semantics divergences from FMP, by design:
+          - roe / netProfitMargin / dividendYield are PERCENT (TV native,
+            e.g. 32.9), where FMP serves decimals — migrated screeners score
+            against percent thresholds.
+          - payoutRatio keeps FMP's decimal form (callers do `* 100`).
+        Extra TV-only fields: operatingCashFlow, sharesOutstanding,
+        annualDividendPerShare (last completed FY), continuousDividendGrowth
+        (consecutive years of dividend growth)."""
+        data = self._fundamentals(symbol)
+        if not data:
+            return None
+        val = data.get("valuation") or {}
+        ret = data.get("returns") or {}
+        marg = data.get("margins") or {}
+        bal = data.get("balance") or {}
+        div = data.get("dividends") or {}
+        cf = data.get("cashflow") or {}
+        payout_pct = div.get("dividend_payout_ratio_ttm")
+        return [
+            {
+                "peRatio": val.get("price_earnings_ttm"),
+                "pbRatio": val.get("price_book_fq"),
+                "roe": ret.get("return_on_equity_fq"),
+                "netProfitMargin": marg.get("net_margin_ttm"),
+                "payoutRatio": payout_pct / 100 if payout_pct is not None else None,
+                "debtToEquity": bal.get("debt_to_equity_fq"),
+                "currentRatio": bal.get("current_ratio_fq"),
+                "dividendYield": div.get("dividends_yield_current"),
+                "freeCashFlow": cf.get("free_cash_flow_ttm"),
+                "operatingCashFlow": cf.get("cash_f_operating_activities_ttm"),
+                "sharesOutstanding": val.get("total_shares_outstanding_fundamental"),
+                "annualDividendPerShare": div.get("dps_common_stock_prim_issue_fy"),
+                "continuousDividendGrowth": div.get("continuous_dividend_growth"),
+            }
+        ]
+
     def get_institutional_holders(self, symbol: str) -> Optional[list[dict]]:
         """Not exposed by the TradingView scanner. Returns None — CANSLIM's
         Finviz fallback (finviz_stock_client) supplies the I component instead,
@@ -650,17 +731,13 @@ class TVClient:
         out = []
         for b in data["bars"]:
             try:
-                iso = datetime.fromtimestamp(int(b["time"]), tz=timezone.utc).strftime(
-                    "%Y-%m-%d"
-                )
+                iso = datetime.fromtimestamp(int(b["time"]), tz=timezone.utc).strftime("%Y-%m-%d")
             except (KeyError, ValueError, OSError):
                 continue
             out.append({"date": iso, "close": b.get("close")})
         return out or None
 
-    def get_earnings_calendar(
-        self, from_date: str, to_date: str
-    ) -> Optional[list[dict]]:
+    def get_earnings_calendar(self, from_date: str, to_date: str) -> Optional[list[dict]]:
         """Market-wide earnings calendar for [from_date, to_date] (YYYY-MM-DD)
         from scanner.tradingview.com via <TV_MCP_REPO>/scripts/
         tv_earnings_calendar.mjs (the proven CDP+scanner pattern). Returns

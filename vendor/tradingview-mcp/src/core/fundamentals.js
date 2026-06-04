@@ -21,6 +21,7 @@ export const FIELD_GROUPS = {
     'price_book_fq',
     'price_free_cash_flow_ttm',
     'enterprise_value_ebitda_ttm',
+    'total_shares_outstanding_fundamental',
   ],
   per_share: [
     'earnings_per_share_diluted_ttm',
@@ -52,6 +53,10 @@ export const FIELD_GROUPS = {
     'dividends_yield_current',
     'dividend_payout_ratio_ttm',
     'dps_common_stock_primary_issue_ttm',
+    // NB: scanner serves the *prim* (not *primary*) spelling for these.
+    'dps_common_stock_prim_issue_fy', // DPS, last completed fiscal year
+    'continuous_dividend_growth', // consecutive years of dividend growth
+    'continuous_dividend_payout', // consecutive years of dividend payments
   ],
 };
 
@@ -65,6 +70,8 @@ const HISTORY_FIELDS = [
   'total_revenue_fq_h',
   'net_income_fq_h',
   'earnings_per_share_diluted_fq_h',
+  'dps_common_stock_prim_issue_fy_h', // annual DPS, most-recent-first (~20y)
+  'free_cash_flow_fy_h',
 ];
 
 const SNAPSHOT_FIELDS = Object.values(FIELD_GROUPS).flat();
