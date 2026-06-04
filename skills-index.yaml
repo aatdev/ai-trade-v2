@@ -780,6 +780,25 @@ skills:
   outputs:
   - rotation_assessment_report
   workflows: []
+- id: send-telegram
+  display_name: Send Telegram
+  category: meta
+  status: production
+  summary: Send textual messages or files (documents, images, logs, reports) to a Telegram chat using
+    a Telegram Bot.
+  timeframe: event-driven
+  difficulty: beginner
+  integrations:
+  - id: telegram_bot
+    type: web
+    requirement: required
+    note: Telegram Bot API (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars)
+  inputs:
+  - message_text
+  - file_path
+  outputs:
+  - telegram_delivery_confirmation
+  workflows: []
 - id: signal-postmortem
   display_name: Signal Postmortem
   category: trade-memory
@@ -799,6 +818,24 @@ skills:
   workflows:
   - trade-memory-loop
   - monthly-performance-review
+- id: signals-alerts
+  display_name: Signals Alerts
+  category: trade-planning
+  status: production
+  summary: Create, delete, or sync TradingView Desktop alerts from the signals.md journal (5 alerts per
+    signal - Trigger / Stop / T1 / T2 / T3).
+  timeframe: event-driven
+  difficulty: intermediate
+  integrations:
+  - id: tradingview
+    type: mcp
+    requirement: required
+    note: TradingView Desktop via CDP (vendored tv CLI); reads local results/analysis/signals.md
+  inputs:
+  - signals_journal
+  outputs:
+  - tradingview_alerts
+  workflows: []
 - id: skill-designer
   display_name: Skill Designer
   category: meta
@@ -952,6 +989,29 @@ skills:
   - trending_themes
   workflows:
   - swing-opportunity-daily
+- id: ticker-analysis
+  display_name: Ticker Analysis
+  category: trade-planning
+  status: production
+  summary: Full single-ticker analysis - news, fundamentals, and technicals via TradingView MCP - with
+    a consolidated report and concrete entry/exit levels.
+  timeframe: event-driven
+  difficulty: intermediate
+  integrations:
+  - id: tradingview
+    type: mcp
+    requirement: required
+    note: Live chart reading via TradingView Desktop MCP (CDP); coordinates other installed skills
+  - id: websearch
+    type: web
+    requirement: recommended
+    note: News background via WebSearch / WebFetch
+  inputs:
+  - ticker
+  outputs:
+  - ticker_analysis_report
+  - chart_screenshots
+  workflows: []
 - id: trade-hypothesis-ideator
   display_name: Trade Hypothesis Ideator
   category: trade-memory
@@ -1044,6 +1104,25 @@ skills:
   - workflow_recommendation
   - skillset_recommendation
   - setup_path
+  workflows: []
+- id: tradingview-screener
+  display_name: TradingView Screener
+  category: swing-opportunity
+  status: production
+  summary: Screen stocks via the TradingView Stock Screener (All Stocks tab) scanner API from natural
+    language requests.
+  timeframe: event-driven
+  difficulty: beginner
+  integrations:
+  - id: tradingview
+    type: screener
+    requirement: not_required
+    note: Public scanner.tradingview.com endpoint (All Stocks tab); no API key or auth required
+  inputs:
+  - natural_language_query
+  outputs:
+  - screener_results_markdown
+  - screener_results_json
   workflows: []
 - id: uptrend-analyzer
   display_name: Uptrend Analyzer

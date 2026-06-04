@@ -25,6 +25,7 @@ permalink: /ja/workflows/
 | [`core-portfolio-weekly`](#core-portfolio-weekly) — Core Portfolio Weekly | weekly | 60 | mixed | beginner |
 | [`market-regime-daily`](#market-regime-daily) — Market Regime Daily | daily | 15 | no-api-basic | beginner |
 | [`monthly-performance-review`](#monthly-performance-review) — Monthly Performance Review | monthly | 90 | no-api-basic | intermediate |
+| [`short-opportunity-daily`](#short-opportunity-daily) — Short Opportunity Daily | daily | 30 | mixed | advanced |
 | [`swing-execution-manage`](#swing-execution-manage) — Swing Execution & Management | daily | 20 | mixed | intermediate |
 | [`swing-opportunity-daily`](#swing-opportunity-daily) — Swing Opportunity Daily | daily | 30 | fmp-required | intermediate |
 | [`trade-memory-loop`](#trade-memory-loop) — Trade Memory Loop | ad-hoc | 30 | no-api-basic | beginner |
@@ -220,6 +221,119 @@ permalink: /ja/workflows/
 - `monthly_decision_log` — What trades worked / what did not, by category
 - `rule_changes_for_next_month` — Adjustments to position sizing, entry rules, regime gates
 - `skill_improvement_backlog` — Optional feedback into repo improvement loop (skills / workflows)
+
+**Journal 出力先:** `trader-memory-core`
+
+---
+
+## Short Opportunity Daily {#short-opportunity-daily}
+
+**`short-opportunity-daily`** · daily · ~30 min · mixed · advanced
+
+**実行タイミング:** Only when the market regime is deteriorating and the short side is favored: elevated top-risk score, distribution-day cluster, or a Contraction macro regime. Screens for weak Stage 4 leaders breaking support and builds swing-short entry plans held days-to-weeks. Run before the open or in the first 30 minutes after.
+
+**実行してはいけないとき:** Do not run when ftd-detector has confirmed a Follow-Through Day (the rally is being validated — cover shorts, do not add). Do not run as a standalone bearish screener while breadth is healthy and top-risk is low. The shorting posture is a regime-gated decision, never a standing directive. Never treat any output as an auto-sell-short signal.
+
+**必須スキル:** `market-top-detector`, `exposure-coach`, `swing-short-screener`, `technical-analyst`, `position-sizer`, `trader-memory-core`
+
+**任意スキル:** `ibd-distribution-day-monitor`, `macro-regime-detector`, `ftd-detector`, `downtrend-duration-analyzer`, `market-news-analyst`, `parabolic-short-trade-planner`, `portfolio-manager`
+
+**前提ワークフロー（informational）:**
+
+- `market-regime-daily` が期待する artifact `exposure_decision` — Short-side risk is the mirror of the long exposure decision. A cash-priority or restrictive long posture is exactly the regime where this short workflow is warranted; a risk-on posture means defer it.
+
+**artifact 一覧:**
+
+| Artifact | 生成ステップ | 必須 | 下流ヒント |
+|---|---|---|---|
+| `top_risk_report` | 1 | あり | `monthly-performance-review` |
+| `distribution_report` | 2 | なし | — |
+| `macro_regime_report` | 3 | なし | — |
+| `ftd_veto_report` | 4 | なし | — |
+| `short_posture_decision` | 5 | あり | — |
+| `short_candidates` | 6 | あり | — |
+| `validated_short_setups` | 7 | あり | — |
+| `hold_duration_estimate` | 8 | なし | — |
+| `squeeze_risk_report` | 9 | なし | — |
+| `position_sizing` | 10 | あり | — |
+| `short_trade_plans` | 11 | なし | `trade-memory-loop` |
+| `borrow_inventory_check` | 12 | なし | — |
+| `short_journal_entry` | 13 | あり | `trade-memory-loop` |
+
+**ステップ:**
+
+**ステップ 1: Score market top risk** → `market-top-detector`
+
+- produces: `top_risk_report`
+
+**ステップ 2: Count distribution days** （任意） → `ibd-distribution-day-monitor`
+
+- produces: `distribution_report`
+
+**ステップ 3: Detect macro regime** （任意） → `macro-regime-detector`
+
+- produces: `macro_regime_report`
+
+**ステップ 4: Follow-Through Day veto check** （任意） → `ftd-detector`
+
+- produces: `ftd_veto_report`
+
+**ステップ 5: Decide short-side posture** （判断ゲート） → `exposure-coach`
+
+- consumes: `top_risk_report`, `distribution_report`, `macro_regime_report`, `ftd_veto_report`
+- produces: `short_posture_decision`
+- **判断:** Given today's top-risk score, distribution cluster, and macro regime — and with no confirmed Follow-Through Day — is adding short-side swing risk allowed, restricted, or forbidden? If an FTD is confirmed, the answer is forbidden (cover, do not add).
+
+**ステップ 6: Screen for Stage 4 weakness candidates** → `swing-short-screener`
+
+- consumes: `short_posture_decision`
+- produces: `short_candidates`
+
+**ステップ 7: Validate weak setups on the chart** （判断ゲート） → `technical-analyst`
+
+- consumes: `short_candidates`
+- produces: `validated_short_setups`
+- **判断:** Which screened candidates show a clean short setup (failed breakout, breaking a major moving average or base support, lower highs)? Reject names still in a Stage 2 uptrend or with constructive structure.
+
+**ステップ 8: Estimate downtrend hold duration** （任意） → `downtrend-duration-analyzer`
+
+- consumes: `validated_short_setups`
+- produces: `hold_duration_estimate`
+
+**ステップ 9: Squeeze / catalyst risk check** （任意） → `market-news-analyst`
+
+- consumes: `validated_short_setups`
+- produces: `squeeze_risk_report`
+
+**ステップ 10: Calculate short position size** → `position-sizer`
+
+- consumes: `validated_short_setups`, `hold_duration_estimate`
+- produces: `position_sizing`
+
+**ステップ 11: Build short trigger plans** （任意） → `parabolic-short-trade-planner`
+
+- consumes: `validated_short_setups`, `position_sizing`
+- produces: `short_trade_plans`
+
+**ステップ 12: Verify borrow availability and SSR** （任意） → `portfolio-manager`
+
+- consumes: `short_trade_plans`
+- produces: `borrow_inventory_check`
+
+**ステップ 13: Register short thesis in journal** （判断ゲート） → `trader-memory-core`
+
+- consumes: `position_sizing`, `short_trade_plans`, `squeeze_risk_report`
+- produces: `short_journal_entry`
+- **判断:** For each surviving candidate, register the short thesis with entry / stop (above the broken level or recent swing high) / cover target. Confirm risk per trade matches position-sizer output, total short exposure is within the exposure-coach ceiling, and borrow is locatable.
+
+**手動レビュー:**
+
+- Confirm ftd-detector shows no fresh Follow-Through Day before adding any short.
+- Reject any screener candidate where the weekly/daily structure is not clearly broken.
+- Confirm a hard-to-borrow locate exists and check SSR (Rule 201) status at the broker.
+- Check squeeze risk — avoid heavily-shorted names with pending bullish catalysts.
+- Verify total short exposure is within the exposure-coach ceiling before placing orders.
+- All short orders are placed manually at the broker; no auto-execution.
 
 **Journal 出力先:** `trader-memory-core`
 

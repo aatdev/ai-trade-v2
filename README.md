@@ -159,6 +159,7 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 | **Finviz Screener** (`finviz-screener`) | Build and open FinViz screener URLs from natural language requests. | `finviz` optional | production |
 | **Swing Short Screener** (`swing-short-screener`) | Screen S&P 500 (or a custom universe) for Stage 4 downtrend weakness using a 5-factor weighted weakness score, and emit a graded A/B/C/D short-side watchlist. | `fmp` **required** | production |
 | **Theme Detector** (`theme-detector`) | Detect and analyze trending market themes across sectors. | `fmp` optional, `finviz` _recommended_ | production |
+| **TradingView Screener** (`tradingview-screener`) | Screen stocks via the TradingView Stock Screener (All Stocks tab) scanner API from natural language requests. | `tradingview` — | production |
 | **VCP Screener** (`vcp-screener`) | Screen S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP). | `fmp` **required** | production |
 
 ### Trade Planning
@@ -166,7 +167,9 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 | Skill | Summary | Integrations | Status |
 |---|---|---|---|
 | **Position Sizer** (`position-sizer`) | Calculate risk-based position sizes for long stock trades. | `local_calculation` — | production |
+| **Signals Alerts** (`signals-alerts`) | Create, delete, or sync TradingView Desktop alerts from the signals.md journal (5 alerts per signal - Trigger / Stop / T1 / T2 / T3). | `tradingview` **required** | production |
 | **Technical Analyst** (`technical-analyst`) | This skill should be used when analyzing weekly price charts for stocks, stock indices, cryptocurrencies, or forex pairs. | `chart_image` **required** | production |
+| **Ticker Analysis** (`ticker-analysis`) | Full single-ticker analysis - news, fundamentals, and technicals via TradingView MCP - with a consolidated report and concrete entry/exit levels. | `tradingview` **required**, `websearch` _recommended_ | production |
 | **US Stock Analysis** (`us-stock-analysis`) | Comprehensive US stock analysis including fundamental analysis (financial metrics, business quality, valuation), technical analysis (indicators, chart patterns, support/resistance), stock comparisons, and investment report generation. | `user_input` **required** | production |
 
 ### Trade Memory
@@ -213,6 +216,7 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 | **Dual Axis Skill Reviewer** (`dual-axis-skill-reviewer`) | Review skills in any project using a dual-axis method: (1) deterministic code-based checks (structure, scripts, tests, execution safety) and (2) LLM deep review findings. | `local_calculation` — | production |
 | **Earnings Calendar** (`earnings-calendar`) | This skill retrieves upcoming earnings announcements for US stocks using the Financial Modeling Prep (FMP) API. | `fmp` **required** | production |
 | **Economic Calendar Fetcher** (`economic-calendar-fetcher`) | Fetch upcoming economic events and data releases using FMP API. | `fmp` **required** | production |
+| **Send Telegram** (`send-telegram`) | Send textual messages or files (documents, images, logs, reports) to a Telegram chat using a Telegram Bot. | `telegram_bot` **required** | production |
 | **Skill Designer** (`skill-designer`) | Design new Claude skills from structured idea specifications. | `local_calculation` — | production |
 | **Skill Idea Miner** (`skill-idea-miner`) | Mine Claude Code session logs for skill idea candidates. | `local_calculation` — | production |
 | **Skill Integration Tester** (`skill-integration-tester`) | Validate multi-skill workflows defined in CLAUDE.md by checking skill existence, inter-skill data contracts (JSON schema compatibility), file naming conventions, and handoff integrity. | `local_calculation` — | production |

@@ -61,8 +61,8 @@ Migrated skills: `vcp-screener`, `canslim-screener`, `ftd-detector`,
 2. **`tv` CLI on PATH** — run `npm link` once inside the
    tradingview-mcp-jackson checkout.
 3. **`TV_MCP_REPO`** (optional) — absolute path to that checkout. Used for
-   `state/sp500.csv` and `scripts/tv_earnings_calendar.mjs`, and as a fallback
-   `tv` CLI. Defaults to `/Users/alex/Projects/Repos/tradingview-mcp-jackson`.
+   `scripts/tv_earnings_calendar.mjs` and as a fallback `tv` CLI. Defaults to
+   the vendored copy at `<repo>/vendor/tradingview-mcp`.
    Override `TV_CLI` to point at a specific CLI entry.
 
 No FMP key is needed. Skills that still *require* a key argument before

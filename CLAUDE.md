@@ -156,7 +156,9 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Position Sizer** | ❌ Not used | ❌ Not used | ❌ Not used | Pure calculation; works offline |
 | **Scenario Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | Headline / news search via WebSearch |
 | **Sector Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
+| **Send Telegram** | ❌ Not used | ❌ Not used | ❌ Not used | Telegram Bot API (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars) |
 | **Signal Postmortem** | ❌ Not used | ❌ Not used | ❌ Not used | Postmortem framework; pure calculation |
+| **Signals Alerts** | ❌ Not used | ❌ Not used | ❌ Not used | TradingView Desktop via CDP (vendored tv CLI); reads local results/analysis/signals.md |
 | **Skill Designer** | ❌ Not used | ❌ Not used | ❌ Not used | Generates skill scaffolding from idea specs |
 | **Skill Idea Miner** | ❌ Not used | ❌ Not used | ❌ Not used | Mines session logs for skill ideas |
 | **Skill Integration Tester** | ❌ Not used | ❌ Not used | ❌ Not used | Validates multi-skill workflow contracts |
@@ -165,10 +167,12 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Swing Short Screener** | ✅ Required | ❌ Not used | ❌ Not used | S&P 500 / custom-universe OHLCV via FMP; offline --fixture mode for testing |
 | **Technical Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
 | **Theme Detector** | 🟡 Optional | 🟡 Optional (Recommended) | ❌ Not used | Financial Modeling Prep API |
+| **Ticker Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | Live chart reading via TradingView Desktop MCP (CDP); coordinates other installed skills; News background via WebSearch / WebFetch |
 | **Trade Hypothesis Ideator** | ❌ Not used | ❌ Not used | ❌ Not used | Hypothesis generation from journal/data inputs; pure calculation |
 | **Trade Performance Coach** | ❌ Not used | ❌ Not used | ❌ Not used | Works from local trader-memory / postmortem / journal records; no network or paid API required |
 | **Trader Memory Core** | 🟡 Optional | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **Trading Skills Navigator** | ❌ Not used | ❌ Not used | ❌ Not used | Reads local skills-index.yaml + workflows/*.yaml (or bundled snapshot); no network |
+| **TradingView Screener** | ❌ Not used | ❌ Not used | ❌ Not used | Public scanner.tradingview.com endpoint (All Stocks tab); no API key or auth required |
 | **US Market Bubble Detector** | ❌ Not used | ❌ Not used | ❌ Not used | User provides indicators |
 | **US Stock Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | User provides data |
 | **Uptrend Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | Monty Uptrend Ratio Dashboard CSV; no API key required |
