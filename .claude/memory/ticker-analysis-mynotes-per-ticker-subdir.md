@@ -7,7 +7,7 @@ metadata:
   originSessionId: 54ba1839-98d6-4aa0-8d33-83df50fb8df1
 ---
 
-When saving a single-ticker analysis to MyNotes, file it under `Финансы/Анализ-тикеров/<TICKER>/<YYYY-MM-DD>/<desc>.md` — a subdirectory named after the ticker, then a date subdirectory inside it (e.g. `Финансы/Анализ-тикеров/GOOG/2026-06-05/сводный-анализ.md`), not flat in `Анализ-тикеров/`. Since the date is in the path, file names carry no date prefix. Save **all** report files, not just the summary: `report.md` → `сводный-анализ.md`, `fundamental.md` → `фундаментал.md`, `technical.md` → `техника.md`, `news.md` → `новости.md`.
+When saving a single-ticker analysis to MyNotes, file it under `Анализ-тикеров/<TICKER>/<YYYY-MM-DD>/<desc>.md` — a top-level `Анализ-тикеров` dir (no `Финансы/` prefix, removed 2026-06-05), a subdirectory named after the ticker, then a date subdirectory inside it (e.g. `Анализ-тикеров/GOOG/2026-06-05/сводный-анализ.md`), not flat in `Анализ-тикеров/`. Since the date is in the path, file names carry no date prefix. Save **all** report files, not just the summary: `report.md` → `сводный-анализ.md`, `fundamental.md` → `фундаментал.md`, `technical.md` → `техника.md`, `news.md` → `новости.md`.
 
 **Why:** the user wants all reports for one ticker grouped together over time, with each analysis run grouped by date (confirmed 2026-06-05: date-level grouping inside the ticker dir), so history per symbol is easy to scan in Obsidian — and confirmed (2026-06-02) they want the full set, not just the summary report.
 

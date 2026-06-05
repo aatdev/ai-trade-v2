@@ -4,7 +4,7 @@
 - [Save screener results to MyNotes](save-screener-results-to-mynotes.md) — file screener outputs into ~/Documents/MyNotes via save-note skill
 - [Vendored TV data layer](vendored-tv-data-layer.md) — TradingView CLI/data now vendored under vendor/tradingview-mcp; repo independent of external checkout
 - [TV CLI shadowing](tv-cli-shadowing-jackson.md) — global `tv` on PATH = jackson checkout, shadows vendor/; mirror vendor edits there
-- [Ticker analysis → per-ticker MyNotes subdir](ticker-analysis-mynotes-per-ticker-subdir.md) — save ticker analyses under Финансы/Анализ-тикеров/<TICKER>/
+- [Ticker analysis → per-ticker MyNotes subdir](ticker-analysis-mynotes-per-ticker-subdir.md) — save ticker analyses under Анализ-тикеров/<TICKER>/ (no Финансы/ prefix)
 - [TradingView Chart Setup](reference_tradingview_chart_setup.md) — Активные индикаторы на чарте пользователя, форматы тикеров NASDAQ/NYSE/MOEX
 - [Create alerts in TV](feedback-create-alerts.md) - create alerts in TV
 - [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
