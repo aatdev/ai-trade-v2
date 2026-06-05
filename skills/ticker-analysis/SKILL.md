@@ -397,6 +397,8 @@ node .claude/skills/signals-alerts/scripts/create_alerts.mjs \
 
 Захвати stdout каждого вызова — это JSON-отчёты со счётчиками `created` / `skipped` / `deleted` / `kept` / `errors`. Они нужны и для блока «🔔 Алерты» в `report.md`, и для emoji-summary.
 
+**Сохранение layout.** `create_alerts.mjs` в конце сам сохраняет layout графика в TradingView (кнопка Save / Cmd+S) — поле `layout_save` в его JSON-отчёте; отдельных действий не требуется. Если же алерты ставились вручную через `mcp__tradingview__alert_create` (единичный тикер, вне скриптов) — после создания обязательно сохрани layout: `mcp__tradingview__layout_save` (или `mcp__tradingview__ui_keyboard {key: "S", modifiers: ["meta"]}`), иначе маркер-линии и состояние графика останутся в «unsaved changes».
+
 #### Шаблоны `message` (формируются скриптом — не нужно собирать вручную)
 
 `parse_signals.mjs` сам формирует канонические сообщения. Они должны точно совпадать с этим шаблоном, потому что от них зависит дедупликация:

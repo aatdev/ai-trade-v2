@@ -3,7 +3,7 @@ layout: default
 title: "Signals Alerts"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 46
+nav_order: 47
 lang_peer: /en/skills/signals-alerts/
 permalink: /ja/skills/signals-alerts/
 generated: true

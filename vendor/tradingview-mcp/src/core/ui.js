@@ -160,6 +160,51 @@ export async function layoutSwitch({ name }) {
   return { success: true, layout: result.name || name, layout_id: result.id, source: result.source, action: 'switched', unsaved_dialog_dismissed: dismissed };
 }
 
+export async function saveLayout() {
+  // 1) Header toolbar save button (locale-independent: matched by id/data-name, not label)
+  const viaButton = await evaluate(`
+    (function() {
+      var container = document.getElementById('header-toolbar-save-load') || document.querySelector('[data-name="header-toolbar-save-load"]');
+      var btn = container ? container.querySelector('button') : null;
+      if (!btn) {
+        var all = document.querySelectorAll('button[aria-label]');
+        for (var i = 0; i < all.length; i++) {
+          var label = all[i].getAttribute('aria-label') || '';
+          if (/save all charts|сохранить все графики/i.test(label)) { btn = all[i]; break; }
+        }
+      }
+      if (!btn) return { found: false };
+      btn.click();
+      return { found: true, aria_label: btn.getAttribute('aria-label') || null };
+    })()
+  `);
+  if (viaButton && viaButton.found) {
+    await new Promise((r) => setTimeout(r, 800));
+    return { success: true, method: 'save_button', button: viaButton.aria_label };
+  }
+
+  // 2) Internal API fallback
+  const viaApi = await evaluate(`
+    (function() {
+      try {
+        var api = window.TradingViewApi;
+        if (api && typeof api.saveChart === 'function') { api.saveChart(); return { used: true }; }
+        return { used: false };
+      } catch (e) { return { used: false, error: e.message }; }
+    })()
+  `);
+  if (viaApi && viaApi.used) {
+    await new Promise((r) => setTimeout(r, 800));
+    return { success: true, method: 'internal_api' };
+  }
+
+  // 3) Keyboard shortcut fallback (Cmd+S on macOS, Ctrl+S elsewhere)
+  const mod = process.platform === 'darwin' ? 'meta' : 'ctrl';
+  await keyboard({ key: 'S', modifiers: [mod] });
+  await new Promise((r) => setTimeout(r, 800));
+  return { success: true, method: 'keyboard', shortcut: mod + '+S' };
+}
+
 export async function keyboard({ key, modifiers }) {
   const c = await getClient();
   let mod = 0;

@@ -91,8 +91,9 @@ node .claude/skills/signals-alerts/scripts/parse_signals.mjs --tickers BSX,LULU 
 2. Дедупликация (если не указан `--no-dedupe`): тащит `alerts.list()`, отфильтровывает по префиксу `TICKER:` в message, и не создаёт повторно тот, чей message уже есть.
 3. Для каждого `alert` из плана — `alerts.create({ price, price_condition, message })`. Если у `alert` есть поля `volume` + `volume_condition` (обычно — только у Trigger при наличии объёмного фильтра в `signals.md`), они передаются в тот же вызов — `src/core/alerts.js` сам откроет «Add condition», выберет источник `Vol`, выставит `volume_condition` и впечатает значение через CDP-keystrokes. Результат — **один алерт с двумя условиями**, а не два отдельных. Пауза ~0.9 с между вызовами.
 4. При неудаче — один retry с задержкой 2 с; если повторно — `error` в отчёте.
+5. **После обработки всех сигналов сохраняет layout графика** (кнопка Save в хедере / Cmd+S) — иначе маркер-линии триггеров и состояние графика останутся в «unsaved changes». Отключается флагом `--no-save-layout`.
 
-Выводит JSON `{ results: [{ ticker, created, skipped, errors }], summary }`.
+Выводит JSON `{ results: [{ ticker, created, skipped, errors }], summary, layout_save }`.
 
 ### delete_alerts.mjs
 
@@ -112,8 +113,9 @@ node .claude/skills/signals-alerts/scripts/delete_alerts.mjs --keep-from-plan --
    - **diff** (`--keep-from-plan`): удалить только тех, чьего `message` нет в `plan.signals[*].alerts[*].message` для этого тикера; остальных оставить (счётчик `kept`).
 3. Если есть что удалять — открывает панель алертов и последовательно кликает `[data-name="alert-delete-button"]` + подтверждает диалогом «Delete». Если удалять нечего — панель не трогает.
 4. Никогда не вызывает `alerts.deleteAlerts({ delete_all: true })` — он снесёт ВСЕ алерты пользователя.
+5. Если с графика снимались маркер-линии (`markers_removed > 0`) — **сохраняет layout** (иначе удалённые линии вернутся при следующей загрузке layout). Отключается `--no-save-layout`.
 
-Выводит JSON `{ results: [{ ticker, deleted, kept, not_found_in_ui, errors }], summary, mode: "diff"|"purge" }`.
+Выводит JSON `{ results: [{ ticker, deleted, kept, not_found_in_ui, errors }], summary, mode: "diff"|"purge", layout_save }`.
 
 ## Алгоритм работы скилла
 
@@ -210,6 +212,7 @@ cat ./tmp/signals_plan_*.json | node .claude/skills/signals-alerts/scripts/creat
 **Фильтр тикеров:** ALL | <список>
 **TradingView:** ✅ доступен
 **Режим:** sync (diff) | create | delete | list
+**Layout:** 💾 сохранён (save_button) | ⚠️ не сохранён (<ошибка>) | — (не менялся)
 
 | Ticker | Dir   | Уровни (Tr / Stop / T1 / T2 / T3) | Создано | Удалено | Без изм. | Статус |
 |---|---|---|---:|---:|---:|---|
@@ -219,6 +222,8 @@ cat ./tmp/signals_plan_*.json | node .claude/skills/signals-alerts/scripts/creat
 
 **Итог:** создано X, удалено Y, без изменений Z, пропущено W.
 ```
+
+Строка **Layout** берётся из поля `layout_save` JSON-отчётов скриптов (`create_alerts.mjs` сохраняет всегда после обработки сигналов; `delete_alerts.mjs` — только если снимал маркер-линии). Если `layout_save.attempted = false` в обоих отчётах — пиши `— (не менялся)`. Если `success = false` — `⚠️ не сохранён` с ошибкой и подсказкой: сохранить вручную Cmd+S или вызвать `mcp__tradingview__layout_save`.
 
 Для `sync` колонка «Без изм.» = сумма `kept` (из delete) + `skipped` (из create) для тикера, но без двойного счёта по одному `message` (kept уже исключает messages, которые сейчас в плане — а create дедуплицирует те же самые messages → значения должны совпадать; используй `kept`).
 

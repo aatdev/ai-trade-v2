@@ -30,12 +30,13 @@ import { evaluate } from '../../../vendor/tradingview-mcp/src/connection.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const out = { tickers: null, file: null, keepFromPlan: false };
+  const out = { tickers: null, file: null, keepFromPlan: false, saveLayout: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--tickers' || a === '-t') out.tickers = argv[++i].split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
     else if (a === '--file' || a === '-f') out.file = argv[++i];
     else if (a === '--keep-from-plan') out.keepFromPlan = true;
+    else if (a === '--no-save-layout') out.saveLayout = false;
   }
   return out;
 }
@@ -351,7 +352,20 @@ async function main() {
     errors: results.reduce((a, r) => a + r.errors.length, 0),
   };
 
-  process.stdout.write(JSON.stringify({ results, summary, mode: args.keepFromPlan ? 'diff' : 'purge' }, null, 2) + '\n');
+  // Если с графика снимались маркер-линии — сохранить layout, иначе удалённые
+  // линии вернутся при следующей загрузке layout (само удаление алертов
+  // layout не модифицирует).
+  let layoutSave = { attempted: false };
+  if (args.saveLayout && summary.markers_removed > 0) {
+    try {
+      const r = await ui.saveLayout();
+      layoutSave = { attempted: true, success: !!r?.success, method: r?.method };
+    } catch (e) {
+      layoutSave = { attempted: true, success: false, error: String(e?.message || e) };
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ results, summary, mode: args.keepFromPlan ? 'diff' : 'purge', layout_save: layoutSave }, null, 2) + '\n');
   process.exit(0);
 }
 

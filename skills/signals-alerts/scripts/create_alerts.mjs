@@ -10,23 +10,29 @@
  *   node parse_signals.mjs [--tickers ...] | node create_alerts.mjs
  *   node create_alerts.mjs --file plan.json
  *   node create_alerts.mjs --no-dedupe          # для sync — после delete
+ *   node create_alerts.mjs --no-save-layout     # не сохранять layout в конце
  *
- * stdout: JSON-отчёт { results: [{ ticker, created: [...], skipped: [...], errors: [...] }], summary }
+ * После обработки всех сигналов сохраняет layout графика (Save / Cmd+S),
+ * чтобы маркер-линии триггеров и состояние графика не остались unsaved.
+ *
+ * stdout: JSON-отчёт { results: [{ ticker, created: [...], skipped: [...], errors: [...] }], summary, layout_save }
  */
 import fs from 'node:fs';
 import * as alerts from '../../../vendor/tradingview-mcp/src/core/alerts.js';
 import * as chart from '../../../vendor/tradingview-mcp/src/core/chart.js';
 import * as health from '../../../vendor/tradingview-mcp/src/core/health.js';
+import * as ui from '../../../vendor/tradingview-mcp/src/core/ui.js';
 import { reconcileMarker } from '../../../vendor/tradingview-mcp/src/core/alert_markers.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const out = { file: null, dedupe: true };
+  const out = { file: null, dedupe: true, saveLayout: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--file' || a === '-f') out.file = argv[++i];
     else if (a === '--no-dedupe') out.dedupe = false;
+    else if (a === '--no-save-layout') out.saveLayout = false;
   }
   return out;
 }
@@ -169,7 +175,19 @@ async function main() {
     markers_errors: results.reduce((a, r) => a + (r.markers?.errors.length || 0), 0),
   };
 
-  process.stdout.write(JSON.stringify({ results, summary }, null, 2) + '\n');
+  // Сохранить layout, чтобы маркер-линии и состояние графика не остались
+  // в «unsaved changes» (см. feedback: после создания алертов — сохранять график).
+  let layoutSave = { attempted: false };
+  if (args.saveLayout && results.length > 0) {
+    try {
+      const r = await ui.saveLayout();
+      layoutSave = { attempted: true, success: !!r?.success, method: r?.method };
+    } catch (e) {
+      layoutSave = { attempted: true, success: false, error: String(e?.message || e) };
+    }
+  }
+
+  process.stdout.write(JSON.stringify({ results, summary, layout_save: layoutSave }, null, 2) + '\n');
   process.exit(0);
 }
 
