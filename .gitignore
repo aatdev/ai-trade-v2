@@ -23,6 +23,8 @@ node_modules/
 .vscode/
 .envrc
 .mcp.json
+# Per-user Claude Code settings (e.g. MYNOTES_DIR env override) — never committed
+.claude/settings.local.json
 
 # Logs & temp
 logs/
