@@ -157,6 +157,16 @@ steps:
     produces:
       - deep_research_reports
     decision_gate: false
+    notes: >-
+      Normalize EPS before concluding a name is "cheap": a screener / raw TTM
+      P/E can be distorted by one-time items (gains, write-downs, tax events)
+      that double or halve trailing earnings. Cross-check trailing EPS against
+      company forward guidance and a multi-year average; if net margin is far
+      from the company's historical norm, treat the headline P/E as suspect and
+      recompute valuation on normalized EPS. (Example: a screen P/E of 7.7
+      collapsing to ~15 once a one-time gain is removed flips "deep value" to
+      "fairly valued".) Same discipline for P/B vs tangible book and for REIT
+      P/E vs P/AFFO.
 
   - step: 7
     name: Compare each candidate against same-industry peers
@@ -239,6 +249,7 @@ steps:
 manual_review:
   - Confirm market-regime-daily exposure_decision allows new long risk before buying.
   - Reject any name where the valuation case is unclear, even if it passed a screen.
+  - Normalize EPS before judging valuation — a screener P/E can be distorted by one-time items in TTM earnings; verify against company guidance / a multi-year average.
   - Read the peer comparison before judging valuation — a multiple is only cheap/expensive relative to industry peers.
   - When enrichment steps (earnings/13F/technical) were skipped, note the missing context.
   - Verify total portfolio heat is within budget before placing any order.
