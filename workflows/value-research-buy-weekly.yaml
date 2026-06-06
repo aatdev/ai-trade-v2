@@ -1,0 +1,247 @@
+schema_version: 1
+id: value-research-buy-weekly
+display_name: Value Research & Buy Recommendation (Weekly)
+cadence: weekly
+estimated_minutes: 75
+target_users:
+  - long-term-investor
+  - dividend-investor
+  - growth-investor
+difficulty: intermediate
+api_profile: mixed
+
+when_to_run: >-
+  Weekly, to build a researched long-side buy list from undervalued / quality
+  dividend / growth candidates. Stage 1 screens (fast server-side scan via
+  tradingview-screener; specialized screeners optional), Stage 2 deep-dives each
+  name (fundamentals + valuation + peer comparison + technicals), Stage 3
+  produces a professional buy recommendation, sizes it, and journals the thesis.
+  Best run after market-regime-daily confirms new long risk is allowed.
+when_not_to_run: >-
+  Do not treat the output as an auto-buy signal — every recommendation is a
+  decision gate for human judgement. Skip the enrichment steps that need data
+  sources you cannot reach (they are optional and degrade gracefully).
+
+required_skills:
+  - tradingview-screener
+  - us-stock-analysis
+  - position-sizer
+  - trader-memory-core
+optional_skills:
+  - value-dividend-screener
+  - dividend-growth-pullback-screener
+  - canslim-screener
+  - earnings-calendar
+  - institutional-flow-tracker
+  - technical-analyst
+
+# Informational only — validator does NOT enforce inter-workflow ordering.
+prerequisite_workflows:
+  - id: market-regime-daily
+    artifact: exposure_decision
+    rationale: >-
+      Adding new long-side risk should follow a non-restrictive exposure
+      decision. Run market-regime-daily first on cash-priority days.
+
+artifacts:
+  - id: screened_candidates
+    produced_by_step: 1
+    required: true
+    mynotes_export: true
+  - id: value_candidates
+    produced_by_step: 2
+    required: false
+  - id: dividend_growth_candidates
+    produced_by_step: 3
+    required: false
+  - id: canslim_candidates
+    produced_by_step: 4
+    required: false
+  - id: earnings_proximity
+    produced_by_step: 5
+    required: false
+  - id: deep_research_reports
+    produced_by_step: 6
+    required: true
+    mynotes_export: true
+  - id: peer_comparison
+    produced_by_step: 7
+    required: true
+    mynotes_export: true
+  - id: smart_money_confirmation
+    produced_by_step: 8
+    required: false
+  - id: entry_timing
+    produced_by_step: 9
+    required: false
+  - id: buy_recommendations
+    produced_by_step: 10
+    required: true
+    mynotes_export: true
+    downstream_hints:
+      - swing-execution-manage
+      - trade-memory-loop
+  - id: position_sizing
+    produced_by_step: 11
+    required: true
+  - id: thesis_journal
+    produced_by_step: 12
+    required: true
+    mynotes_export: true
+    downstream_hints:
+      - trade-memory-loop
+
+steps:
+  - step: 1
+    name: Screen the universe (fast server-side scan)
+    skill: tradingview-screener
+    produces:
+      - screened_candidates
+    decision_gate: false
+    notes: >-
+      Primary Stage-1 engine: one scanner.tradingview.com call, no API key, full
+      universe. Run value (e.g. price_earnings_ttm<20, price_book_fq<2,
+      dividends_yield_current>=3), dividend-growth and growth filter passes as
+      needed; enrich with payout / dividend-growth-years / ROE / debt columns to
+      flag value traps before deep-diving. Replaces the slow per-ticker
+      chart-driving screeners, which remain available as optional steps 2-4.
+
+  - step: 2
+    name: Optional specialized value/dividend re-screen
+    skill: value-dividend-screener
+    optional: true
+    consumes:
+      - screened_candidates
+    produces:
+      - value_candidates
+    decision_gate: false
+
+  - step: 3
+    name: Optional dividend-growth pullback screen
+    skill: dividend-growth-pullback-screener
+    optional: true
+    produces:
+      - dividend_growth_candidates
+    decision_gate: false
+
+  - step: 4
+    name: Optional CANSLIM growth screen
+    skill: canslim-screener
+    optional: true
+    produces:
+      - canslim_candidates
+    decision_gate: false
+
+  - step: 5
+    name: Flag earnings proximity for candidates
+    skill: earnings-calendar
+    optional: true
+    consumes:
+      - screened_candidates
+      - value_candidates
+      - dividend_growth_candidates
+      - canslim_candidates
+    produces:
+      - earnings_proximity
+    decision_gate: false
+
+  - step: 6
+    name: Deep-dive each candidate (fundamentals + valuation + technicals)
+    skill: us-stock-analysis
+    consumes:
+      - screened_candidates
+      - value_candidates
+      - dividend_growth_candidates
+      - canslim_candidates
+      - earnings_proximity
+    produces:
+      - deep_research_reports
+    decision_gate: false
+
+  - step: 7
+    name: Compare each candidate against same-industry peers
+    skill: us-stock-analysis
+    consumes:
+      - deep_research_reports
+    produces:
+      - peer_comparison
+    decision_gate: false
+    notes: >-
+      Build a peer set of same-industry comparables and compare valuation
+      multiples (P/E, P/S, P/B, EV/EBITDA), profitability, growth, balance
+      sheet and yield. A multiple is only "expensive/cheap" relative to peers —
+      e.g. a high P/E can be the only profitable name in a sector where peers
+      have no earnings. If no true public peers exist, state that explicitly.
+
+  - step: 8
+    name: Confirm institutional accumulation (13F)
+    skill: institutional-flow-tracker
+    optional: true
+    consumes:
+      - deep_research_reports
+    produces:
+      - smart_money_confirmation
+    decision_gate: false
+
+  - step: 9
+    name: Confirm weekly-chart entry timing
+    skill: technical-analyst
+    optional: true
+    consumes:
+      - deep_research_reports
+    produces:
+      - entry_timing
+    decision_gate: false
+
+  - step: 10
+    name: Synthesize professional buy recommendation
+    skill: us-stock-analysis
+    consumes:
+      - deep_research_reports
+      - peer_comparison
+      - smart_money_confirmation
+      - entry_timing
+      - earnings_proximity
+    produces:
+      - buy_recommendations
+    decision_gate: true
+    decision_question: >-
+      For each researched name, is the thesis a BUY now? Confirm it is genuinely
+      undervalued vs intrinsic value AND vs same-industry peers, the
+      fundamentals are durable, smart-money flow is not distributing, no
+      earnings event is imminent, and the chart is not breaking down. Reject
+      anything that fails — a passed screen is not a buy.
+
+  - step: 11
+    name: Size the position by risk
+    skill: position-sizer
+    consumes:
+      - buy_recommendations
+    produces:
+      - position_sizing
+    decision_gate: false
+
+  - step: 12
+    name: Register thesis in journal
+    skill: trader-memory-core
+    consumes:
+      - buy_recommendations
+      - position_sizing
+    produces:
+      - thesis_journal
+    decision_gate: true
+    decision_question: >-
+      For each BUY that survived the recommendation gate, register the thesis
+      with entry / stop / target / intrinsic-value note. Confirm risk per trade
+      matches position-sizer output and total portfolio heat stays within
+      budget.
+
+manual_review:
+  - Confirm market-regime-daily exposure_decision allows new long risk before buying.
+  - Reject any name where the valuation case is unclear, even if it passed a screen.
+  - Read the peer comparison before judging valuation — a multiple is only cheap/expensive relative to industry peers.
+  - When enrichment steps (earnings/13F/technical) were skipped, note the missing context.
+  - Verify total portfolio heat is within budget before placing any order.
+  - All orders are placed manually at the broker; no auto-execution.
+
+journal_destination: trader-memory-core

@@ -216,6 +216,7 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 | **Dual Axis Skill Reviewer** (`dual-axis-skill-reviewer`) | Review skills in any project using a dual-axis method: (1) deterministic code-based checks (structure, scripts, tests, execution safety) and (2) LLM deep review findings. | `local_calculation` — | production |
 | **Earnings Calendar** (`earnings-calendar`) | This skill retrieves upcoming earnings announcements for US stocks using the Financial Modeling Prep (FMP) API. | `fmp` **required** | production |
 | **Economic Calendar Fetcher** (`economic-calendar-fetcher`) | Fetch upcoming economic events and data releases using FMP API. | `fmp` **required** | production |
+| **Save Note** (`save-note`) | Save a result, note, report, or artifact into the personal MyNotes knowledge base, auto-classifying category and subcategory. | `local_file` **required** | production |
 | **Send Telegram** (`send-telegram`) | Send textual messages or files (documents, images, logs, reports) to a Telegram chat using a Telegram Bot. | `telegram_bot` **required** | production |
 | **Skill Designer** (`skill-designer`) | Design new Claude skills from structured idea specifications. | `local_calculation` — | production |
 | **Skill Idea Miner** (`skill-idea-miner`) | Mine Claude Code session logs for skill idea candidates. | `local_calculation` — | production |

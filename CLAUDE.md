@@ -154,6 +154,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Parabolic Short Trade Planner** | ✅ Required | ❌ Not used | 🟡 Optional | Financial Modeling Prep API |
 | **Portfolio Manager** | ❌ Not used | ❌ Not used | ✅ Required | Alpaca brokerage MCP/API |
 | **Position Sizer** | ❌ Not used | ❌ Not used | ❌ Not used | Pure calculation; works offline |
+| **Save Note** | ❌ Not used | ❌ Not used | ❌ Not used | Writes to the MyNotes base dir ($MYNOTES_DIR / .envrc, default ~/Documents/MyNotes) |
 | **Scenario Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | Headline / news search via WebSearch |
 | **Sector Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
 | **Send Telegram** | ❌ Not used | ❌ Not used | ❌ Not used | Telegram Bot API (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars) |

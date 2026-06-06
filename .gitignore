@@ -23,6 +23,8 @@ node_modules/
 .vscode/
 .envrc
 .mcp.json
+# Local-only TradingView CDP SSH tunnel (contains host/login — never committed)
+run_tw_proxy.sh
 # Per-user Claude Code settings (e.g. MYNOTES_DIR env override) — never committed
 .claude/settings.local.json
 

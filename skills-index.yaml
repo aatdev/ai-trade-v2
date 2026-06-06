@@ -90,6 +90,7 @@ skills:
   - composite_scores
   workflows:
   - swing-opportunity-daily
+  - value-research-buy-weekly
 - id: data-quality-checker
   display_name: Data Quality Checker
   category: meta
@@ -131,7 +132,8 @@ skills:
   outputs:
   - pullback_candidates
   - yield_growth_metrics
-  workflows: []
+  workflows:
+  - value-research-buy-weekly
 - id: downtrend-duration-analyzer
   display_name: Downtrend Duration Analyzer
   category: market-regime
@@ -188,7 +190,8 @@ skills:
   - market_cap_filter
   outputs:
   - earnings_calendar_report
-  workflows: []
+  workflows:
+  - value-research-buy-weekly
 - id: earnings-trade-analyzer
   display_name: Earnings Trade Analyzer
   category: advanced-satellite
@@ -459,7 +462,8 @@ skills:
   - fund_universe
   outputs:
   - flow_analysis_report
-  workflows: []
+  workflows:
+  - value-research-buy-weekly
 - id: kanchi-dividend-review-monitor
   display_name: Kanchi Dividend Review Monitor
   category: core-portfolio
@@ -742,6 +746,25 @@ skills:
   - risk_amount
   workflows:
   - swing-opportunity-daily
+  - value-research-buy-weekly
+- id: save-note
+  display_name: Save Note
+  category: meta
+  status: production
+  summary: Save a result, note, report, or artifact into the personal MyNotes knowledge base, auto-classifying category and subcategory.
+  timeframe: event-driven
+  difficulty: beginner
+  integrations:
+  - id: local_file
+    type: local_file
+    requirement: required
+    note: Writes to the MyNotes base dir ($MYNOTES_DIR / .envrc, default ~/Documents/MyNotes)
+  inputs:
+  - content
+  - category_hint
+  outputs:
+  - saved_note_path
+  workflows: []
 - id: scenario-analyzer
   display_name: Scenario Analyzer
   category: strategy-research
@@ -965,6 +988,7 @@ skills:
   - technical_assessment_report
   workflows:
   - swing-opportunity-daily
+  - value-research-buy-weekly
 - id: theme-detector
   display_name: Theme Detector
   category: swing-opportunity
@@ -1084,6 +1108,7 @@ skills:
   - swing-opportunity-daily
   - trade-memory-loop
   - monthly-performance-review
+  - value-research-buy-weekly
 - id: trading-skills-navigator
   display_name: Trading Skills Navigator
   category: meta
@@ -1123,7 +1148,8 @@ skills:
   outputs:
   - screener_results_markdown
   - screener_results_json
-  workflows: []
+  workflows:
+  - value-research-buy-weekly
 - id: uptrend-analyzer
   display_name: Uptrend Analyzer
   category: market-regime
@@ -1181,7 +1207,8 @@ skills:
   - chart_image
   outputs:
   - stock_analysis_report
-  workflows: []
+  workflows:
+  - value-research-buy-weekly
 - id: value-dividend-screener
   display_name: Value Dividend Screener
   category: core-portfolio
@@ -1207,6 +1234,7 @@ skills:
   - high_yield_candidates
   workflows:
   - core-portfolio-weekly
+  - value-research-buy-weekly
 - id: vcp-screener
   display_name: VCP Screener
   category: swing-opportunity
