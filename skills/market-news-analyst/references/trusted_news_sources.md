@@ -308,6 +308,12 @@
 - Earnings call transcripts
 - Varied quality (user-generated)
 
+**TradingView News Flow (live, when TradingView Desktop + MCP available):**
+- Real-time, de-duplicated, provider-tagged headline aggregator (Reuters, Dow Jones, GuruFocus, Stocktwits, PR/Newswire, etc.)
+- Surfaces breaking items before web search indexes them; carries precise UTC timestamps and instrument/country filters
+- This is **Source A** in the collection workflow — see `tradingview_news_flow.md` for selectors, filters, and provider→tier mapping
+- Weight each item by its underlying provider's tier (a Reuters item via News Flow is Tier 1; a PR wire item is promotional — corroborate)
+
 ### Economic Calendars
 
 **Forex Factory:**

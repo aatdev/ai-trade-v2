@@ -1,6 +1,6 @@
 ---
 name: market-news-analyst
-description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill automatically collects news using WebSearch/WebFetch tools and produces impact-ranked analysis reports. All analysis thinking and output are conducted in English.
+description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill collects news using WebSearch/WebFetch and, when TradingView Desktop is running, also reads the live TradingView News Flow tab (curated headline feed) via the TradingView MCP — applying instrument/country news filters as needed — then produces impact-ranked analysis reports. All analysis thinking and output are conducted in English.
 ---
 
 # Market News Analyst
@@ -12,7 +12,8 @@ This skill enables comprehensive analysis of market-moving news events from the 
 ## Prerequisites
 
 - **Tools:** WebSearch and WebFetch tools must be available for news collection
-- **API Keys:** None required (uses built-in web search capabilities)
+- **Optional — TradingView News Flow:** if TradingView Desktop is running with the TradingView MCP connected (`mcp__tradingview__*` tools, Chrome DevTools Protocol on `localhost:9222`), the skill can also read the live **News Flow** tab — a curated, real-time headline feed — as a primary structured source. This is an enhancement, not a requirement; the WebSearch/WebFetch path always works without it. See `references/tradingview_news_flow.md`.
+- **API Keys:** None required (uses built-in web search; TradingView News Flow uses the local Desktop session, no API key)
 - **Knowledge:** Familiarity with financial markets terminology is helpful but not required
 
 ## Output
@@ -39,9 +40,45 @@ Example user requests:
 
 Follow this structured 6-step workflow when analyzing market news:
 
-### Step 1: News Collection via WebSearch/WebFetch
+### Step 1: News Collection
 
-**Objective:** Gather comprehensive news from the past 10 days covering major market-moving events.
+**Objective:** Gather comprehensive news from the past 10 days covering major market-moving events, from two complementary sources.
+
+#### Source A — TradingView News Flow (live curated feed, optional but preferred when available)
+
+If TradingView Desktop is running with the TradingView MCP connected, read the live **News Flow** tab *first*. It is a real-time, de-duplicated, provider-tagged headline feed (Reuters, Dow Jones, GuruFocus, Stocktwits, PR/Newswire, etc.) that surfaces breaking items before web search indexes them, and it can be scoped with TradingView's own news filters.
+
+**Why read it first:** it provides timestamped, structured headlines (provider + UTC time + linked story id) in a single read, giving the analysis a backbone of "what actually crossed the wire" that WebSearch then enriches with market-reaction context.
+
+**How to read the feed** — use `mcp__tradingview__ui_evaluate` to scrape the visible cards (selectors verified against the live News Flow page; classes are hashed per build, so target the stable `data-qa-id` hooks, never exact class names):
+
+```javascript
+// Returns the visible News Flow headlines as structured JSON.
+(function () {
+  const cards = Array.from(document.querySelectorAll('[data-qa-id="news-headline-card"]'));
+  return cards.map((art) => {
+    const a = art.closest('a');
+    const titleEl = art.querySelector('[data-qa-id="news-headline-title"]');
+    const provEl = art.querySelector('[class*="provider-"]');
+    const timeEl = art.querySelector('relative-time');
+    return {
+      id: a ? a.getAttribute('data-id') : null,
+      title: titleEl ? (titleEl.getAttribute('data-overflow-tooltip-text') || titleEl.textContent.trim()) : null,
+      provider: provEl ? provEl.textContent.trim() : null,
+      published_utc: timeEl ? timeEl.getAttribute('event-time') : null,
+      link: a ? ('https://www.tradingview.com' + a.getAttribute('href')) : null,
+    };
+  }).filter((x) => x.title);
+})()
+```
+
+**Loading more history:** the feed lazy-loads ~30 cards. To reach the full 10-day window, scroll the feed (`mcp__tradingview__ui_scroll` direction `down`, or `mcp__tradingview__ui_keyboard` `End`) and re-run the scrape until the oldest `published_utc` predates the target start date or new ids stop appearing.
+
+**Applying news filters (use when the request is scoped):** the News Flow page has native filter pills — open them with the `data-qa-id="hide-filters"` toggle, then click `data-qa-id="filter-pill-symbol"` (Instrument) to scope to a ticker, or `data-qa-id="filter-pill-market_country"` (Country/market). For symbol-focused requests, the simplest reliable filter is to set the chart symbol and read its news widget, or filter the scraped JSON by ticker/keyword/provider/recency in-analysis. Full selector reference, filter mechanics, and provider→credibility-tier mapping: `references/tradingview_news_flow.md`.
+
+**Graceful fallback:** if the TradingView MCP is unavailable, the page is not open, or the scrape returns empty, skip Source A silently and rely on Source B — do not block the analysis.
+
+#### Source B — WebSearch / WebFetch (always available baseline)
 
 **Search Strategy:**
 
@@ -86,6 +123,11 @@ Execute parallel WebSearch queries covering different news categories:
 - Focus on Tier 1 market-moving events (see references/market_event_patterns.md)
 - Prioritize news with clear market impact (price moves, volume spikes)
 - Exclude: Stock-specific small-cap news, minor product updates, routine filings
+
+**Merging Source A (News Flow) and Source B (WebSearch):**
+- De-duplicate across sources by event, not by headline — the same event often appears under multiple providers/wordings. Match on entity + topic + date.
+- Use News Flow for *what crossed the wire and when* (timestamps, breaking-first ordering, provider attribution); use WebSearch/WebFetch for *market-reaction context* (price moves, follow-through, analyst framing) that the raw headline feed lacks.
+- When the two disagree on facts, prefer the higher-credibility source per `references/trusted_news_sources.md` and note the discrepancy.
 
 Think in English throughout collection process. Document each significant news item with:
 - Date and time
@@ -579,6 +621,7 @@ Trace how news impacts flowed through markets:
 
 ### News Sources Consulted
 [List primary sources used, organized by tier]
+- **TradingView News Flow:** [if used — note providers surfaced, e.g., Reuters, Dow Jones, GuruFocus, and any instrument/country filter applied]
 - **Official Sources:** [e.g., FederalReserve.gov, SEC.gov]
 - **Tier 1 Financial News:** [e.g., Bloomberg, Reuters, WSJ]
 - **Specialized:** [e.g., S&P Global Platts for commodities]
@@ -598,6 +641,7 @@ Trace how news impacts flowed through markets:
 - `geopolitical_commodity_correlations.md` - Geopolitical-commodity frameworks
 - `corporate_news_impact.md` - Mega-cap impact analysis
 - `trusted_news_sources.md` - Source credibility assessment
+- `tradingview_news_flow.md` - TradingView News Flow reading + filters (if Source A used)
 
 ---
 
@@ -696,6 +740,14 @@ When conducting market news analysis:
 - Sector contagion patterns
 - Impact magnitude framework
 
+**tradingview_news_flow.md** - TradingView News Flow integration guide:
+- When and why to read the live News Flow tab as a primary source
+- Stable `data-qa-id` selectors for scraping cards via `mcp__tradingview__ui_evaluate`
+- Lazy-load / scroll-to-history mechanics for the 10-day window
+- Native news filters (Instrument / Country pills) and post-scrape filtering
+- Provider → credibility-tier mapping and de-duplication against WebSearch
+- Graceful-fallback behavior when the MCP/Desktop is unavailable
+
 **trusted_news_sources.md** - Source credibility guide:
 - Tier 1 primary sources (central banks, government agencies, SEC)
 - Tier 2 major financial news (Bloomberg, Reuters, WSJ, FT, CNBC)
@@ -713,6 +765,7 @@ When conducting market news analysis:
 - All analysis thinking must be conducted in English
 - All output Markdown files must be in English
 - Use WebSearch and WebFetch tools to collect news automatically
+- When TradingView Desktop + MCP are available, read the live News Flow tab first (Source A) and merge it with WebSearch (Source B); fall back silently to WebSearch-only if not
 - Focus on trusted news sources as defined in references
 - Rank events by impact score (price impact × breadth × forward significance)
 - Target analysis period: Past 10 days from current date

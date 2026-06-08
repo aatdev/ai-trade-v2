@@ -64,7 +64,8 @@ A surprise FOMC 75bps rate hike with hawkish tone:
 ## 2. Prerequisites
 
 - **API Key:** None required
-- **Data source:** Claude uses WebSearch and WebFetch to collect news from trusted financial sources (Bloomberg, Reuters, WSJ, FT, CNBC, official government sources)
+- **Data source (always available):** Claude uses WebSearch and WebFetch to collect news from trusted financial sources (Bloomberg, Reuters, WSJ, FT, CNBC, official government sources)
+- **Optional live source -- TradingView News Flow:** if TradingView Desktop is running with the TradingView MCP (`mcp__tradingview__*`, CDP on `localhost:9222`), Claude also reads the live News Flow tab -- a curated, timestamped, provider-tagged headline feed -- as a primary source, applying instrument/country news filters when the request is scoped. Skipped silently when unavailable. No API key (uses the local Desktop session). See the skill's `references/tradingview_news_flow.md`.
 - **No Python dependencies** -- this is a purely conversational skill with no CLI script
 
 > Market News Analyst works entirely through natural language prompts. Claude automatically searches trusted news sources across monetary policy, earnings, geopolitics, and commodities.
@@ -94,7 +95,7 @@ How did the latest FOMC decision impact the market? Full multi-asset analysis.
 
 The skill follows a structured 6-step workflow:
 
-1. **News collection** -- Parallel WebSearch queries cover monetary policy (FOMC, ECB, BOJ), economic data (CPI, NFP, GDP), mega-cap earnings (Magnificent 7), geopolitical events, commodity markets, and corporate news. Sources are prioritized by credibility tier.
+1. **News collection** -- Two complementary sources. **Source A (optional, preferred when available):** the live TradingView News Flow tab, scraped via the TradingView MCP into timestamped, provider-tagged headlines, optionally scoped with instrument/country filters. **Source B (always available):** parallel WebSearch queries covering monetary policy (FOMC, ECB, BOJ), economic data (CPI, NFP, GDP), mega-cap earnings (Magnificent 7), geopolitical events, commodity markets, and corporate news. The two are de-duplicated by event and prioritized by credibility tier.
 2. **Knowledge base loading** -- Reference files load based on collected news types: `market_event_patterns.md` for historical reaction patterns, `geopolitical_commodity_correlations.md` for conflict-to-commodity analysis, `corporate_news_impact.md` for mega-cap earnings frameworks, and `trusted_news_sources.md` for source credibility assessment.
 3. **Impact magnitude assessment** -- Each event is scored across three dimensions (Price Impact, Breadth, Forward Significance) using specific numerical criteria. Events are ranked from highest to lowest Impact Score.
 4. **Market reaction analysis** -- For each significant event (Impact Score >5), actual market reactions are analyzed across equities, bonds, commodities, currencies, and derivatives. Reactions are compared against historical patterns to classify as Consistent, Amplified, Dampened, or Inverse.

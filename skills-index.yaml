@@ -596,6 +596,11 @@ skills:
     type: web
     requirement: required
     note: Web search / fetch
+  - id: tradingview
+    type: mcp
+    requirement: optional
+    note: Optional — reads the live TradingView News Flow tab (curated headline feed)
+      via TradingView Desktop MCP (CDP); applies instrument/country news filters
   inputs:
   - news_search_query
   - date_range
