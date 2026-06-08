@@ -10,3 +10,4 @@
 - [Save TV layout after alerts](feedback-save-layout-after-alerts.md) — после создания алертов сохранять layout (Save/Cmd+S); скрипты signals-alerts делают это сами, вручную — mcp layout_save
 - [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
 - [Use tradingview-screener, not finviz](use-tradingview-screener-not-finviz.md) — для скрининга всегда tradingview-screener; finviz-screener только по явной просьбе
+- [.claude/skills symlink footgun](claude-skills-symlink-footgun.md) — .claude/skills → ../skills; rm/cp на .claude/skills/<x> бьёт по реальному источнику, синхронизация не нужна

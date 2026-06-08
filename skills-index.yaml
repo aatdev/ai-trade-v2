@@ -599,8 +599,8 @@ skills:
   - id: tradingview
     type: mcp
     requirement: optional
-    note: Optional — reads the live TradingView News Flow tab (curated headline feed)
-      via TradingView Desktop MCP (CDP); applies instrument/country news filters
+    note: Optional — reads the live TradingView News Flow tab (headlines + full story
+      bodies) via TradingView Desktop MCP (CDP); applies instrument/country news filters
   inputs:
   - news_search_query
   - date_range

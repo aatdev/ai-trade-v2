@@ -92,6 +92,74 @@ The feed renders ~30 cards initially and lazy-loads more on scroll. To cover the
 
 Keep total reads bounded (a handful of scrolls is usually enough for 10 days of major headlines). Do not loop indefinitely.
 
+## Reading the Full Story Body
+
+Headlines are only the lead. To score impact you usually need the body — figures, guidance language, deal terms, trial endpoints, management quotes. Each headline carries a story `id`; fetch the body from:
+
+```
+https://news-headlines.tradingview.com/v2/story?id=<id>&lang=en
+```
+
+The response is JSON. Relevant fields:
+
+| Field | Meaning |
+|-------|---------|
+| `astDescription` | The article body as a content tree (`root` → `p` / `list` / `*` / `symbol` / `story-ref` / inline text). Flatten to plain text. |
+| `shortDescription` | One-line abstract (when present) |
+| `provider` / `source` | Origin (e.g. `zacks`, `stocktwits`, `reuters`) |
+| `published` | Unix seconds |
+| `copyright` | Present on wire-restricted stories (Reuters / Dow Jones) |
+| `permission` | `"headline"` on restricted stories (body == headline only) |
+| `relatedSymbols`, `link`, `storyPath` | Symbol tags, canonical URL |
+
+### Why synchronous XHR (critical)
+
+`mcp__tradingview__ui_evaluate` runs the expression with `awaitPromise: false`, so `fetch().then(...)` returns a **pending Promise**, not the body. Use a **synchronous `XMLHttpRequest`** (`open(..., false)`), which returns its value inline. Do **not** set `withCredentials` on a sync cross-origin XHR (it throws) — these public stories don't need it. In a vendored node/CDP script you can use `fetch(...)` normally with `awaitPromise: true`.
+
+### Body fetch + AST flatten (verified)
+
+```javascript
+(function () {
+  const id = "PASTE_STORY_ID";
+  const url = "https://news-headlines.tradingview.com/v2/story?id=" + encodeURIComponent(id) + "&lang=en";
+  const x = new XMLHttpRequest();
+  try { x.open("GET", url, false); x.send(); } catch (e) { return { error: "xhr:" + e.message }; }
+  if (x.status !== 200) return { error: "http " + x.status };
+  let d; try { d = JSON.parse(x.responseText); } catch (e) { return { error: "parse" }; }
+  const f = (n) => {
+    if (n == null) return "";
+    if (typeof n === "string") return n;
+    if (Array.isArray(n)) return n.map(f).join("");
+    const p = n.params || {};
+    switch (n.type) {
+      case "symbol": return p.text || p.symbol || "";
+      case "story-ref": return "";
+      case "url": case "a": return (p.text || "") + ((p.url || p.href) ? " (" + (p.url || p.href) + ")" : "");
+      case "p": return f(n.children) + "\n";
+      case "*": return "- " + f(n.children).trim() + "\n";
+      case "list": return f(n.children);
+      case "h1": case "h2": case "h3": return f(n.children) + "\n";
+      default: return n.children ? f(n.children) : "";
+    }
+  };
+  const body = f(d.astDescription).replace(/\n{3,}/g, "\n\n").trim();
+  return {
+    id, provider: d.provider || null, published: d.published || null,
+    headline_only: !!d.copyright || d.permission === "headline",
+    copyright: d.copyright || null,
+    body,
+  };
+})()
+```
+
+### Handling headline-only providers
+
+Reuters and Dow Jones license **headlines only** through TradingView: the story returns `copyright` set / `permission: "headline"` and a body that just restates the title. The `headline_only` flag above catches these. For such items, don't present the "body" as the article — get the substance from the story `link` (WebFetch) or from Source B (WebSearch). Full-text providers seen in practice: TradingView, Zacks, Stocktwits, GuruFocus, PR Newswire / GlobeNewswire, dpa-AFX, Quartr, MarketBeat.
+
+### Cost discipline
+
+Sync XHR blocks the page per call and bodies can be several thousand characters. **Rank headlines first, then fetch bodies only for the top relevant items (≈5–8).** Never bulk-fetch the whole feed.
+
 ## Applying News Filters
 
 "Use filters if necessary" — pick the lightest sufficient method:

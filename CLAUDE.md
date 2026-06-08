@@ -146,7 +146,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Macro Regime Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Cross-asset ratio data via yfinance or local CSV |
 | **Market Breadth Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | TraderMonty public CSV; no API key required |
 | **Market Environment Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | Global market data via WebSearch / WebFetch; Optional chart image inputs for technical interpretation |
-| **Market News Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Web search / fetch; Optional — reads the live TradingView News Flow tab (curated headline feed) via TradingView Desktop MCP (CDP); applies instrument/country news filters |
+| **Market News Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Web search / fetch; Optional — reads the live TradingView News Flow tab (headlines + full story bodies) via TradingView Desktop MCP (CDP); applies instrument/country news filters |
 | **Market Top Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Public market data CSVs; no API key required |
 | **Options Strategy Advisor** | 🟡 Optional | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **PEAD Screener** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |

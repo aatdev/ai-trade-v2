@@ -1,6 +1,6 @@
 ---
 name: market-news-analyst
-description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill collects news using WebSearch/WebFetch and, when TradingView Desktop is running, also reads the live TradingView News Flow tab (curated headline feed) via the TradingView MCP — applying instrument/country news filters as needed — then produces impact-ranked analysis reports. All analysis thinking and output are conducted in English.
+description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill collects news using WebSearch/WebFetch and, when TradingView Desktop is running, also reads the live TradingView News Flow tab via the TradingView MCP — both headlines and full story bodies — applying instrument/country news filters as needed, then produces impact-ranked analysis reports. All analysis thinking and output are conducted in English.
 ---
 
 # Market News Analyst
@@ -12,7 +12,7 @@ This skill enables comprehensive analysis of market-moving news events from the 
 ## Prerequisites
 
 - **Tools:** WebSearch and WebFetch tools must be available for news collection
-- **Optional — TradingView News Flow:** if TradingView Desktop is running with the TradingView MCP connected (`mcp__tradingview__*` tools, Chrome DevTools Protocol on `localhost:9222`), the skill can also read the live **News Flow** tab — a curated, real-time headline feed — as a primary structured source. This is an enhancement, not a requirement; the WebSearch/WebFetch path always works without it. See `references/tradingview_news_flow.md`.
+- **Optional — TradingView News Flow:** if TradingView Desktop is running with the TradingView MCP connected (`mcp__tradingview__*` tools, Chrome DevTools Protocol on `localhost:9222`), the skill can also read the live **News Flow** tab as a primary structured source — both headlines and the **full story bodies** behind them. This is an enhancement, not a requirement; the WebSearch/WebFetch path always works without it. See `references/tradingview_news_flow.md`.
 - **API Keys:** None required (uses built-in web search; TradingView News Flow uses the local Desktop session, no API key)
 - **Knowledge:** Familiarity with financial markets terminology is helpful but not required
 
@@ -48,7 +48,9 @@ Follow this structured 6-step workflow when analyzing market news:
 
 If TradingView Desktop is running with the TradingView MCP connected, read the live **News Flow** tab *first*. It is a real-time, de-duplicated, provider-tagged headline feed (Reuters, Dow Jones, GuruFocus, Stocktwits, PR/Newswire, etc.) that surfaces breaking items before web search indexes them, and it can be scoped with TradingView's own news filters.
 
-**Why read it first:** it provides timestamped, structured headlines (provider + UTC time + linked story id) in a single read, giving the analysis a backbone of "what actually crossed the wire" that WebSearch then enriches with market-reaction context.
+**Why read it first:** it provides timestamped, structured headlines (provider + UTC time + linked story id) in a single read, and the **full story body** is one fetch away per item — giving the analysis a backbone of "what actually crossed the wire" plus the detail (figures, guidance, deal terms, trial endpoints) needed to score impact, which WebSearch then enriches with market-reaction context.
+
+This source has two retrieval steps: **(1)** scrape the headline cards, **(2)** fetch the full body for the headlines that matter.
 
 **How to read the feed** — use `mcp__tradingview__ui_evaluate` to scrape the visible cards (selectors verified against the live News Flow page; classes are hashed per build, so target the stable `data-qa-id` hooks, never exact class names):
 
@@ -71,6 +73,49 @@ If TradingView Desktop is running with the TradingView MCP connected, read the l
   }).filter((x) => x.title);
 })()
 ```
+
+**Reading the full story body (not just the headline):** each card/headline carries a story `id`. Fetch the story endpoint `https://news-headlines.tradingview.com/v2/story?id=<id>&lang=en` to get the article body. The response is JSON with an `astDescription` content tree (and sometimes `shortDescription`); flatten the tree to plain text.
+
+> **Caveat — why `XMLHttpRequest`, not `fetch`:** `mcp__tradingview__ui_evaluate` does **not** await promises, so a `fetch().then(...)` returns a pending Promise, not data. Use a **synchronous** `XMLHttpRequest`, which returns its value inline. (In a vendored node/CDP script, `fetch(...)` with `awaitPromise:true` is fine instead.)
+
+```javascript
+// Fetch + flatten ONE TradingView story body by id (verified against the live endpoint).
+(function () {
+  const id = "PASTE_STORY_ID";                 // from the headline scrape `id` field
+  const url = "https://news-headlines.tradingview.com/v2/story?id=" + encodeURIComponent(id) + "&lang=en";
+  const x = new XMLHttpRequest();
+  try { x.open("GET", url, false); x.send(); } catch (e) { return { error: "xhr:" + e.message }; }
+  if (x.status !== 200) return { error: "http " + x.status };
+  let d; try { d = JSON.parse(x.responseText); } catch (e) { return { error: "parse" }; }
+  const f = (n) => {
+    if (n == null) return "";
+    if (typeof n === "string") return n;
+    if (Array.isArray(n)) return n.map(f).join("");
+    const p = n.params || {};
+    switch (n.type) {
+      case "symbol": return p.text || p.symbol || "";
+      case "story-ref": return "";                                   // drop inline ref markers
+      case "url": case "a": return (p.text || "") + ((p.url || p.href) ? " (" + (p.url || p.href) + ")" : "");
+      case "p": return f(n.children) + "\n";
+      case "*": return "- " + f(n.children).trim() + "\n";
+      case "list": return f(n.children);
+      case "h1": case "h2": case "h3": return f(n.children) + "\n";
+      default: return n.children ? f(n.children) : "";               // b/i/em/strong/root → recurse
+    }
+  };
+  const body = f(d.astDescription).replace(/\n{3,}/g, "\n\n").trim();
+  return {
+    id, provider: d.provider || null, published: d.published || null,
+    headline_only: !!d.copyright || d.permission === "headline",      // wire-restricted (Reuters/Dow Jones)
+    copyright: d.copyright || null,
+    body,
+  };
+})()
+```
+
+- **Headline-only providers:** Reuters and Dow Jones items come back with `copyright` set / `permission: "headline"` and a body that just restates the title — they license headlines only. Detect via `headline_only` and **do not** treat that as the article; get the substance from the story `link` via WebFetch, or from Source B. Most other providers (TradingView, Zacks, Stocktwits, GuruFocus, PR/GlobeNewswire, dpa-AFX, Quartr) return the full body.
+- **Context management:** do **not** fetch every body. Rank headlines first, then pull bodies only for the top relevant items (≈5–8). Synchronous XHR blocks the page per call, and full bodies can run thousands of characters each.
+- **Use the body for:** the impact-scoring inputs that a headline can't give — actual figures, guidance language, trial endpoints, deal terms, management quotes, and the specific catalyst vs. consensus.
 
 **Loading more history:** the feed lazy-loads ~30 cards. To reach the full 10-day window, scroll the feed (`mcp__tradingview__ui_scroll` direction `down`, or `mcp__tradingview__ui_keyboard` `End`) and re-run the scrape until the oldest `published_utc` predates the target start date or new ids stop appearing.
 
@@ -743,6 +788,8 @@ When conducting market news analysis:
 **tradingview_news_flow.md** - TradingView News Flow integration guide:
 - When and why to read the live News Flow tab as a primary source
 - Stable `data-qa-id` selectors for scraping cards via `mcp__tradingview__ui_evaluate`
+- Reading the **full story body** via the `/v2/story?id=` endpoint + AST flattening (sync-XHR caveat)
+- Headline-only providers (Reuters / Dow Jones) and how to handle them
 - Lazy-load / scroll-to-history mechanics for the 10-day window
 - Native news filters (Instrument / Country pills) and post-scrape filtering
 - Provider → credibility-tier mapping and de-duplication against WebSearch
