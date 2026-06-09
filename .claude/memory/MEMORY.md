@@ -11,3 +11,4 @@
 - [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
 - [Use tradingview-screener, not finviz](use-tradingview-screener-not-finviz.md) — для скрининга всегда tradingview-screener; finviz-screener только по явной просьбе
 - [.claude/skills symlink footgun](claude-skills-symlink-footgun.md) — .claude/skills → ../skills; rm/cp на .claude/skills/<x> бьёт по реальному источнику, синхронизация не нужна
+- [Trading system profile](trading-system-profile.md) — $150k, риск 1.5–2%/сделка, heat ≤6%, ≤6 позиций, горизонт 2 нед–3 мес, лонг + шорт в слабом рынке; флаги вместо дефолтов скриптов

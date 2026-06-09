@@ -45,30 +45,25 @@ The VCP Screener automates detection of Mark Minervini's Volatility Contraction 
 
 ## 2. Prerequisites
 
-> FMP API key is required. The free tier (250 calls/day) is sufficient for the default screening of top 100 candidates.
-{: .api_required }
+> No API key required. OHLCV comes from the repo's shared TradingView data
+> layer (`scripts/lib/tv_client.py` — vendored `tv` CLI via TradingView
+> Desktop/CDP with a `state/metrics` cache fast path). `--api-key` /
+> `FMP_API_KEY` is still accepted for backward compatibility but ignored.
+{: .tip }
 
-**API Requirements:**
-- **FMP API key** -- Free tier: 250 calls/day (sufficient for default screening). Paid tier recommended for `--full-sp500`.
-- Sign up: [https://site.financialmodelingprep.com/developer/docs](https://site.financialmodelingprep.com/developer/docs)
+**Data Requirements:**
+- TradingView Desktop reachable over CDP, or a fresh `state/metrics` cache, for live bars
+- No paid subscription of any kind
 
 **Python Dependencies:**
 - Python 3.7+
-- `requests` (FMP API calls)
-
-```bash
-pip install requests
-```
 
 ---
 
 ## 3. Quick Start
 
 ```bash
-# Set your API key
-export FMP_API_KEY=your_key_here
-
-# Default: screen top 100 S&P 500 candidates
+# Default: screen top 100 S&P 500 candidates (no API key needed)
 python3 skills/vcp-screener/scripts/screen_vcp.py --output-dir reports/
 
 # Or tell Claude:
@@ -311,12 +306,12 @@ Stocks with minimal price movement (average true range < 1% of price) are filter
 
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `--api-key` | No | `$FMP_API_KEY` | FMP API key |
+| `--api-key` | No | `$FMP_API_KEY` | Backward compatibility only; ignored by the TradingView data layer |
 | `--max-candidates` | No | `100` | Max stocks for full VCP analysis after pre-filter |
 | `--top` | No | `20` | Top results in report |
 | `--output-dir` | No | `.` | Output directory |
 | `--universe` | No | S&P 500 | Custom symbols to screen |
-| `--full-sp500` | No | `false` | Screen all S&P 500 (requires paid API) |
+| `--full-sp500` | No | `false` | Screen all S&P 500 (slower: ~500 chart pulls via the TV layer) |
 | `--mode` | No | `all` | Output mode: `all` or `prebreakout` (entry-ready only) |
 | `--max-above-pivot` | No | `3.0` | Max % above pivot for entry-ready classification |
 | `--max-risk` | No | `15.0` | Max risk % for entry-ready |

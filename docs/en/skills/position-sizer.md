@@ -53,6 +53,11 @@ Position Sizer answers the most important question in trade execution: "How many
 - **Python 3.9+:** Required to run the calculation script
 - **No additional Python dependencies** -- uses only the standard library
 - **No internet connection needed** -- works completely offline
+- **Optional parameter profile:** `--profile trading_profile.json` (or
+  `$TRADING_PROFILE`) supplies personal defaults (`account_size`, `risk_pct`,
+  `max_position_pct`, `max_sector_pct`, `atr_multiplier`); explicit CLI flags
+  always override profile values. Template: `trading_profile.example.json` at
+  the repo root
 
 > Position Sizer is a self-contained calculator. It requires no API keys, no market data feeds, and no external dependencies. Provide the numbers and it does the math.
 {: .tip }

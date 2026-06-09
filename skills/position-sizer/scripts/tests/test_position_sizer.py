@@ -470,3 +470,137 @@ class TestOutput:
             cwd=str(Path(__file__).resolve().parents[4]),
         )
         assert result.returncode != 0
+
+
+# ─── Test: --profile parameter profile ───────────────────────────────────────
+
+
+class TestProfile:
+    SIZER_KEYS = {"account_size", "risk_pct", "max_position_pct", "max_sector_pct"}
+
+    def _write_profile(self, tmp_path, payload) -> str:
+        path = tmp_path / "profile.json"
+        path.write_text(json.dumps(payload))
+        return str(path)
+
+    def _latest_result(self, out_dir: Path) -> dict:
+        files = sorted(out_dir.glob("position_sizer_*.json"))
+        assert files, "no sizer JSON produced"
+        return json.loads(files[-1].read_text())
+
+    def test_load_profile_applies_known_keys(self, tmp_path):
+        from position_sizer import SIZER_PROFILE_KEYS, load_profile
+
+        path = self._write_profile(
+            tmp_path, {"account_size": 150000, "risk_pct": 1.5, "target_r_multiple": 2.0}
+        )
+        profile = load_profile(path, SIZER_PROFILE_KEYS)
+        # planner-only key skipped silently, sizer keys applied
+        assert profile == {"account_size": 150000, "risk_pct": 1.5}
+
+    def test_load_profile_unknown_key_warns(self, tmp_path, capsys):
+        from position_sizer import SIZER_PROFILE_KEYS, load_profile
+
+        path = self._write_profile(tmp_path, {"account_size": 150000, "riskpct": 3})
+        profile = load_profile(path, SIZER_PROFILE_KEYS)
+        assert profile == {"account_size": 150000}
+        assert "riskpct" in capsys.readouterr().err
+
+    def test_load_profile_non_numeric_raises(self, tmp_path):
+        from position_sizer import SIZER_PROFILE_KEYS, load_profile
+
+        path = self._write_profile(tmp_path, {"risk_pct": "one percent"})
+        with pytest.raises(ValueError, match="risk_pct"):
+            load_profile(path, SIZER_PROFILE_KEYS)
+
+    def test_main_profile_supplies_account_and_constraints(self, tmp_path):
+        from position_sizer import main
+
+        profile = self._write_profile(
+            tmp_path,
+            {"account_size": 150000, "risk_pct": 1.5, "max_position_pct": 25.0},
+        )
+        out = tmp_path / "out"
+        main(
+            [
+                "--entry",
+                "155",
+                "--stop",
+                "148.50",
+                "--profile",
+                profile,
+                "--output-dir",
+                str(out),
+            ]
+        )
+        result = self._latest_result(out)
+        assert result["parameters"]["account_size"] == 150000
+        # risk 1.5% of 150k = 2250; 2250 / 6.50 = 346 shares,
+        # capped by 25% position limit: 150000*0.25/155 = 241 shares
+        assert result["final_recommended_shares"] == 241
+        assert result["binding_constraint"] == "max_position_pct"
+
+    def test_main_cli_overrides_profile(self, tmp_path):
+        from position_sizer import main
+
+        profile = self._write_profile(tmp_path, {"account_size": 150000, "risk_pct": 1.5})
+        out = tmp_path / "out"
+        main(
+            [
+                "--entry",
+                "155",
+                "--stop",
+                "148.50",
+                "--risk-pct",
+                "1.0",
+                "--account-size",
+                "100000",
+                "--profile",
+                profile,
+                "--output-dir",
+                str(out),
+            ]
+        )
+        result = self._latest_result(out)
+        assert result["parameters"]["account_size"] == 100000
+        assert result["calculations"]["fixed_fractional"]["dollar_risk"] == 1000.0
+
+    def test_main_kelly_mode_ignores_profile_risk_pct(self, tmp_path):
+        """A profile risk_pct must not veto Kelly mode (only explicit --risk-pct does)."""
+        from position_sizer import main
+
+        profile = self._write_profile(tmp_path, {"account_size": 150000, "risk_pct": 1.5})
+        out = tmp_path / "out"
+        main(
+            [
+                "--win-rate",
+                "0.55",
+                "--avg-win",
+                "2.0",
+                "--avg-loss",
+                "1.0",
+                "--profile",
+                profile,
+                "--output-dir",
+                str(out),
+            ]
+        )
+        result = self._latest_result(out)
+        assert result["mode"] == "budget"
+
+    def test_main_missing_account_size_errors(self, tmp_path):
+        from position_sizer import main
+
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "--entry",
+                    "155",
+                    "--stop",
+                    "150",
+                    "--risk-pct",
+                    "1.0",
+                    "--output-dir",
+                    str(tmp_path / "out"),
+                ]
+            )

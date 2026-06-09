@@ -27,6 +27,11 @@ All methods apply portfolio constraints (max position %, max sector %) and outpu
 
 - No API keys required
 - Python 3.9+ with standard library only
+- Optional: a JSON parameter profile (`--profile` / `$TRADING_PROFILE`) supplying
+  personal defaults (`account_size`, `risk_pct`, `max_position_pct`,
+  `max_sector_pct`, `atr_multiplier`); explicit CLI flags always override it.
+  Template: `trading_profile.example.json` at the repo root (copy to a
+  gitignored `trading_profile.json`).
 
 ## Workflow
 
@@ -79,6 +84,14 @@ python3 skills/position-sizer/scripts/position_sizer.py \
   --win-rate 0.55 \
   --avg-win 2.5 \
   --avg-loss 1.0 \
+  --output-dir reports/
+
+# With a parameter profile (account size, risk %, constraints from JSON;
+# explicit flags override profile values)
+python3 skills/position-sizer/scripts/position_sizer.py \
+  --profile trading_profile.json \
+  --entry 155 \
+  --stop 148.50 \
   --output-dir reports/
 ```
 

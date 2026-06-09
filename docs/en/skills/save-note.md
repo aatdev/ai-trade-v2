@@ -3,7 +3,7 @@ layout: default
 title: "Save Note"
 grand_parent: English
 parent: Skill Guides
-nav_order: 11
+nav_order: 42
 lang_peer: /ja/skills/save-note/
 permalink: /en/skills/save-note/
 generated: true
@@ -36,8 +36,8 @@ generated: true
 
 ## 2. Prerequisites
 
-- **API Key:** None required
-- **Python 3.9+** recommended
+- Writes to the MyNotes base dir ($MYNOTES_DIR / .envrc, default ~/Documents/MyNotes)
+- Python 3.9+ recommended
 
 ---
 

@@ -3,7 +3,7 @@ layout: default
 title: "Tradingview Screener"
 grand_parent: English
 parent: Skill Guides
-nav_order: 59
+nav_order: 60
 lang_peer: /ja/skills/tradingview-screener/
 permalink: /en/skills/tradingview-screener/
 generated: true
@@ -185,6 +185,9 @@ python3 scripts/run_tv_screener.py \
 - `--filters` — comma-separated tokens: `field<op>value` with ops `>`, `>=`,
   `<`, `<=`, `=`, `!=`; ranges `field=lo..hi`; multiselect `field=A|B`;
   value suffixes `K/M/B/T`; right side may be a field name (`close>EMA200`)
+- `--filter-preset` — named filter recipe (`midterm-momentum`); `--filters`
+  tokens are applied on top; the preset also becomes the default
+  `--screen-name` (an explicit `--screen-name` wins)
 - `--sectors` / `--industries` / `--countries` / `--exchanges` —
   comma-separated enum values (TV taxonomy)
 - `--index` — `sp500`, `nasdaq100`, `dow30`, `russell2000`, `russell1000`,

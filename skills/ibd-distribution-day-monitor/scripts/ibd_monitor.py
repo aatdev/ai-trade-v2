@@ -71,17 +71,19 @@ def load_config(path: str | None) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def resolve_api_key(cli_key: str | None, config: dict) -> str:
-    """API key precedence: CLI > config.data.api_key > $FMP_API_KEY."""
+def resolve_api_key(cli_key: str | None, config: dict) -> str | None:
+    """API key precedence: CLI > config.data.api_key > $FMP_API_KEY.
+
+    The key is OPTIONAL: OHLCV comes from the shared TradingView data layer,
+    which accepts the parameter only for backward compatibility and ignores
+    it. Returns None when no key is configured anywhere.
+    """
     if cli_key:
         return cli_key
     cfg_key = ((config.get("data") or {}).get("api_key")) or None
     if cfg_key:
         return cfg_key
-    env_key = os.getenv("FMP_API_KEY")
-    if env_key:
-        return env_key
-    raise ValueError("FMP API key required. Pass --api-key or set FMP_API_KEY env var.")
+    return os.getenv("FMP_API_KEY")
 
 
 def _build_rule(config: dict) -> DistributionDayRule:

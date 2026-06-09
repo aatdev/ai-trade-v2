@@ -80,7 +80,7 @@ Detects market top probability using O'Neil Distribution Days, Minervini Leading
    Values: steep_contango / contango / flat / backwardation
    Primary search: "VIX VIX3M ratio term structure today"
    Fallback: "VIX futures term structure contango backwardation"
-   Note: Auto-detected from FMP API if VIX3M quote available.
+   Note: Auto-detected via the TradingView data layer (VIX/VIX3M quotes).
    CLI --vix-term overrides auto-detection.
 
 5. [OPTIONAL] Margin Debt YoY %
@@ -122,7 +122,7 @@ Before running the Python script, collect the following data using WebSearch.
    Values: steep_contango / contango / flat / backwardation
    Primary search: "VIX VIX3M ratio term structure today"
    Fallback: "VIX futures term structure contango backwardation"
-   Note: Auto-detected from FMP API if VIX3M quote available.
+   Note: Auto-detected via the TradingView data layer (VIX/VIX3M quotes).
    CLI --vix-term overrides auto-detection.
 
 5. [OPTIONAL] Margin Debt YoY %
@@ -137,7 +137,6 @@ Run the script with collected data as CLI arguments:
 
 ```bash
 python3 skills/market-top-detector/scripts/market_top_detector.py \
-  --api-key $FMP_API_KEY \
   --breadth-50dma [VALUE] --breadth-50dma-date [YYYY-MM-DD] \
   --put-call [VALUE] --put-call-date [YYYY-MM-DD] \
   --vix-term [steep_contango|contango|flat|backwardation] \
@@ -150,7 +149,7 @@ python3 skills/market-top-detector/scripts/market_top_detector.py \
 ```
 
 The script will:
-1. Fetch S&P 500, QQQ, VIX quotes and history from FMP API
+1. Fetch S&P 500, QQQ, VIX quotes and history via the shared TradingView data layer
 2. Fetch Leading ETF (ARKK, WCLD, IGV, XBI, SOXX, SMH, KWEB, TAN) data
 3. Fetch Sector ETF (XLU, XLP, XLV, VNQ, XLK, XLC, XLY) data
 4. Calculate all 6 components
@@ -183,7 +182,7 @@ Present the generated Markdown report to the user, highlighting:
 **Scripts:**
 
 - `skills/market-top-detector/scripts/breadth_csv_client.py`
-- `skills/market-top-detector/scripts/fmp_client.py`
+- `skills/market-top-detector/scripts/fmp_client.py` (legacy, unused — data flows through `scripts/lib/tv_client.py`)
 - `skills/market-top-detector/scripts/historical_comparator.py`
 - `skills/market-top-detector/scripts/market_top_detector.py`
 - `skills/market-top-detector/scripts/report_generator.py`

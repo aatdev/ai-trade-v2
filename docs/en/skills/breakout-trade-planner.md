@@ -358,7 +358,8 @@ The Minervini Gate is designed to be strict. During market corrections or extend
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `--input` | (required) | VCP screener JSON path |
-| `--account-size` | (required) | Account equity ($) |
+| `--account-size` | (required*) | Account equity ($); *or supplied via `--profile` |
+| `--profile` | `$TRADING_PROFILE` | JSON parameter profile (see `trading_profile.example.json`); explicit CLI flags override it |
 | `--risk-pct` | 0.5 | Base risk % per trade |
 | `--max-position-pct` | 10.0 | Max single position as % of account |
 | `--max-sector-pct` | 30.0 | Max sector exposure as % of account |
@@ -367,8 +368,18 @@ The Minervini Gate is designed to be strict. During market corrections or extend
 | `--stop-buffer-pct` | 1.0 | % buffer below last contraction low |
 | `--max-chase-pct` | 2.0 | Max % above pivot for entry |
 | `--pivot-buffer-pct` | 0.1 | % above pivot for buy-stop trigger |
-| `--current-exposure-json` | None | Existing portfolio exposure file |
+| `--earnings-gate-days` | 0 (off) | Block actionable/revalidation plans with the next earnings report within N trading days (inclusive); public TradingView scanner, no API key |
+| `--time-stop-trading-days` | 0 (off) | Annotate each plan with a time-stop rule (exit if < +1R after N trading days from entry) |
+| `--current-exposure-json` | None | Existing portfolio exposure file (e.g. trader-memory-core `heat` output) |
 | `--output-dir` | reports/ | Output directory |
+
+When the earnings gate is active, every actionable/revalidation/watchlist entry
+gains `earnings_date`, `days_to_earnings`, and `earnings_gate`
+(`pass`/`blocked`/`unknown`); blocked plans move to the `blocked_earnings`
+section and never consume portfolio heat. Earnings dates come from the public
+TradingView scanner (`earnings_release_next_date`, one POST per batch, no API
+key). If the scanner is unreachable, plans stay live with
+`earnings_gate: "unknown"` plus an `EARNINGS_GATE_DEGRADED` warning.
 
 ### Rating Bands & Sizing
 

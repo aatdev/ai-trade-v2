@@ -113,7 +113,7 @@ def test_missing_deps_error_message_is_actionable():
     assert "Resolution options" in src
 
 
-@pytest.mark.parametrize("sub", ["store", "ingest", "review"])
+@pytest.mark.parametrize("sub", ["store", "ingest", "review", "heat"])
 def test_subcommand_resolves_to_existing_target(sub):
     """Every advertised subcommand must point at a script that exists in
     the repo — catches typos in the launcher's SUBCOMMAND_TO_SCRIPT map."""
@@ -121,6 +121,14 @@ def test_subcommand_resolves_to_existing_target(sub):
         "store": "thesis_store.py",
         "ingest": "thesis_ingest.py",
         "review": "thesis_review.py",
+        "heat": "portfolio_heat.py",
     }
     target = REPO_ROOT / "skills" / "trader-memory-core" / "scripts" / targets[sub]
     assert target.is_file(), f"missing target: {target}"
+
+
+def test_heat_subcommand_is_routed():
+    """The launcher map must advertise the heat ledger."""
+    import trader_memory_cli
+
+    assert trader_memory_cli.SUBCOMMAND_TO_SCRIPT["heat"] == "portfolio_heat.py"

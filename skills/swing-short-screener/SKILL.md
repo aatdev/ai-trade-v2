@@ -42,11 +42,11 @@ Do NOT use for:
 Run the screener script. Default output goes to `reports/`.
 
 ```bash
-# Custom universe (free FMP tier is fine)
+# Custom universe (no API key — TradingView data layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --universe TSLA NFLX PYPL ROKU --output-dir reports/
 
-# Full S&P 500 (paid FMP tier recommended)
+# Full S&P 500 (slower: ~500 chart pulls via the TV layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --full-sp500 --output-dir reports/
 

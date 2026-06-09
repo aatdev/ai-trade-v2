@@ -14,7 +14,7 @@ permalink: /ja/skills/ftd-detector/
 William O'Neilの手法に基づくフォロースルーデー（FTD）シグナル検出スキル。S&P 500とNASDAQ/QQQのデュアルインデックス追跡により、ラリーアテンプト、FTD判定、FTD後の健全性モニタリングをステートマシンで実行します。Market Top Detector（防御的）と対になる、攻撃的（底打ち確認）スキルです。
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP必須</span>
+<span class="badge badge-free">API不要</span>
 
 [スキルパッケージをダウンロード (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/ftd-detector.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [GitHubでソースを見る](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/ftd-detector){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -69,11 +69,11 @@ NO_SIGNAL → CORRECTION → RALLY_ATTEMPT → FTD_WINDOW → FTD_CONFIRMED
 
 ## 3. 前提条件
 
-- **FMP API キー:** 必須。環境変数 `FMP_API_KEY` を設定するか、`--api-key` フラグで渡してください
+- **APIキー不要:** S&P 500 / QQQ データは共有 TradingView データレイヤー（`scripts/lib/tv_client.py`）経由。`--api-key` / `FMP_API_KEY` は後方互換のため受け付けますが無視されます
 - **Python 3.9+:** `requests` ライブラリが必要（プロジェクト依存に含まれます）
-- **API使用量:** 1回の実行で約4コール（FMP無料枠 250コール/日の範囲内）
+- **TradingView Desktop (CDP)** に接続可能、または新鮮な `state/metrics` キャッシュ（ライブデータ用）
 
-> FMP APIキーはS&P 500/QQQの価格データとクォート取得に使用されます。無料枠で十分対応できます。
+> 価格データとクォートは共有 TradingView データレイヤーから取得されます。APIキーや有料サブスクリプションは不要です。
 {: .api_required }
 
 ---
@@ -82,11 +82,11 @@ NO_SIGNAL → CORRECTION → RALLY_ATTEMPT → FTD_WINDOW → FTD_CONFIRMED
 
 ```bash
 # 基本実行
-python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
+python3 skills/ftd-detector/scripts/ftd_detector.py --output-dir reports/
 
 # 出力先を指定
 python3 skills/ftd-detector/scripts/ftd_detector.py \
-  --api-key $FMP_API_KEY --output-dir reports/
+  --output-dir reports/
 ```
 
 ---
@@ -98,11 +98,11 @@ python3 skills/ftd-detector/scripts/ftd_detector.py \
 FTD Detectorスクリプトを実行します:
 
 ```bash
-python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
+python3 skills/ftd-detector/scripts/ftd_detector.py --output-dir reports/
 ```
 
 スクリプトの処理内容:
-1. FMP APIからS&P 500とQQQの過去60営業日分のデータを取得
+1. 共有 TradingView データレイヤーからS&P 500とQQQの過去60営業日分のデータを取得
 2. 両指数の現在クォートを取得
 3. デュアルインデックスのステートマシンを実行（調整 → ラリー → FTD検出）
 4. FTD後の健全性評価（ディストリビューションデー、無効化チェック、パワートレンド）
@@ -150,4 +150,4 @@ python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
 - `skills/ftd-detector/scripts/rally_tracker.py` -- ステートマシン（スイングロー検出、ラリー追跡、FTD判定）
 - `skills/ftd-detector/scripts/post_ftd_monitor.py` -- FTD後の健全性評価、品質スコア算出
 - `skills/ftd-detector/scripts/report_generator.py` -- Markdown/JSONレポート生成
-- `skills/ftd-detector/scripts/fmp_client.py` -- FMP APIクライアント（レート制限、キャッシュ付き）
+- `skills/ftd-detector/scripts/fmp_client.py` -- レガシー（未使用。データは `scripts/lib/tv_client.py` 経由）

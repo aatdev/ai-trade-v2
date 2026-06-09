@@ -14,7 +14,7 @@ permalink: /ja/skills/macro-regime-detector/
 クロスアセット比率分析を用いて、構造的なマクロレジーム転換（1〜2年の期間）を検出します。RSP/SPY集中度、イールドカーブ、信用環境、サイズファクター、株式-債券関係、セクターローテーションを分析し、Concentration、Broadening、Contraction、Inflationary、Transitionalの各状態間のレジームシフトを特定します。マクロレジーム、市場レジーム変化、構造的ローテーション、長期的な市場ポジショニングについて聞かれた際に実行します。
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP必須</span>
+<span class="badge badge-free">API不要</span>
 
 [スキルパッケージをダウンロード (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/macro-regime-detector.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [GitHubでソースを見る](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/macro-regime-detector){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -46,7 +46,7 @@ permalink: /ja/skills/macro-regime-detector/
 
 ## 3. 前提条件
 
-- **FMP APIキー**（必須）: 環境変数 `FMP_API_KEY` を設定するか `--api-key` を渡す
+- **APIキー不要**: データは共有 TradingView データレイヤー経由（`--api-key` は後方互換のみで無視）
 - 無料枠（250コール/日）で十分（スクリプトは約10コールを使用）
 
 ---
@@ -131,7 +131,7 @@ python3 skills/macro-regime-detector/scripts/macro_regime_detector.py
 python3 macro_regime_detector.py [options]
 
 オプション:
-  --api-key KEY       FMP APIキー（デフォルト: $FMP_API_KEY）
+  --api-key KEY       後方互換のみ（TradingView レイヤーでは無視）
   --output-dir DIR    出力ディレクトリ（デフォルト: カレントディレクトリ）
   --days N            取得する履歴日数（デフォルト: 600）
 ```
@@ -148,7 +148,7 @@ python3 macro_regime_detector.py [options]
 
 **スクリプト:**
 
-- `skills/macro-regime-detector/scripts/fmp_client.py`
+- `skills/macro-regime-detector/scripts/fmp_client.py`（レガシー、未使用。データは `scripts/lib/tv_client.py` 経由）
 - `skills/macro-regime-detector/scripts/macro_regime_detector.py`
 - `skills/macro-regime-detector/scripts/report_generator.py`
 - `skills/macro-regime-detector/scripts/scorer.py`

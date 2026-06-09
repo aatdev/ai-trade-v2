@@ -27,6 +27,9 @@ node_modules/
 run_tw_proxy.sh
 # Per-user Claude Code settings (e.g. MYNOTES_DIR env override) — never committed
 .claude/settings.local.json
+# Personal trading parameter profile (account size, risk limits) — never committed.
+# trading_profile.example.json is the committed template.
+trading_profile.json
 
 # Logs & temp
 logs/

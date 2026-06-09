@@ -43,15 +43,15 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Skill | Description | API Requirements |
 |-------|-------------|-----------------|
 | **[CANSLIM Screener]({{ '/en/skills/canslim-screener/' | relative_url }})** | Full 7-component CANSLIM growth stock scoring (C, A, N, S, L, I, M). Composite 0-100 ratings with bear market protection. Phase 3 implements 100% of O'Neil's methodology | <span class="badge badge-api">FMP Required</span> |
-| **[VCP Screener]({{ '/en/skills/vcp-screener/' | relative_url }})** | Detects Mark Minervini's Volatility Contraction Pattern. 3-phase pipeline: Pre-filter, Trend Template, VCP Detection with pivot points and trade setups | <span class="badge badge-api">FMP Required</span> |
-| **[Swing Short Screener]({{ '/en/skills/swing-short-screener/' | relative_url }})** | Short-side mirror of VCP Screener. Detects Stage 4 downtrend weakness via a 5-factor weighted score (trend structure, relative strength, base breakdown on volume, lower highs, liquidity/borrow), assigns A/B/C/D grades. Detection-only | <span class="badge badge-api">FMP Required</span> |
+| **[VCP Screener]({{ '/en/skills/vcp-screener/' | relative_url }})** | Detects Mark Minervini's Volatility Contraction Pattern. 3-phase pipeline: Pre-filter, Trend Template, VCP Detection with pivot points and trade setups. OHLCV via the shared TradingView data layer | <span class="badge badge-free">No API</span> |
+| **[Swing Short Screener]({{ '/en/skills/swing-short-screener/' | relative_url }})** | Short-side mirror of VCP Screener. Detects Stage 4 downtrend weakness via a 5-factor weighted score (trend structure, relative strength, base breakdown on volume, lower highs, liquidity/borrow), assigns A/B/C/D grades. Detection-only; OHLCV via the shared TradingView data layer | <span class="badge badge-free">No API</span> |
 | **[FinViz Screener]({{ '/en/skills/finviz-screener/' | relative_url }})** | Translates natural language (Japanese/English) into FinViz filter URLs. 500+ filter codes across fundamentals, technicals, and descriptives. **Theme cross-screening** (30+ themes × 268 sub-themes) for narrative-based searches like "AI × Logistics" or "Data Centers × Power". Opens results in Chrome | <span class="badge badge-free">No API</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **[TradingView Screener]({{ '/en/skills/tradingview-screener/' | relative_url }})** | Translates natural language (EN/RU/JA) into TradingView scanner API queries — the same endpoint as the TV "All stocks" screener tab. 238 UI filters mapped across 8 categories (fundamentals, technicals, dividends, candlestick patterns), field-to-field comparisons (`close>EMA200`), index/sector/rating multiselects. Results as markdown + JSON reports | <span class="badge badge-free">No API Key</span> |
 | **Value Dividend Screener** | Multi-phase dividend stock screening: value characteristics (P/E, P/B), income (yield), growth (3-year trends), sustainability, and quality scoring. TradingView data layer (no API key); optional FINVIZ pre-screen widens the universe | <span class="badge badge-free">No API Key</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Dividend Growth Pullback Screener** | Finds dividend growth stocks (12%+ annual growth, 1.5%+ yield) at oversold technical levels (RSI <= 40). TradingView data layer (no API key); optional FINVIZ pre-screen widens the universe | <span class="badge badge-free">No API Key</span> <span class="badge badge-optional">FINVIZ Optional</span> |
 | **Earnings Trade Analyzer** | Scores post-earnings stocks using 5 weighted factors: Gap Size (25%), Pre-Earnings Trend (30%), Volume Trend (20%), MA200 Position (15%), MA50 Position (10%). A/B/C/D grades | <span class="badge badge-api">FMP Required</span> |
 | **PEAD Screener** | Screens for Post-Earnings Announcement Drift patterns using weekly candle analysis. Stage-based monitoring: MONITORING, SIGNAL_READY, BREAKOUT, EXPIRED | <span class="badge badge-api">FMP Required</span> |
-| **FTD Detector** | Detects Follow-Through Day signals for market bottom confirmation using William O'Neil's methodology. Dual-index tracking with quality scoring (0-100) | <span class="badge badge-api">FMP Required</span> |
+| **FTD Detector** | Detects Follow-Through Day signals for market bottom confirmation using William O'Neil's methodology. Dual-index tracking with quality scoring (0-100). OHLCV via the shared TradingView data layer | <span class="badge badge-free">No API</span> |
 | **Institutional Flow Tracker** | Tracks institutional ownership changes using 13F SEC filings. Tier-based quality framework weights superinvestors (Berkshire, Baupost) higher than index funds | <span class="badge badge-api">FMP Required</span> |
 
 ---
@@ -67,10 +67,10 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | **Market Environment Analysis** | Comprehensive global macro briefing covering equity indices, FX, commodities, yields, and sentiment with structured reporting templates | <span class="badge badge-free">No API</span> |
 | **[Market Breadth Analyzer]({{ '/en/skills/market-breadth-analyzer/' | relative_url }})** | Quantifies market breadth health using a data-driven 6-component scoring system (0-100) from publicly available CSV data | <span class="badge badge-free">No API</span> |
 | **Uptrend Analyzer** | Diagnoses breadth health using Uptrend Ratio Dashboard tracking ~2,800 US stocks across 11 sectors. 5-component composite scoring with warning overlays | <span class="badge badge-free">No API</span> |
-| **Macro Regime Detector** | Detects structural macro regime transitions (1-2 year horizon) using 6-component cross-asset ratio analysis (RSP/SPY, yield curve, credit, size factor, sector rotation) | <span class="badge badge-api">FMP Required</span> |
+| **Macro Regime Detector** | Detects structural macro regime transitions (1-2 year horizon) using 6-component cross-asset ratio analysis (RSP/SPY, yield curve, credit, size factor, sector rotation). Data via the shared TradingView layer | <span class="badge badge-free">No API</span> |
 | **[US Market Bubble Detector]({{ '/en/skills/us-market-bubble-detector/' | relative_url }})** | Data-driven bubble risk assessment using Minsky/Kindleberger framework. Two-phase evaluation: quantitative scoring (0-12) + strict qualitative adjustment (0-3). Five risk phases | <span class="badge badge-free">No API</span> |
 | **Market Top Detector** | Detects market top probability using O'Neil Distribution Days, Minervini Leading Stock Deterioration, and Defensive Rotation. 6-component tactical timing system | <span class="badge badge-free">No API</span> |
-| **[IBD Distribution Day Monitor]({{ '/en/skills/ibd-distribution-day-monitor/' | relative_url }})** | Daily IBD Distribution Day detection for QQQ/SPY with 25-session expiration and 5% invalidation. Risk classification (NORMAL/CAUTION/HIGH/SEVERE) and TQQQ/QQQ exposure recommendation | <span class="badge badge-api">FMP Required</span> |
+| **[IBD Distribution Day Monitor]({{ '/en/skills/ibd-distribution-day-monitor/' | relative_url }})** | Daily IBD Distribution Day detection for QQQ/SPY with 25-session expiration and 5% invalidation. Risk classification (NORMAL/CAUTION/HIGH/SEVERE) and TQQQ/QQQ exposure recommendation. OHLCV via the shared TradingView data layer | <span class="badge badge-free">No API</span> |
 | **[Downtrend Duration Analyzer]({{ '/en/skills/downtrend-duration-analyzer/' | relative_url }})** | Analyzes historical downtrend durations (peak-to-trough) and generates interactive HTML histograms segmented by sector and market cap | <span class="badge badge-api">FMP Required</span> |
 
 ---
@@ -94,10 +94,10 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Skill | Description | API Requirements |
 |-------|-------------|-----------------|
 | **Portfolio Manager** | Portfolio analysis with Alpaca MCP Server integration. Asset allocation, sector diversification, risk metrics, HOLD/ADD/TRIM/SELL recommendations, rebalancing plans | <span class="badge badge-api">Alpaca Required</span> |
-| **[Trader Memory Core]({{ '/en/skills/trader-memory-core/' | relative_url }})** | Persistent thesis lifecycle tracker: register screener outputs as IDEA, manage state transitions through ENTRY_READY → ACTIVE → CLOSED, attach position sizing, schedule reviews, and generate postmortem reports with MAE/MFE | <span class="badge badge-optional">FMP Optional</span> |
+| **[Trader Memory Core]({{ '/en/skills/trader-memory-core/' | relative_url }})** | Persistent thesis lifecycle tracker: register screener outputs as IDEA, manage state transitions through ENTRY_READY → ACTIVE → CLOSED, attach position sizing, schedule reviews, and generate postmortem reports with MAE/MFE (prices via the TradingView data layer) | <span class="badge badge-free">No API</span> |
 | **[Trade Performance Coach]({{ '/en/skills/trade-performance-coach/' | relative_url }})** | Post-trade coach: reviews closed trades, partial exits, and monthly aggregates across 5 axes (process, risk, execution, behavior patterns, review quality), emits OK/WARN/REVIEW_REQUIRED/RULE_VIOLATION/COOL_DOWN verdict and next-session operating rules with human decision gate. Beta. | <span class="badge badge-free">No API</span> |
 | **[Position Sizer]({{ '/en/skills/position-sizer/' | relative_url }})** | Risk-based position sizing using Fixed Fractional, ATR-based, and Kelly Criterion methods. Portfolio constraints (max position %, max sector %). Works offline | <span class="badge badge-free">No API</span> |
-| **[Breakout Trade Planner]({{ '/en/skills/breakout-trade-planner/' | relative_url }})** | Generates Minervini-style breakout trade plans from VCP screener output. Worst-case entry Gate, stop-limit bracket templates (pre_place / post_confirm), portfolio heat management | <span class="badge badge-free">No API</span> |
+| **[Breakout Trade Planner]({{ '/en/skills/breakout-trade-planner/' | relative_url }})** | Generates Minervini-style breakout trade plans from VCP screener output. Worst-case entry Gate, stop-limit bracket templates (pre_place / post_confirm), portfolio heat management, optional earnings-date gate (public TradingView scanner) and time-stop annotation | <span class="badge badge-free">No API</span> |
 | **[Parabolic Short Trade Planner]({{ '/en/skills/parabolic-short-trade-planner/' | relative_url }})** | Daily Parabolic Short screener (5-factor weighted score) plus pre-market plan generator that emits three conditional triggers per candidate (5-min ORL break, first red 5-min, VWAP fail). Alpaca ETB-only short check via `requests` (no SDK), SEC Rule 201 SSR tracker, blocking vs advisory manual confirmation reasons | <span class="badge badge-api">FMP Required</span> <span class="badge badge-optional">Alpaca Optional</span> |
 | **[Exposure Coach]({{ '/en/skills/exposure-coach/' | relative_url }})** | Synthesizes outputs from breadth, regime, top-risk, and flow skills into a one-page Market Posture summary with net exposure ceiling (0-100%), growth-vs-value bias, and NEW_ENTRY_ALLOWED / REDUCE_ONLY / CASH_PRIORITY recommendation | <span class="badge badge-optional">FMP Optional</span> |
 | **[US Stock Analysis]({{ '/en/skills/us-stock-analysis/' | relative_url }})** | Comprehensive US equity research: fundamentals, technicals, peer comparisons, and structured investment memos with bull/bear cases | <span class="badge badge-free">No API</span> |
@@ -201,14 +201,14 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Skill | FMP | FINVIZ Elite | Alpaca |
 |-------|-----|-------------|--------|
 | CANSLIM Screener | Required | -- | -- |
-| VCP Screener | Required | -- | -- |
-| Swing Short Screener | Required | -- | -- |
+| VCP Screener | -- | -- | -- |
+| Swing Short Screener | -- | -- | -- |
 | FinViz Screener | -- | Optional | -- |
 | Value Dividend Screener | -- | Optional | -- |
 | Dividend Growth Pullback Screener | -- | Optional | -- |
 | Earnings Trade Analyzer | Required | -- | -- |
 | PEAD Screener | Required | -- | -- |
-| FTD Detector | Required | -- | -- |
+| FTD Detector | -- | -- | -- |
 | Institutional Flow Tracker | Required | -- | -- |
 | Sector Analyst | -- | -- | -- |
 | Breadth Chart Analyst | -- | -- | -- |
@@ -217,10 +217,10 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Market Environment Analysis | -- | -- | -- |
 | Market Breadth Analyzer | -- | -- | -- |
 | Uptrend Analyzer | -- | -- | -- |
-| Macro Regime Detector | Required | -- | -- |
+| Macro Regime Detector | -- | -- | -- |
 | US Market Bubble Detector | -- | -- | -- |
 | Market Top Detector | -- | -- | -- |
-| IBD Distribution Day Monitor | Required | -- | -- |
+| IBD Distribution Day Monitor | -- | -- | -- |
 | Theme Detector | Optional | Recommended | -- |
 | Scenario Analyzer | -- | -- | -- |
 | Backtest Expert | -- | -- | -- |
@@ -229,7 +229,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Stanley Druckenmiller Investment | -- | -- | -- |
 | Strategy Pivot Designer | -- | -- | -- |
 | Portfolio Manager | -- | -- | Required |
-| Trader Memory Core | Optional | -- | -- |
+| Trader Memory Core | -- | -- | -- |
 | Position Sizer | -- | -- | -- |
 | US Stock Analysis | -- | -- | -- |
 | Earnings Calendar | Required | -- | -- |

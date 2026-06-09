@@ -3,7 +3,7 @@ layout: default
 title: "Swing Short Screener"
 grand_parent: English
 parent: Skill Guides
-nav_order: 52
+nav_order: 53
 lang_peer: /ja/skills/swing-short-screener/
 permalink: /en/skills/swing-short-screener/
 generated: true
@@ -15,7 +15,7 @@ generated: true
 Screen S&P 500 (or a custom universe) for Stage 4 downtrend weakness — the short-side mirror of vcp-screener. Scores each name on a 5-factor weighted weakness model (trend structure, relative strength, base breakdown on volume, lower-highs structure, liquidity/borrow suitability), assigns A/B/C/D grades, and emits a JSON + Markdown short-side watchlist. Use when the user wants swing-short candidates, Stage 4 weakness scanning, short watchlists, breakdown screening, or stocks weak relative to the index. Detection-only — never sends orders.
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP Required</span>
+<span class="badge badge-free">No API</span>
 
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/swing-short-screener){: .btn .fs-5 .mb-4 .mb-md-0 }
 
@@ -66,11 +66,11 @@ Do NOT use for:
 ## 4. Quick Start
 
 ```bash
-# Custom universe (free FMP tier is fine)
+# Custom universe (no API key — TradingView data layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --universe TSLA NFLX PYPL ROKU --output-dir reports/
 
-# Full S&P 500 (paid FMP tier recommended)
+# Full S&P 500 (slower: ~500 chart pulls via the TV layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --full-sp500 --output-dir reports/
 
@@ -89,11 +89,11 @@ python3 skills/swing-short-screener/scripts/screen_short.py \
 Run the screener script. Default output goes to `reports/`.
 
 ```bash
-# Custom universe (free FMP tier is fine)
+# Custom universe (no API key — TradingView data layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --universe TSLA NFLX PYPL ROKU --output-dir reports/
 
-# Full S&P 500 (paid FMP tier recommended)
+# Full S&P 500 (slower: ~500 chart pulls via the TV layer)
 python3 skills/swing-short-screener/scripts/screen_short.py \
   --full-sp500 --output-dir reports/
 

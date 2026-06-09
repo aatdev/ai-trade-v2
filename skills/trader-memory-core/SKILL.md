@@ -24,7 +24,8 @@ Phase 1 supports single-ticker theses: dividend_income, growth_momentum, mean_re
 - Python 3.10+
 - `pyyaml` (already in project dependencies)
 - `jsonschema` (already in `pyproject.toml`; required by `thesis_store.py` and every command that imports it, including `thesis_ingest.py` and `thesis_review.py`)
-- FMP API key (optional, only for MAE/MFE calculation in postmortem)
+- MAE/MFE in postmortems uses the shared TradingView data layer (no API key);
+  if the TV bridge is unreachable the metrics degrade to null
 
 ### How to invoke the CLI
 
@@ -40,7 +41,7 @@ python3 "$CLAUDE_TRADING_SKILLS_REPO/skills/trader-memory-core/scripts/trader_me
   store --state-dir /path/to/state/theses list
 ```
 
-Subcommands: `store` → `thesis_store.py`, `ingest` → `thesis_ingest.py`, `review` → `thesis_review.py`. Everything after the subcommand is forwarded verbatim, so existing argument flags (`--state-dir`, `transition`, `open-position`, etc.) work unchanged.
+Subcommands: `store` → `thesis_store.py`, `ingest` → `thesis_ingest.py`, `review` → `thesis_review.py`, `heat` → `portfolio_heat.py`. Everything after the subcommand is forwarded verbatim, so existing argument flags (`--state-dir`, `transition`, `open-position`, etc.) work unchanged.
 
 If the launcher reports that `jsonschema` is not importable AND `uv` is not on `PATH`, the actionable fixes (in priority order) are:
 
@@ -225,7 +226,7 @@ python3 skills/trader-memory-core/scripts/trader_memory_cli.py review \
   --state-dir state/theses/ postmortem th_aapl_div_20260314_a3f1
 ```
 
-Generate a structured postmortem in `state/journal/`. If FMP API key is available, includes MAE/MFE (Maximum Adverse/Favorable Excursion) metrics.
+Generate a structured postmortem in `state/journal/`. MAE/MFE (Maximum Adverse/Favorable Excursion) metrics are computed from the shared TradingView data layer — no API key required; if the TV bridge is unreachable they degrade to null.
 
 **Summary statistics:**
 
@@ -235,6 +236,36 @@ python3 skills/trader-memory-core/scripts/trader_memory_cli.py review \
 ```
 
 Shows win rate, average P&L%, and per-type breakdown across all closed theses.
+
+### 6. Heat — Live open-risk (portfolio heat) ledger
+
+```bash
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py heat \
+  --state-dir state/theses/ --account-size 100000 --max-positions 6 \
+  --output-dir reports/
+
+# Or take account size / heat budget / position cap from a parameter profile
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py heat \
+  --state-dir state/theses/ --profile trading_profile.json --output-dir reports/
+```
+
+Aggregate live open risk across ACTIVE / PARTIALLY_CLOSED theses:
+`risk = max(0, entry − exit.stop_loss) × shares_remaining` (a stop raised to
+breakeven contributes zero heat). Reports heat % vs the budget
+(`--max-portfolio-heat-pct`, default 6.0), remaining position slots, and
+sector exposure at entry prices. Keep `exit.stop_loss` updated as stops trail —
+otherwise the ledger flags the thesis (`STOP_MISSING`, falls back to the
+sizing report's `position.risk_dollars` when present) and sets
+`heat_complete: false`.
+
+The JSON top level (`open_risk_pct`, `sector_exposure`) is directly consumable
+by breakout-trade-planner:
+
+```bash
+python3 skills/breakout-trade-planner/scripts/plan_breakout_trades.py \
+  --input reports/vcp_screener_YYYY-MM-DD.json --profile trading_profile.json \
+  --current-exposure-json reports/portfolio_heat_YYYY-MM-DD_HHMMSS.json
+```
 
 ## Output Format
 
@@ -257,6 +288,11 @@ Lightweight index for fast queries without loading full YAML files.
 ### Journal (state/journal/)
 
 Postmortem markdown reports: `pm_{thesis_id}.md`.
+
+### Heat ledger (reports/)
+
+`portfolio_heat_YYYY-MM-DD_HHMMSS.json` / `.md` — open-risk summary with
+planner-compatible `open_risk_pct` + `sector_exposure` top-level keys.
 
 ## Key Principles
 

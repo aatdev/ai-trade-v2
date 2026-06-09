@@ -14,7 +14,7 @@ permalink: /en/skills/trader-memory-core/
 Persistent state layer that tracks investment theses from screening idea to closed position with postmortem. Bundles screener, analysis, position sizing, and portfolio management outputs into a single thesis object per trade idea.
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-optional">FMP Optional</span>
+<span class="badge badge-free">No API</span>
 
 [Download Skill Package (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/trader-memory-core.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/trader-memory-core){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -51,7 +51,7 @@ Screener Output → IDEA → ENTRY_READY → ACTIVE → CLOSED
 - Fingerprint-based deduplication (same screener output never registers twice)
 - Position sizing attachment from Position Sizer skill
 - Review scheduling with escalation ladder (OK → WARN → REVIEW)
-- Postmortem generation with optional MAE/MFE via FMP API
+- Postmortem generation with MAE/MFE via the shared TradingView data layer (no API key)
 
 **Phase 1 scope:** Single-ticker theses only. Pair trades and options strategies are planned for Phase 2.
 
@@ -73,10 +73,10 @@ Screener Output → IDEA → ENTRY_READY → ACTIVE → CLOSED
 ## 3. Prerequisites
 
 - **Python 3.9+** with `pyyaml` and `jsonschema` (both in project dependencies)
-- **FMP API key:** Optional -- only needed for MAE/MFE calculation in postmortem reports. Core features (register, transition, close, review) work completely offline
+- **No API key:** MAE/MFE in postmortems uses the shared TradingView data layer (vendored `tv` CLI / metrics cache). Core features (register, transition, close, review) work completely offline
 - **State directory:** `state/theses/` is created automatically on first use
 
-> FMP API is only used for fetching daily price history to compute Maximum Adverse Excursion (MAE) and Maximum Favorable Excursion (MFE) during postmortem. If no API key is set, postmortem reports are still generated with all other fields.
+> Daily price history for Maximum Adverse Excursion (MAE) and Maximum Favorable Excursion (MFE) comes from the shared TradingView data layer — no API key. If the TV bridge is unreachable, postmortem reports are still generated with all other fields (MAE/MFE null).
 {: .tip }
 
 ---
@@ -220,7 +220,26 @@ python3 skills/trader-memory-core/scripts/trader_memory_cli.py review \
   --state-dir state/theses/ postmortem th_aapl_div_20260314_a3f1
 ```
 
-The postmortem includes P&L, holding days, and (with FMP API key) MAE/MFE metrics. Output is saved to `state/journal/pm_{thesis_id}.md`.
+The postmortem includes P&L, holding days, and MAE/MFE metrics (prices via the shared TradingView data layer — no API key; null if the TV bridge is unreachable). Output is saved to `state/journal/pm_{thesis_id}.md`.
+
+### Step 8: Portfolio heat check (live open risk)
+
+Before planning new entries, aggregate the live open risk across ACTIVE /
+PARTIALLY_CLOSED theses (`risk = max(0, entry − exit.stop_loss) × shares
+remaining`; a stop at breakeven contributes zero):
+
+```bash
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py heat \
+  --state-dir state/theses/ --account-size 100000 --max-positions 6 \
+  --output-dir reports/
+```
+
+The report shows heat % vs the budget (`--max-portfolio-heat-pct`, default
+6.0), remaining position slots, and sector exposure. The JSON top level
+(`open_risk_pct`, `sector_exposure`) plugs directly into
+breakout-trade-planner via `--current-exposure-json`. Keep `exit.stop_loss`
+updated as you trail stops — a missing stop is flagged (`STOP_MISSING`) and
+sets `heat_complete: false`.
 
 ---
 
@@ -262,7 +281,7 @@ Each thesis is stored as a YAML file in `state/theses/`:
 - **Escalation ladder.** Reviews go OK → WARN → REVIEW. Consecutive WARN outcomes escalate automatically.
 - **Link reports generously.** The more analysis you cross-reference, the richer the postmortem.
 - **Git-track state/.** The `state/` directory is designed to be committed, giving you a full audit trail with `git log` and `git blame`.
-- **Postmortem without FMP.** MAE/MFE are nice-to-have. P&L, holding days, and lessons learned work without any API.
+- **Postmortem degrades gracefully.** MAE/MFE come from the TradingView data layer; if it is unreachable, P&L, holding days, and lessons learned still work fully offline.
 
 ---
 
@@ -307,7 +326,9 @@ Each thesis is stored as a YAML file in `state/theses/`:
 - `skills/trader-memory-core/scripts/thesis_ingest.py` -- Screener adapter registry and CLI
 - `skills/trader-memory-core/scripts/thesis_store.py` -- CRUD, transitions, and state management
 - `skills/trader-memory-core/scripts/thesis_review.py` -- Postmortem generation and summary statistics
-- `skills/trader-memory-core/scripts/fmp_price_adapter.py` -- FMP API integration for MAE/MFE
+- `skills/trader-memory-core/scripts/portfolio_heat.py` -- Live open-risk (portfolio heat) ledger; planner-compatible exposure JSON
+- `skills/trader-memory-core/scripts/tv_price_adapter.py` -- TradingView-backed daily closes for MAE/MFE (default; no API key)
+- `skills/trader-memory-core/scripts/fmp_price_adapter.py` -- Legacy FMP price adapter (kept for users with an FMP key)
 
 **Schema:**
 - `skills/trader-memory-core/schemas/thesis.schema.json` -- JSON Schema for thesis validation

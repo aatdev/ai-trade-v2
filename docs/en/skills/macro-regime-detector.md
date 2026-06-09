@@ -14,7 +14,7 @@ permalink: /en/skills/macro-regime-detector/
 Detect structural macro regime transitions (1-2 year horizon) using cross-asset ratio analysis. Analyze RSP/SPY concentration, yield curve, credit conditions, size factor, equity-bond relationship, and sector rotation to identify regime shifts between Concentration, Broadening, Contraction, Inflationary, and Transitional states. Run when user asks about macro regime, market regime change, structural rotation, or long-term market positioning.
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP Required</span>
+<span class="badge badge-free">No API</span>
 
 [Download Skill Package (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/macro-regime-detector.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/macro-regime-detector){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -46,8 +46,8 @@ Detect structural macro regime transitions (1-2 year horizon) using cross-asset 
 
 ## 3. Prerequisites
 
-- **FMP API Key** (required): Set `FMP_API_KEY` environment variable or pass `--api-key`
-- Free tier (250 calls/day) is sufficient (script uses ~10 calls)
+- **No API key required:** ETF ratios and treasury yields come from the shared TradingView data layer (`scripts/lib/tv_client.py`)
+- TradingView Desktop (CDP) reachable, or a fresh `state/metrics` cache, for live bars
 
 ---
 
@@ -131,7 +131,7 @@ Two files are saved to `--output-dir` (default: current directory):
 python3 macro_regime_detector.py [options]
 
 Options:
-  --api-key KEY       FMP API key (default: $FMP_API_KEY)
+  --api-key KEY       Backward compatibility only; ignored by the TradingView data layer
   --output-dir DIR    Output directory (default: current directory)
   --days N            Days of history to fetch (default: 600)
 ```
@@ -148,7 +148,7 @@ Options:
 
 **Scripts:**
 
-- `skills/macro-regime-detector/scripts/fmp_client.py`
+- `skills/macro-regime-detector/scripts/fmp_client.py` (legacy, unused — data flows through `scripts/lib/tv_client.py`)
 - `skills/macro-regime-detector/scripts/macro_regime_detector.py`
 - `skills/macro-regime-detector/scripts/report_generator.py`
 - `skills/macro-regime-detector/scripts/scorer.py`

@@ -47,14 +47,14 @@ Detect Follow-Through Day (FTD) signals that confirm a market bottom, using Will
 
 ### Phase 1: Execute Python Script
 
-Run the FTD detector script:
+Run the FTD detector script (no API key needed):
 
 ```bash
-python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
+python3 skills/ftd-detector/scripts/ftd_detector.py --output-dir reports/
 ```
 
 The script will:
-1. Fetch S&P 500 and QQQ historical data (60+ trading days) from FMP API
+1. Fetch S&P 500 and QQQ historical data (60+ trading days) via the shared TradingView data layer
 2. Fetch current quotes for both indices
 3. Run dual-index state machine (correction → rally → FTD detection)
 4. Assess post-FTD health (distribution days, invalidation, power trend)
@@ -122,9 +122,11 @@ NO_SIGNAL → CORRECTION → RALLY_ATTEMPT → FTD_WINDOW → FTD_CONFIRMED
 
 ## Prerequisites
 
-- **FMP API Key:** Required. Set `FMP_API_KEY` environment variable or pass via `--api-key` flag.
-- **Python 3.8+:** With `requests` library installed.
-- **API Budget:** 4 calls per execution (well within FMP free tier of 250/day).
+- **No API key:** S&P 500 / QQQ data comes from the shared TradingView data
+  layer (`scripts/lib/tv_client.py`); `--api-key` / `FMP_API_KEY` are accepted
+  for backward compatibility but ignored.
+- **TradingView Desktop (CDP)** reachable, or a fresh `state/metrics` cache, for live bars.
+- **Python 3.8+.**
 
 ## Output Files
 

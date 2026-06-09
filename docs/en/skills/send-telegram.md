@@ -3,7 +3,7 @@ layout: default
 title: "Send Telegram"
 grand_parent: English
 parent: Skill Guides
-nav_order: 44
+nav_order: 45
 lang_peer: /ja/skills/send-telegram/
 permalink: /en/skills/send-telegram/
 generated: true

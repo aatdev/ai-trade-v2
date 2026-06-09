@@ -20,6 +20,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
+from earnings_gate import (
+    GATE_BLOCKED,
+    EarningsFetchError,
+    build_gate_fields,
+    fetch_earnings_map,
+)
 from order_builder import (
     build_entry_condition,
     build_post_confirm_template,
@@ -38,6 +44,67 @@ from risk_calculator import (
 
 ACCEPTED_INPUT_VERSIONS = {"1.0"}
 MAX_RISK_PCT = 8.0
+
+# Parameter-profile keys shared across the trading scripts. Keys outside this
+# union trigger a warning (typo guard); keys inside it that a given script does
+# not use are silently skipped (one profile file can serve planner, sizer and
+# heat ledger alike).
+KNOWN_PROFILE_KEYS = {
+    "account_size",
+    "risk_pct",
+    "max_position_pct",
+    "max_sector_pct",
+    "max_portfolio_heat_pct",
+    "max_positions",
+    "target_r_multiple",
+    "stop_buffer_pct",
+    "max_chase_pct",
+    "pivot_buffer_pct",
+    "earnings_gate_days",
+    "time_stop_trading_days",
+    "atr_multiplier",
+}
+
+PLANNER_PROFILE_KEYS = {
+    "account_size",
+    "risk_pct",
+    "max_position_pct",
+    "max_sector_pct",
+    "max_portfolio_heat_pct",
+    "target_r_multiple",
+    "stop_buffer_pct",
+    "max_chase_pct",
+    "pivot_buffer_pct",
+    "earnings_gate_days",
+    "time_stop_trading_days",
+}
+
+
+def load_profile(path: str, applied_keys: set[str]) -> dict:
+    """Load a JSON parameter profile and return the keys this script applies.
+
+    Numeric values only; unknown keys warn to stderr (typo guard) while keys
+    belonging to sibling scripts are skipped silently.
+    """
+    with open(path) as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError("profile JSON must be an object of parameter values")
+
+    unknown = sorted(set(raw) - KNOWN_PROFILE_KEYS)
+    if unknown:
+        print(
+            f"Warning: ignoring unknown profile keys: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+
+    applied: dict[str, float] = {}
+    for key in sorted(applied_keys & set(raw)):
+        value = raw[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"profile key '{key}' must be a number, got {value!r}")
+        applied[key] = value
+    return applied
 
 
 def load_input(path: str) -> dict:
@@ -369,6 +436,14 @@ def _build_actionable(
         },
     }
 
+    time_stop_days = int(getattr(args, "time_stop_trading_days", 0) or 0)
+    if time_stop_days > 0:
+        result["trade_plan"]["time_stop_trading_days"] = time_stop_days
+        result["trade_plan"]["time_stop_rule"] = (
+            f"Exit if the position has not reached +1R within "
+            f"{time_stop_days} trading days of entry"
+        )
+
     return {"classification": "actionable", "data": result, "risk_pct": risk_pct_of_account}
 
 
@@ -392,10 +467,25 @@ def _reject(symbol: str, reason: str) -> dict:
     }
 
 
-def generate_plans(data: dict, args: argparse.Namespace) -> dict:
-    """Main pipeline: filter, score, size, classify all candidates."""
+def generate_plans(
+    data: dict,
+    args: argparse.Namespace,
+    earnings_map: dict[str, str] | None = None,
+    earnings_fetch_failed: bool = False,
+) -> dict:
+    """Main pipeline: filter, score, size, classify all candidates.
+
+    When ``args.earnings_gate_days`` > 0, actionable/revalidation plans whose
+    next earnings report falls within that many trading days are moved to
+    ``blocked_earnings`` (and never consume portfolio heat); watchlist entries
+    are annotated only.
+    """
     exposure = load_exposure(args.current_exposure_json)
     results = data["results"]
+
+    gate_days = int(getattr(args, "earnings_gate_days", 0) or 0)
+    gate_enabled = gate_days > 0
+    today = datetime.now().date()
 
     # Sort by composite_score descending (highest priority first)
     results_sorted = sorted(results, key=lambda r: r.get("composite_score", 0), reverse=True)
@@ -406,7 +496,20 @@ def generate_plans(data: dict, args: argparse.Namespace) -> dict:
     rejected = []
     deferred = []
     constrained = []
+    blocked_earnings = []
     warnings = []
+
+    if gate_enabled and earnings_fetch_failed:
+        warnings.append(
+            {
+                "symbol": "*",
+                "code": "EARNINGS_GATE_DEGRADED",
+                "message": (
+                    "earnings calendar fetch failed; earnings_gate='unknown' for all "
+                    "plans — verify earnings dates manually before entry"
+                ),
+            }
+        )
 
     cumulative_risk_pct = exposure.get("open_risk_pct", 0.0)
     sector_tracker: dict[str, float] = {}
@@ -422,6 +525,30 @@ def generate_plans(data: dict, args: argparse.Namespace) -> dict:
 
         classified = process_candidate(result, args, cumulative_risk_pct, sector_tracker, exposure)
         cls = classified["classification"]
+
+        if gate_enabled and cls in ("actionable", "revalidation", "watchlist"):
+            gate_fields = build_gate_fields(
+                classified["data"]["symbol"],
+                earnings_map or {},
+                gate_days,
+                today,
+                fetch_failed=earnings_fetch_failed,
+            )
+            classified["data"].update(gate_fields)
+            if (
+                cls in ("actionable", "revalidation")
+                and gate_fields["earnings_gate"] == GATE_BLOCKED
+            ):
+                blocked_earnings.append(
+                    {
+                        **classified["data"],
+                        "blocked_reason": (
+                            f"earnings in {gate_fields['days_to_earnings']} trading days "
+                            f"(gate: {gate_days})"
+                        ),
+                    }
+                )
+                continue
 
         if cls == "actionable":
             actionable.append(classified["data"])
@@ -457,6 +584,8 @@ def generate_plans(data: dict, args: argparse.Namespace) -> dict:
             "stop_buffer_pct": args.stop_buffer_pct,
             "max_chase_pct": args.max_chase_pct,
             "pivot_buffer_pct": args.pivot_buffer_pct,
+            "earnings_gate_days": gate_days,
+            "time_stop_trading_days": int(getattr(args, "time_stop_trading_days", 0) or 0),
             "current_exposure": exposure,
         },
         "input_metadata": {
@@ -473,6 +602,7 @@ def generate_plans(data: dict, args: argparse.Namespace) -> dict:
             "rejected_count": len(rejected),
             "deferred_count": len(deferred),
             "constrained_count": len(constrained),
+            "blocked_earnings_count": len(blocked_earnings),
             "total_risk_dollars": round(total_risk_dollars, 2),
             "total_risk_pct": round(total_risk_pct, 2),
             "total_position_value": round(total_position, 2),
@@ -483,6 +613,7 @@ def generate_plans(data: dict, args: argparse.Namespace) -> dict:
         "rejected": rejected,
         "deferred": deferred,
         "constrained": constrained,
+        "blocked_earnings": blocked_earnings,
         "warnings": warnings,
     }
 
@@ -500,6 +631,7 @@ def generate_markdown(plans: dict) -> str:
         f"- Revalidation: {plans['summary']['revalidation_count']}",
         f"- Watchlist: {plans['summary']['watchlist_count']}",
         f"- Rejected: {plans['summary']['rejected_count']}",
+        f"- Blocked (earnings gate): {plans['summary'].get('blocked_earnings_count', 0)}",
         f"- Total Risk: ${plans['summary']['total_risk_dollars']:,.2f} "
         f"({plans['summary']['total_risk_pct']:.2f}%)",
         "",
@@ -525,9 +657,21 @@ def generate_markdown(plans: dict) -> str:
                     f"| Shares | {tp['shares']} |",
                     f"| Position Value | ${tp['position_value']:,.2f} |",
                     f"| Risk $ | ${tp['risk_dollars']:,.2f} |",
-                    "",
                 ]
             )
+            if tp.get("time_stop_trading_days"):
+                lines.append(f"| Time Stop | {tp['time_stop_rule']} |")
+            if order.get("earnings_gate"):
+                if order.get("earnings_date"):
+                    earnings_note = (
+                        f"{order['earnings_date']} "
+                        f"({order['days_to_earnings']} trading days, "
+                        f"{order['earnings_gate']})"
+                    )
+                else:
+                    earnings_note = f"none within window ({order['earnings_gate']})"
+                lines.append(f"| Next Earnings | {earnings_note} |")
+            lines.append("")
 
     if plans["revalidation"]:
         lines.append("## Revalidation (Breakout — needs live confirmation)\n")
@@ -547,16 +691,46 @@ def generate_markdown(plans: dict) -> str:
             )
         lines.append("")
 
+    if plans.get("blocked_earnings"):
+        gate_days = plans["parameters"].get("earnings_gate_days", 0)
+        lines.append(f"## Blocked by Earnings Gate (≤ {gate_days} trading days)\n")
+        lines.append("| Symbol | Plan Type | Earnings Date | Trading Days Away |")
+        lines.append("|--------|-----------|---------------|-------------------|")
+        for b in plans["blocked_earnings"]:
+            lines.append(
+                f"| {b['symbol']} | {b.get('plan_type', '')} | "
+                f"{b.get('earnings_date', '?')} | {b.get('days_to_earnings', '?')} |"
+            )
+        lines.append("")
+        lines.append(
+            "*Re-screen these names after their reports — a post-earnings base "
+            "is a fresh setup, not a missed one.*"
+        )
+        lines.append("")
+
     lines.append("\n---\n*Disclaimer: Not investment advice.*\n")
     return "\n".join(lines)
 
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate breakout trade plans from VCP screener output"
     )
     parser.add_argument("--input", required=True, help="VCP screener JSON path")
-    parser.add_argument("--account-size", type=float, required=True, help="Account equity ($)")
+    parser.add_argument(
+        "--profile",
+        default=os.environ.get("TRADING_PROFILE"),
+        help=(
+            "JSON parameter profile (account_size, risk_pct, ...). Explicit CLI "
+            "flags override profile values. Default: $TRADING_PROFILE."
+        ),
+    )
+    parser.add_argument(
+        "--account-size",
+        type=float,
+        default=None,
+        help="Account equity ($); required unless provided via --profile",
+    )
     parser.add_argument("--risk-pct", type=float, default=0.5, help="Base risk %% per trade")
     parser.add_argument("--max-position-pct", type=float, default=10.0)
     parser.add_argument("--max-sector-pct", type=float, default=30.0)
@@ -565,12 +739,67 @@ def main():
     parser.add_argument("--stop-buffer-pct", type=float, default=1.0)
     parser.add_argument("--max-chase-pct", type=float, default=2.0)
     parser.add_argument("--pivot-buffer-pct", type=float, default=0.1)
+    parser.add_argument(
+        "--earnings-gate-days",
+        type=int,
+        default=0,
+        help=(
+            "Block actionable/revalidation plans whose next earnings report is "
+            "within N trading days (inclusive). 0 = disabled. Earnings dates "
+            "come from the public TradingView scanner — no API key required."
+        ),
+    )
+    parser.add_argument(
+        "--time-stop-trading-days",
+        type=int,
+        default=0,
+        help=(
+            "Annotate each plan with a time-stop rule: exit if < +1R after N "
+            "trading days from entry. 0 = disabled."
+        ),
+    )
     parser.add_argument("--current-exposure-json", default=None)
     parser.add_argument("--output-dir", default="reports/")
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv: list[str] | None = None):
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--profile", default=os.environ.get("TRADING_PROFILE"))
+    pre_args, _ = pre.parse_known_args(argv)
+
+    parser = build_arg_parser()
+    if pre_args.profile:
+        try:
+            parser.set_defaults(**load_profile(pre_args.profile, PLANNER_PROFILE_KEYS))
+        except (OSError, ValueError) as exc:
+            print(f"Error: cannot load profile '{pre_args.profile}': {exc}", file=sys.stderr)
+            sys.exit(1)
+
+    args = parser.parse_args(argv)
+    if args.account_size is None:
+        parser.error("--account-size is required (pass it directly or via --profile)")
 
     data = load_input(args.input)
-    plans = generate_plans(data, args)
+
+    earnings_map: dict[str, str] = {}
+    earnings_fetch_failed = False
+    if int(args.earnings_gate_days or 0) > 0:
+        symbols = [
+            r.get("symbol") for r in data["results"] if isinstance(r, dict) and r.get("symbol")
+        ]
+        try:
+            earnings_map = fetch_earnings_map(symbols)
+        except EarningsFetchError as exc:
+            earnings_fetch_failed = True
+            print(
+                f"Warning: earnings gate degraded to 'unknown': {exc}",
+                file=sys.stderr,
+            )
+
+    plans = generate_plans(
+        data, args, earnings_map=earnings_map, earnings_fetch_failed=earnings_fetch_failed
+    )
 
     os.makedirs(args.output_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -588,7 +817,8 @@ def main():
     print(
         f"\nActionable: {plans['summary']['actionable_count']} | "
         f"Revalidation: {plans['summary']['revalidation_count']} | "
-        f"Watchlist: {plans['summary']['watchlist_count']}"
+        f"Watchlist: {plans['summary']['watchlist_count']} | "
+        f"Blocked (earnings): {plans['summary']['blocked_earnings_count']}"
     )
 
 

@@ -14,6 +14,61 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 
+# Parameter-profile keys shared across the trading scripts (planner, sizer,
+# heat ledger). Keys outside this union trigger a warning (typo guard); keys
+# inside it that this script does not use are skipped silently, so one profile
+# file can serve all scripts.
+KNOWN_PROFILE_KEYS = {
+    "account_size",
+    "risk_pct",
+    "max_position_pct",
+    "max_sector_pct",
+    "max_portfolio_heat_pct",
+    "max_positions",
+    "target_r_multiple",
+    "stop_buffer_pct",
+    "max_chase_pct",
+    "pivot_buffer_pct",
+    "earnings_gate_days",
+    "time_stop_trading_days",
+    "atr_multiplier",
+}
+
+SIZER_PROFILE_KEYS = {
+    "account_size",
+    "risk_pct",
+    "max_position_pct",
+    "max_sector_pct",
+    "atr_multiplier",
+}
+
+
+def load_profile(path: str, applied_keys: set[str]) -> dict:
+    """Load a JSON parameter profile and return the keys this script applies.
+
+    Numeric values only; unknown keys warn to stderr (typo guard) while keys
+    belonging to sibling scripts are skipped silently.
+    """
+    with open(path) as f:
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        raise ValueError("profile JSON must be an object of parameter values")
+
+    unknown = sorted(set(raw) - KNOWN_PROFILE_KEYS)
+    if unknown:
+        print(
+            f"Warning: ignoring unknown profile keys: {', '.join(unknown)}",
+            file=sys.stderr,
+        )
+
+    applied: dict[str, float] = {}
+    for key in sorted(applied_keys & set(raw)):
+        value = raw[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"profile key '{key}' must be a number, got {value!r}")
+        applied[key] = value
+    return applied
+
 
 @dataclass
 class SizingParameters:
@@ -341,8 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--account-size",
         type=float,
-        required=True,
-        help="Total account value in dollars",
+        default=None,
+        help="Total account value in dollars (required unless provided via --profile)",
+    )
+    parser.add_argument(
+        "--profile",
+        default=os.environ.get("TRADING_PROFILE"),
+        help=(
+            "JSON parameter profile (account_size, risk_pct, max_position_pct, ...). "
+            "Explicit CLI flags override profile values. Default: $TRADING_PROFILE."
+        ),
     )
     parser.add_argument("--entry", type=float, help="Entry price per share")
     parser.add_argument("--stop", type=float, help="Stop-loss price per share")
@@ -399,10 +462,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """CLI entry point."""
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
+
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--profile", default=os.environ.get("TRADING_PROFILE"))
+    pre_args, _ = pre.parse_known_args(raw_argv)
+
     parser = build_parser()
-    args = parser.parse_args()
+    profile: dict = {}
+    if pre_args.profile:
+        try:
+            profile = load_profile(pre_args.profile, SIZER_PROFILE_KEYS)
+        except (OSError, ValueError) as exc:
+            print(f"Error: cannot load profile '{pre_args.profile}': {exc}", file=sys.stderr)
+            sys.exit(1)
+        parser.set_defaults(**profile)
+
+    args = parser.parse_args(raw_argv)
+
+    if args.account_size is None:
+        parser.error("--account-size is required (pass it directly or via --profile)")
+
+    # A profile-supplied risk_pct is a default, not a mode choice — it must not
+    # veto Kelly mode. Only an explicit --risk-pct flag conflicts with --win-rate.
+    if args.win_rate is not None and "risk_pct" in profile and "--risk-pct" not in raw_argv:
+        args.risk_pct = None
 
     # Validate mutual exclusivity
     if args.risk_pct is not None and args.win_rate is not None:

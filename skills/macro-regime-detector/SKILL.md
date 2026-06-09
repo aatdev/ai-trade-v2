@@ -25,11 +25,11 @@ Detect structural macro regime transitions using monthly-frequency cross-asset r
    ```bash
    uv run python3 skills/macro-regime-detector/scripts/macro_regime_detector.py --output-dir reports/
    ```
-   This fetches 600 days of data for 9 ETFs + Treasury rates (~10 API calls total).
-   An **FMP API key is required** to run this skill (the client raises if it is
-   missing). For individual ETFs whose FMP historical-price endpoint returns
-   nothing, the client automatically falls back to yfinance — this fallback
-   needs no additional API key, but it does not remove the FMP key requirement.
+   This fetches 600 days of data for 9 ETFs + Treasury yields via the shared
+   TradingView data layer (`scripts/lib/tv_client.py` — vendored `tv` CLI /
+   TradingView Desktop CDP with a `state/metrics` cache fast path). **No API
+   key is required**; `--api-key` / `FMP_API_KEY` are accepted for backward
+   compatibility but ignored.
 
 3. Read the generated Markdown report and present findings to user.
 
@@ -37,8 +37,8 @@ Detect structural macro regime transitions using monthly-frequency cross-asset r
 
 ## Prerequisites
 
-- **FMP API Key** (required): Set `FMP_API_KEY` environment variable or pass `--api-key`
-- Free tier (250 calls/day) is sufficient (script uses ~10 calls)
+- **No API key required:** data comes from the shared TradingView data layer
+- TradingView Desktop (CDP) reachable, or a fresh `state/metrics` cache, for live bars
 
 ## 6 Components
 
@@ -84,7 +84,7 @@ Detect structural macro regime transitions using monthly-frequency cross-asset r
 python3 macro_regime_detector.py [options]
 
 Options:
-  --api-key KEY       FMP API key (default: $FMP_API_KEY)
+  --api-key KEY       Backward compatibility only; ignored by the TradingView data layer
   --output-dir DIR    Output directory (default: current directory)
   --days N            Days of history to fetch (default: 600)
 ```

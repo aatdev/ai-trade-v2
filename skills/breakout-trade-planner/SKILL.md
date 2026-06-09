@@ -18,6 +18,8 @@ Generate trade plans from VCP screener output following Mark Minervini's breakou
 
 - VCP screener JSON output with `schema_version: "1.0"`
 - No API keys required (works with local JSON files)
+- `--earnings-gate-days` needs network access to the public TradingView scanner
+  (`scanner.tradingview.com`) — same keyless endpoint as tradingview-screener
 - No external skill dependencies (position sizing is built-in)
 
 ## Workflow
@@ -31,6 +33,18 @@ python3 skills/breakout-trade-planner/scripts/plan_breakout_trades.py \
   --input reports/vcp_screener_YYYY-MM-DD.json \
   --account-size 100000 \
   --risk-pct 0.5 \
+  --earnings-gate-days 10 \
+  --time-stop-trading-days 15 \
+  --output-dir reports/
+```
+
+With a parameter profile (recommended for a fixed personal risk setup; explicit
+CLI flags override profile values):
+
+```bash
+python3 skills/breakout-trade-planner/scripts/plan_breakout_trades.py \
+  --input reports/vcp_screener_YYYY-MM-DD.json \
+  --profile trading_profile.json \
   --output-dir reports/
 ```
 
@@ -41,7 +55,8 @@ Read the generated JSON and Markdown reports. Present:
 1. **Actionable Orders** — Pre-breakout candidates with order templates
 2. **Revalidation** — Breakout-state candidates needing live confirmation
 3. **Watchlist** — Developing VCP candidates to monitor
-4. **Rejected/Deferred/Constrained** — Candidates filtered by Gate or portfolio limits
+4. **Blocked (earnings gate)** — Plans suppressed because earnings are within the gate window
+5. **Rejected/Deferred/Constrained** — Candidates filtered by Gate or portfolio limits
 ### Step 3: Explain Trade Plans
 
 For each actionable order, explain:
@@ -67,7 +82,8 @@ Candidates must pass ALL conditions:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| --account-size | (required) | Account equity in dollars |
+| --account-size | (required*) | Account equity in dollars (*or via --profile) |
+| --profile | $TRADING_PROFILE | JSON parameter profile; explicit CLI flags override it |
 | --risk-pct | 0.5 | Base risk % per trade |
 | --max-position-pct | 10.0 | Max single position % |
 | --max-sector-pct | 30.0 | Max sector exposure % |
@@ -76,7 +92,33 @@ Candidates must pass ALL conditions:
 | --stop-buffer-pct | 1.0 | Stop buffer below contraction low |
 | --max-chase-pct | 2.0 | Max chase above pivot |
 | --pivot-buffer-pct | 0.1 | Pivot buffer for buy-stop trigger |
-| --current-exposure-json | None | Existing portfolio exposure |
+| --earnings-gate-days | 0 (off) | Block plans with earnings within N trading days (public TradingView scanner; no key) |
+| --time-stop-trading-days | 0 (off) | Annotate plans: exit if < +1R after N trading days from entry |
+| --current-exposure-json | None | Existing portfolio exposure (e.g. trader-memory-core `heat` output) |
+
+## Earnings Gate
+
+With `--earnings-gate-days N`, the planner queries the public TradingView
+scanner (`earnings_release_next_date`, one POST for the whole batch, no API
+key) and annotates every actionable, revalidation, and watchlist entry with
+`earnings_date` (US-Eastern calendar date), `days_to_earnings` (weekday count,
+holidays ignored — errs on the blocking side), and `earnings_gate`
+(`pass` / `blocked` / `unknown`). Actionable and revalidation plans with a
+report within N trading days (inclusive) move to the `blocked_earnings`
+section and never consume portfolio heat. If the scanner is unreachable, plans
+stay live with `earnings_gate: "unknown"` and an `EARNINGS_GATE_DEGRADED`
+warning — verify dates manually before entry.
+
+## Parameter Profile
+
+`--profile` (or `$TRADING_PROFILE`) points at a JSON file of personal defaults
+shared by the trading scripts (see `trading_profile.example.json` at the repo
+root; copy to a gitignored `trading_profile.json`). Recognized keys here:
+`account_size`, `risk_pct`, `max_position_pct`, `max_sector_pct`,
+`max_portfolio_heat_pct`, `target_r_multiple`, `stop_buffer_pct`,
+`max_chase_pct`, `pivot_buffer_pct`, `earnings_gate_days`,
+`time_stop_trading_days`. Keys used by sibling scripts (e.g. `atr_multiplier`,
+`max_positions`) are skipped silently; unknown keys warn to stderr.
 
 ## Output
 

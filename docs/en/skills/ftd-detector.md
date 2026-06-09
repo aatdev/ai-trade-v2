@@ -14,7 +14,7 @@ permalink: /en/skills/ftd-detector/
 Detects Follow-Through Day (FTD) signals for market bottom confirmation using William O'Neil's methodology. Dual-index tracking (S&P 500 + NASDAQ) with state machine for rally attempt, FTD qualification, and post-FTD health monitoring. Use when user asks about market bottom signals, follow-through days, rally attempts, re-entry timing after corrections, or whether it's safe to increase equity exposure. Complementary to market-top-detector (defensive) - this skill is offensive (bottom confirmation).
 {: .fs-6 .fw-300 }
 
-<span class="badge badge-api">FMP Required</span>
+<span class="badge badge-free">No API</span>
 
 [Download Skill Package (.skill)](https://github.com/tradermonty/claude-trading-skills/raw/main/skill-packages/ftd-detector.skill){: .btn .btn-primary .fs-5 .mb-4 .mb-md-0 .mr-2 }
 [View Source on GitHub](https://github.com/tradermonty/claude-trading-skills/tree/main/skills/ftd-detector){: .btn .fs-5 .mb-4 .mb-md-0 }
@@ -47,16 +47,16 @@ FTD Detector identifies market bottom signals using William O'Neil's Follow-Thro
 
 ## 3. Prerequisites
 
-- **FMP API Key:** Required. Set `FMP_API_KEY` environment variable or pass via `--api-key` flag.
-- **Python 3.8+:** With `requests` library installed.
-- **API Budget:** 4 calls per execution (well within FMP free tier of 250/day).
+- **No API key:** S&P 500 / QQQ data comes from the shared TradingView data layer (`scripts/lib/tv_client.py`); `--api-key` / `FMP_API_KEY` are accepted for backward compatibility but ignored.
+- **TradingView Desktop (CDP)** reachable, or a fresh `state/metrics` cache, for live bars.
+- **Python 3.8+.**
 
 ---
 
 ## 4. Quick Start
 
 ```bash
-python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
+python3 skills/ftd-detector/scripts/ftd_detector.py --output-dir reports/
 ```
 
 ---
@@ -68,11 +68,11 @@ python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
 Run the FTD detector script:
 
 ```bash
-python3 skills/ftd-detector/scripts/ftd_detector.py --api-key $FMP_API_KEY
+python3 skills/ftd-detector/scripts/ftd_detector.py --output-dir reports/
 ```
 
 The script will:
-1. Fetch S&P 500 and QQQ historical data (60+ trading days) from FMP API
+1. Fetch S&P 500 and QQQ historical data (60+ trading days) via the shared TradingView data layer
 2. Fetch current quotes for both indices
 3. Run dual-index state machine (correction → rally → FTD detection)
 4. Assess post-FTD health (distribution days, invalidation, power trend)
@@ -118,7 +118,7 @@ Based on the market state, provide additional guidance:
 
 **Scripts:**
 
-- `skills/ftd-detector/scripts/fmp_client.py`
+- `skills/ftd-detector/scripts/fmp_client.py` (legacy, unused — data flows through `scripts/lib/tv_client.py`)
 - `skills/ftd-detector/scripts/ftd_detector.py`
 - `skills/ftd-detector/scripts/post_ftd_monitor.py`
 - `skills/ftd-detector/scripts/rally_tracker.py`

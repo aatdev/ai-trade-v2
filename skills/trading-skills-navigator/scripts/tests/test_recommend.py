@@ -721,14 +721,17 @@ def test_snapshot_not_drifted_from_ssot(repo_root: Path) -> None:
 def test_resolve_metadata_prefers_ssot(repo_root: Path) -> None:
     md, source = resolve_metadata(repo_root)
     assert source == "ssot"
-    assert len(md["workflows"]) == 5
+    # One workflow entry per manifest — derived, so the count never goes stale.
+    expected = len(list((repo_root / "workflows").glob("*.yaml")))
+    assert len(md["workflows"]) == expected
 
 
-def test_resolve_metadata_falls_back_to_snapshot(tmp_path: Path) -> None:
+def test_resolve_metadata_falls_back_to_snapshot(tmp_path: Path, repo_root: Path) -> None:
     # tmp_path has no skills-index.yaml/workflows -> must use bundled snapshot.
     md, source = resolve_metadata(tmp_path)
     assert source == "snapshot"
-    assert len(md["workflows"]) == 5
+    ssot_md, _ = resolve_metadata(repo_root)
+    assert len(md["workflows"]) == len(ssot_md["workflows"])
 
 
 # ---------------------------------------------------------------------------

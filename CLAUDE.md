@@ -119,7 +119,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 |-------|---------|--------------|--------|-------|
 | **Backtest Expert** | ❌ Not used | ❌ Not used | ❌ Not used | User provides strategy parameters |
 | **Breadth Chart Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
-| **Breakout Trade Planner** | ❌ Not used | ❌ Not used | ❌ Not used | Consumes VCP screener output; pure calculation + Alpaca order templates |
+| **Breakout Trade Planner** | ❌ Not used | ❌ Not used | ❌ Not used | Consumes VCP screener output; pure calculation + Alpaca order templates; Optional earnings-date gate (--earnings-gate-days) via public scanner.tradingview.com; no API key |
 | **CANSLIM Screener** | ✅ Required | ❌ Not used | ❌ Not used | US stock fundamentals via FMP |
 | **Data Quality Checker** | ❌ Not used | ❌ Not used | ❌ Not used | Local markdown validation; works offline |
 | **Dividend Growth Pullback Screener** | ❌ Not used | 🟡 Optional | ❌ Not used | FINVIZ Elite pre-screen widens universe beyond S&P 500 |
@@ -136,18 +136,18 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Edge Strategy Designer** | ❌ Not used | ❌ Not used | ❌ Not used | Converts edge concepts into strategy drafts |
 | **Edge Strategy Reviewer** | ❌ Not used | ❌ Not used | ❌ Not used | Deterministic scoring on local YAML drafts |
 | **Exposure Coach** | ❌ Not used | ❌ Not used | ❌ Not used | Synthesizes signals from other skills; pure calculation |
-| **FTD Detector** | ✅ Required | ❌ Not used | ❌ Not used | Daily QQQ/SPY OHLCV via FMP |
+| **FTD Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Daily S&P 500 / QQQ OHLCV via the shared TradingView data layer; no API key |
 | **Finviz Screener** | ❌ Not used | 🟡 Optional | ❌ Not used | FINVIZ Elite API |
-| **IBD Distribution Day Monitor** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
+| **IBD Distribution Day Monitor** | ❌ Not used | ❌ Not used | ❌ Not used | Daily QQQ/SPY OHLCV via the shared TradingView data layer; no API key |
 | **Institutional Flow Tracker** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **Kanchi Dividend Review Monitor** | 🟡 Optional (Recommended) | ❌ Not used | ❌ Not used | Dividend / price monitoring via FMP |
 | **Kanchi Dividend SOP** | 🟡 Optional (Recommended) | ❌ Not used | ❌ Not used | US dividend stock data via FMP |
 | **Kanchi Dividend US Tax Accounting** | ❌ Not used | ❌ Not used | ❌ Not used | US tax workflow guidance; pure calculation |
-| **Macro Regime Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Cross-asset ratio data via yfinance or local CSV |
+| **Macro Regime Detector** | ❌ Not used | ❌ Not used | ❌ Not used | ETF ratios and treasury yields via the shared TradingView data layer; no API key |
 | **Market Breadth Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | TraderMonty public CSV; no API key required |
 | **Market Environment Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | Global market data via WebSearch / WebFetch; Optional chart image inputs for technical interpretation |
 | **Market News Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Web search / fetch; Optional — reads the live TradingView News Flow tab (headlines + full story bodies) via TradingView Desktop MCP (CDP); applies instrument/country news filters |
-| **Market Top Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Public market data CSVs; no API key required |
+| **Market Top Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Index/ETF/VIX quotes, history and VIX term structure via the shared TradingView data layer; no API key; TraderMonty 200DMA breadth CSV (auto-fetch); 50DMA breadth and put/call entered manually |
 | **Options Strategy Advisor** | 🟡 Optional | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **PEAD Screener** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **Pair Trade Screener** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
@@ -165,19 +165,19 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Skill Integration Tester** | ❌ Not used | ❌ Not used | ❌ Not used | Validates multi-skill workflow contracts |
 | **Stanley Druckenmiller Investment** | ❌ Not used | ❌ Not used | ❌ Not used | Synthesizes outputs from upstream skills; pure calculation |
 | **Strategy Pivot Designer** | ❌ Not used | ❌ Not used | ❌ Not used | Pivot proposal generator; pure calculation |
-| **Swing Short Screener** | ✅ Required | ❌ Not used | ❌ Not used | S&P 500 / custom-universe OHLCV via FMP; offline --fixture mode for testing |
+| **Swing Short Screener** | ❌ Not used | ❌ Not used | ❌ Not used | S&P 500 / custom-universe OHLCV via the shared TradingView data layer; offline --fixture mode for testing |
 | **Technical Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
 | **Theme Detector** | 🟡 Optional | 🟡 Optional (Recommended) | ❌ Not used | Financial Modeling Prep API |
 | **Ticker Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | Live chart reading via TradingView Desktop MCP (CDP); coordinates other installed skills; News background via WebSearch / WebFetch |
 | **Trade Hypothesis Ideator** | ❌ Not used | ❌ Not used | ❌ Not used | Hypothesis generation from journal/data inputs; pure calculation |
 | **Trade Performance Coach** | ❌ Not used | ❌ Not used | ❌ Not used | Works from local trader-memory / postmortem / journal records; no network or paid API required |
-| **Trader Memory Core** | 🟡 Optional | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
+| **Trader Memory Core** | ❌ Not used | ❌ Not used | ❌ Not used | MAE/MFE postmortem prices via the shared TradingView data layer; no API key |
 | **Trading Skills Navigator** | ❌ Not used | ❌ Not used | ❌ Not used | Reads local skills-index.yaml + workflows/*.yaml (or bundled snapshot); no network |
 | **TradingView Screener** | ❌ Not used | ❌ Not used | ❌ Not used | Public scanner.tradingview.com endpoint (All Stocks tab); no API key or auth required |
 | **US Market Bubble Detector** | ❌ Not used | ❌ Not used | ❌ Not used | User provides indicators |
 | **US Stock Analysis** | ❌ Not used | ❌ Not used | ❌ Not used | User provides data |
 | **Uptrend Analyzer** | ❌ Not used | ❌ Not used | ❌ Not used | Monty Uptrend Ratio Dashboard CSV; no API key required |
-| **VCP Screener** | ✅ Required | ❌ Not used | ❌ Not used | S&P 500 OHLCV via FMP |
+| **VCP Screener** | ❌ Not used | ❌ Not used | ❌ Not used | S&P 500 OHLCV via the shared TradingView data layer (vendored tv CLI / metrics cache); no API key |
 | **Value Dividend Screener** | ❌ Not used | 🟡 Optional | ❌ Not used | FINVIZ Elite pre-screen widens universe beyond S&P 500 |
 <!-- skills-index:end name="api-matrix" -->
 

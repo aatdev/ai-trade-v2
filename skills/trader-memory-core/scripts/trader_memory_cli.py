@@ -40,6 +40,7 @@ SUBCOMMAND_TO_SCRIPT = {
     "store": "thesis_store.py",
     "ingest": "thesis_ingest.py",
     "review": "thesis_review.py",
+    "heat": "portfolio_heat.py",
 }
 
 
@@ -57,7 +58,8 @@ def _usage() -> str:
         f"usage: trader_memory_cli.py {{{subs}}} [args...]\n"
         f"  store  -> thesis_store.py   (e.g. store --state-dir state/theses list)\n"
         f"  ingest -> thesis_ingest.py  (register screener output as thesis)\n"
-        f"  review -> thesis_review.py  (review-due / postmortem / summary)"
+        f"  review -> thesis_review.py  (review-due / postmortem / summary)\n"
+        f"  heat   -> portfolio_heat.py (live open-risk ledger from ACTIVE theses)"
     )
 
 

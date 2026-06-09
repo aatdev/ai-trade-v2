@@ -140,6 +140,9 @@ python3 scripts/run_tv_screener.py \
 - `--filters` — comma-separated tokens: `field<op>value` with ops `>`, `>=`,
   `<`, `<=`, `=`, `!=`; ranges `field=lo..hi`; multiselect `field=A|B`;
   value suffixes `K/M/B/T`; right side may be a field name (`close>EMA200`)
+- `--filter-preset` — named filter recipe (`midterm-momentum`); `--filters`
+  tokens are applied on top; the preset also becomes the default
+  `--screen-name` (an explicit `--screen-name` wins)
 - `--sectors` / `--industries` / `--countries` / `--exchanges` —
   comma-separated enum values (TV taxonomy)
 - `--index` — `sp500`, `nasdaq100`, `dow30`, `russell2000`, `russell1000`,
@@ -223,6 +226,21 @@ python3 scripts/run_tv_screener.py \
 python3 scripts/run_tv_screener.py \
   --filters "Candle.Hammer=1,avg_volume>1M,mkt_cap>2B" \
   --columns technicals --output-dir reports/
+```
+
+### Recipe 7: Medium-term Momentum Funnel (built-in preset)
+
+Daily wide funnel for 2-week–3-month swing candidates: liquidity floor
+(`close>15`, `mkt_cap>2B`, `avg_volume>750K`) + Stage-2 structure
+(`close>SMA50`, `close>SMA200`, `SMA50>SMA200`) + momentum
+(`perf_3m>10`, `perf_6m>15`). Feed the resulting tickers to vcp-screener
+as a custom `--universe`.
+
+```bash
+python3 scripts/run_tv_screener.py \
+  --filter-preset midterm-momentum \
+  --exchanges NASDAQ,NYSE \
+  --sort=-perf_3m --limit 60 --output-dir reports/
 ```
 
 ### Iterative refinement

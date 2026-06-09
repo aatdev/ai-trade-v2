@@ -23,7 +23,9 @@ Do NOT use this skill to:
 - Symbols (default: QQQ, SPY) and lookback (default 80 trading sessions).
 - Optional `--as-of YYYY-MM-DD` for backtesting against a historical session.
 - Strategy context: instrument (TQQQ or QQQ), current exposure %, base trailing stop %.
-- FMP API key via `--api-key`, `config.data.api_key`, or `FMP_API_KEY` env var (in that priority order).
+- No API key required: OHLCV comes from the shared TradingView data layer
+  (`scripts/lib/tv_client.py`). `--api-key` / `config.data.api_key` /
+  `FMP_API_KEY` are still accepted for backward compatibility but ignored.
 
 ## Core Rules
 A Distribution Day is detected when:
@@ -61,7 +63,7 @@ When both QQQ and SPY are loaded, QQQ-weighted overall logic applies (TQQQ-aware
 QQQ uses a less aggressive policy (HIGH=75%, SEVERE=50%) since it lacks 3x leverage.
 
 ## Workflow
-1. Load OHLCV for the configured symbols via FMP (`get_historical_prices`).
+1. Load OHLCV for the configured symbols via the shared TradingView data layer (`get_historical_prices`).
 2. Validate data quality; record skipped sessions in audit.
 3. Rebase via `prepare_effective_history` so `effective_history[0]` is the evaluation session.
 4. Detect raw Distribution Days; enrich with `high_since`, invalidation event, and status.
@@ -96,7 +98,9 @@ python3 skills/ibd-distribution-day-monitor/scripts/ibd_monitor.py \
 ```
 
 ## API Requirements
-FMP API key required. Free tier (250 calls/day) is sufficient for daily QQQ + SPY runs.
+No API key required — daily QQQ/SPY bars come from the shared TradingView data
+layer (vendored `tv` CLI via TradingView Desktop/CDP, with a `state/metrics`
+cache fast path).
 
 ## Related Skills
 - `ftd-detector`: Bottom confirmation via Follow-Through Days (counterpart of this top-side signal).

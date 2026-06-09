@@ -2,7 +2,25 @@
 
 from unittest.mock import MagicMock
 
+import ibd_monitor
 from data_loader import normalize_history, validate_history_quality
+
+
+class TestResolveApiKey:
+    """The key is optional — the TradingView data layer ignores it."""
+
+    def test_no_key_anywhere_returns_none(self, monkeypatch):
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+        assert ibd_monitor.resolve_api_key(None, {}) is None
+
+    def test_cli_key_wins_over_config_and_env(self, monkeypatch):
+        monkeypatch.setenv("FMP_API_KEY", "env-key")
+        config = {"data": {"api_key": "cfg-key"}}
+        assert ibd_monitor.resolve_api_key("cli-key", config) == "cli-key"
+
+    def test_env_key_used_as_fallback(self, monkeypatch):
+        monkeypatch.setenv("FMP_API_KEY", "env-key")
+        assert ibd_monitor.resolve_api_key(None, {}) == "env-key"
 
 
 def _row(date, close, volume=1_000_000, high=None, low=None, open_=None):

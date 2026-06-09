@@ -36,12 +36,15 @@ Unlike the Bubble Detector (macro/multi-month evaluation), this skill focuses on
 ## Prerequisites
 
 **Required:**
-- **FMP API Key:** Set `$FMP_API_KEY` environment variable or pass `--api-key`. Free tier sufficient (~33 API calls per execution).
+- **No API key:** index/ETF/VIX quotes and history come from the shared
+  TradingView data layer (`scripts/lib/tv_client.py`); `--api-key` /
+  `$FMP_API_KEY` are accepted for backward compatibility but ignored.
+- **TradingView Desktop (CDP)** reachable, or a fresh `state/metrics` cache, for live bars.
 - **WebSearch Access:** Required to collect S&P 500 breadth (50DMA %) and CBOE Put/Call ratio data.
 
 **Optional:**
 - **Margin Debt Data:** Enhances sentiment scoring but typically 1-2 months lagged.
-- **VIX Term Structure:** Auto-detected from FMP API if VIX3M quote available; manual override via `--vix-term`.
+- **VIX Term Structure:** Auto-detected via the TradingView data layer (VIX/VIX3M); manual override via `--vix-term`.
 
 **Data Freshness:** All manually collected data should be from the most recent 3 business days for accurate analysis.
 
@@ -90,7 +93,7 @@ Before running the Python script, collect the following data using WebSearch.
    Values: steep_contango / contango / flat / backwardation
    Primary search: "VIX VIX3M ratio term structure today"
    Fallback: "VIX futures term structure contango backwardation"
-   Note: Auto-detected from FMP API if VIX3M quote available.
+   Note: Auto-detected via the TradingView data layer (VIX/VIX3M quotes).
    CLI --vix-term overrides auto-detection.
 
 5. [OPTIONAL] Margin Debt YoY %
@@ -105,7 +108,6 @@ Run the script with collected data as CLI arguments:
 
 ```bash
 python3 skills/market-top-detector/scripts/market_top_detector.py \
-  --api-key $FMP_API_KEY \
   --breadth-50dma [VALUE] --breadth-50dma-date [YYYY-MM-DD] \
   --put-call [VALUE] --put-call-date [YYYY-MM-DD] \
   --vix-term [steep_contango|contango|flat|backwardation] \
@@ -118,7 +120,7 @@ python3 skills/market-top-detector/scripts/market_top_detector.py \
 ```
 
 The script will:
-1. Fetch S&P 500, QQQ, VIX quotes and history from FMP API
+1. Fetch S&P 500, QQQ, VIX quotes and history via the shared TradingView data layer
 2. Fetch Leading ETF (ARKK, WCLD, IGV, XBI, SOXX, SMH, KWEB, TAN) data
 3. Fetch Sector ETF (XLU, XLP, XLV, VNQ, XLK, XLC, XLY) data
 4. Calculate all 6 components

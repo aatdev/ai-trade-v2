@@ -43,6 +43,11 @@
           "id": "local_calculation",
           "requirement": "not_required",
           "type": "calculation"
+        },
+        {
+          "id": "tradingview",
+          "requirement": "not_required",
+          "type": "market_data"
         }
       ],
       "status": "production",
@@ -333,8 +338,8 @@
       "id": "ftd-detector",
       "integrations": [
         {
-          "id": "fmp",
-          "requirement": "required",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -349,8 +354,8 @@
       "id": "ibd-distribution-day-monitor",
       "integrations": [
         {
-          "id": "fmp",
-          "requirement": "required",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -429,8 +434,8 @@
       "id": "macro-regime-detector",
       "integrations": [
         {
-          "id": "yfinance_or_csv",
-          "requirement": "recommended",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -485,6 +490,11 @@
           "id": "websearch",
           "requirement": "required",
           "type": "web"
+        },
+        {
+          "id": "tradingview",
+          "requirement": "optional",
+          "type": "mcp"
         }
       ],
       "status": "production",
@@ -497,6 +507,11 @@
       "display_name": "Market Top Detector",
       "id": "market-top-detector",
       "integrations": [
+        {
+          "id": "tradingview",
+          "requirement": "not_required",
+          "type": "market_data"
+        },
         {
           "id": "public_csv",
           "requirement": "required",
@@ -606,6 +621,22 @@
       ],
       "status": "production",
       "summary": "Calculate risk-based position sizes for long stock trades.",
+      "timeframe": "event-driven"
+    },
+    {
+      "category": "meta",
+      "difficulty": "beginner",
+      "display_name": "Save Note",
+      "id": "save-note",
+      "integrations": [
+        {
+          "id": "local_file",
+          "requirement": "required",
+          "type": "local_file"
+        }
+      ],
+      "status": "production",
+      "summary": "Save a result, note, report, or artifact into the personal MyNotes knowledge base, auto-classifying category and subcategory.",
       "timeframe": "event-driven"
     },
     {
@@ -775,8 +806,8 @@
       "id": "swing-short-screener",
       "integrations": [
         {
-          "id": "fmp",
-          "requirement": "required",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -881,8 +912,8 @@
       "id": "trader-memory-core",
       "integrations": [
         {
-          "id": "fmp",
-          "requirement": "optional",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -998,8 +1029,8 @@
       "id": "vcp-screener",
       "integrations": [
         {
-          "id": "fmp",
-          "requirement": "required",
+          "id": "tradingview",
+          "requirement": "not_required",
           "type": "market_data"
         }
       ],
@@ -1292,6 +1323,36 @@
       "target_users": [
         "part-time-swing-trader",
         "long-term-investor",
+        "growth-investor"
+      ]
+    },
+    {
+      "api_profile": "mixed",
+      "cadence": "weekly",
+      "difficulty": "intermediate",
+      "display_name": "Value Research & Buy Recommendation (Weekly)",
+      "estimated_minutes": 75,
+      "id": "value-research-buy-weekly",
+      "optional_skills": [
+        "value-dividend-screener",
+        "dividend-growth-pullback-screener",
+        "canslim-screener",
+        "earnings-calendar",
+        "institutional-flow-tracker",
+        "technical-analyst"
+      ],
+      "prerequisite_workflows": [
+        "market-regime-daily"
+      ],
+      "required_skills": [
+        "tradingview-screener",
+        "us-stock-analysis",
+        "position-sizer",
+        "trader-memory-core"
+      ],
+      "target_users": [
+        "long-term-investor",
+        "dividend-investor",
         "growth-investor"
       ]
     }

@@ -70,7 +70,7 @@ def compute_mae_mfe(thesis: dict, price_adapter: Any | None = None) -> dict[str,
 
     result["mae_pct"] = round(mae_pct, 2)
     result["mfe_pct"] = round(mfe_pct, 2)
-    result["mae_mfe_source"] = "fmp_eod"
+    result["mae_mfe_source"] = getattr(price_adapter, "source", "fmp_eod")
 
     return result
 
@@ -291,7 +291,17 @@ if __name__ == "__main__":
         results = thesis_store.list_review_due(Path(args.state_dir), as_of)
         print(json.dumps(results, indent=2))
     elif args.command == "postmortem":
-        path = generate_postmortem(args.thesis_id, args.state_dir, journal_dir=args.journal_dir)
+        # MAE/MFE via the shared TradingView data layer (no API key). The
+        # adapter is lazy: if the TV bridge is unreachable, compute_mae_mfe
+        # degrades to null metrics instead of failing the postmortem.
+        from tv_price_adapter import TVPriceAdapter
+
+        path = generate_postmortem(
+            args.thesis_id,
+            args.state_dir,
+            price_adapter=TVPriceAdapter(),
+            journal_dir=args.journal_dir,
+        )
         print(f"Postmortem generated: {path}")
     elif args.command == "summary":
         s = summary_stats(args.state_dir)

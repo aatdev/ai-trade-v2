@@ -434,3 +434,74 @@ class TestMain:
     def test_index_only_is_enough(self, capsys):
         rc = tvs.main(["--index", "sp500", "--dry-run"])
         assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# Filter presets (--filter-preset)
+# ---------------------------------------------------------------------------
+
+
+class TestFilterPreset:
+    def test_every_preset_token_parses(self):
+        assert "midterm-momentum" in tvs.FILTER_PRESETS
+        for name, spec in tvs.FILTER_PRESETS.items():
+            for token in tvs._csv(spec):
+                tvs.parse_filter_token(token)  # must not raise
+
+    def test_preset_alone_satisfies_criteria_check(self, capsys):
+        rc = tvs.main(["--filter-preset", "midterm-momentum", "--dry-run"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        lefts = [f["left"] for f in payload["filter"]]
+        rights = [f["right"] for f in payload["filter"]]
+        assert "market_cap_basic" in lefts
+        assert 2_000_000_000.0 in rights  # mkt_cap>2B
+        assert 750_000.0 in rights  # avg_volume>750K
+        assert "SMA50" in rights and "SMA200" in rights  # Stage-2 structure
+
+    def test_unknown_preset_exits_1(self, capsys):
+        rc = tvs.main(["--filter-preset", "no-such-preset", "--dry-run"])
+        assert rc == 1
+        assert "preset" in capsys.readouterr().err.lower()
+
+    def test_user_filters_append_on_top_of_preset(self, capsys):
+        rc = tvs.main(["--filter-preset", "midterm-momentum", "--filters", "pe<20", "--dry-run"])
+        assert rc == 0
+        payload = json.loads(capsys.readouterr().out)
+        lefts = [f["left"] for f in payload["filter"]]
+        assert "price_earnings_ttm" in lefts
+        assert "market_cap_basic" in lefts
+
+    def test_preset_sets_default_screen_name(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tvs, "run_scan", lambda *a, **k: CANNED_RESPONSE)
+        rc = tvs.main(
+            [
+                "--filter-preset",
+                "midterm-momentum",
+                "--columns",
+                "name,close,market_cap_basic",
+                "--output-dir",
+                str(tmp_path),
+            ]
+        )
+        assert rc == 0
+        assert any("midterm-momentum" in f.name for f in tmp_path.iterdir())
+
+    def test_explicit_screen_name_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(tvs, "run_scan", lambda *a, **k: CANNED_RESPONSE)
+        rc = tvs.main(
+            [
+                "--filter-preset",
+                "midterm-momentum",
+                "--screen-name",
+                "custom",
+                "--columns",
+                "name,close,market_cap_basic",
+                "--output-dir",
+                str(tmp_path),
+            ]
+        )
+        assert rc == 0
+        names = [f.name for f in tmp_path.iterdir()]
+        assert any("custom" in n for n in names)
+        assert not any("midterm-momentum" in n for n in names)

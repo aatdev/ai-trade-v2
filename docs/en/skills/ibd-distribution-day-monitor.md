@@ -46,20 +46,20 @@ IBD Distribution Day Monitor automates the single most actionable signal in Will
 - TQQQ exposure policy (100 / 75 / 50 / 25%) with progressively tighter trailing stops; QQQ uses a less aggressive variant
 - UTF-8 output (`ensure_ascii=False`); API keys redacted automatically in audit snapshots
 
-<span class="badge badge-api">FMP Required</span>
+<span class="badge badge-free">No API</span>
 
 ---
 
 ## 2. Prerequisites
 
-- **API Key:** [Financial Modeling Prep (FMP)](https://site.financialmodelingprep.com/developer/docs) — free tier (250 calls/day) is sufficient for daily QQQ + SPY runs.
+- **API Key:** None — daily QQQ/SPY OHLCV comes from the shared TradingView data layer (`scripts/lib/tv_client.py`).
 - **Python 3.9+:** Standard library plus `requests` (already installed) and `pyyaml` (already in `pyproject.toml` dependencies).
 - **No pandas dependency:** All OHLCV is processed as `list[dict]` for portability and speed.
 
-> Set the API key once via environment variable: `export FMP_API_KEY=your_key_here`. The skill's resolution order is `--api-key` flag > `data.api_key` in config > `FMP_API_KEY` env var, so a CLI override always wins.
+> No API key is needed. `--api-key` / config `data.api_key` / `FMP_API_KEY` are still accepted for backward compatibility (resolution: CLI > config > env), but the TradingView data layer ignores them.
 {: .tip }
 
-> The Distribution Day rule itself does not require any market structure assumptions, so the skill works on any liquid US equity ETF / index that FMP supports. Defaults are tuned for QQQ + SPY.
+> The Distribution Day rule itself does not require any market structure assumptions, so the skill works on any liquid US equity ETF / index that the TradingView data layer serves. Defaults are tuned for QQQ + SPY.
 {: .note }
 
 ---
@@ -69,8 +69,6 @@ IBD Distribution Day Monitor automates the single most actionable signal in Will
 Run the script with default settings:
 
 ```bash
-export FMP_API_KEY=your_key_here
-
 python3 skills/ibd-distribution-day-monitor/scripts/ibd_monitor.py \
   --symbols QQQ,SPY \
   --lookback-days 80 \
@@ -91,7 +89,7 @@ You can also invoke it conversationally inside Claude Code: "Run the IBD Distrib
 ```
 +-----------------+   +-----------------------+   +-----------------------+
 | 1. Fetch OHLCV  |-->| 2. as_of normalization|-->| 3. Detect DDs         |
-|   (FMP per sym) |   |   prepare_effective_  |   |  pct_change <= -0.002 |
+|   (TV per sym)  |   |   prepare_effective_  |   |  pct_change <= -0.002 |
 +-----------------+   |   history             |   |  AND volume up        |
                       +-----------------------+   +-----------+-----------+
                                                               |
@@ -107,7 +105,7 @@ You can also invoke it conversationally inside Claude Code: "Run the IBD Distrib
 +-----------------+   +-----------------------+
 ```
 
-1. **Fetch OHLCV** — Each symbol is requested with `lookback_days + 5` extra sessions so that the 50SMA filter has enough history. The `fmp_client.py` truncates correctly per Issue #64 fix.
+1. **Fetch OHLCV** — Each symbol is requested with `lookback_days + 5` extra sessions so that the 50SMA filter has enough history. The TradingView data layer truncates correctly per Issue #64 fix.
 2. **`as_of` normalization** — Either today (default) or the user-supplied `--as-of YYYY-MM-DD` is rebased so that `effective_history[0]` is always the evaluation session. No `as_of_index` is plumbed through downstream modules; this keeps tracker code simple.
 3. **DD detection** — For each consecutive pair, `pct_change <= -0.002 + EPSILON` and volume up. Sessions with missing or non-positive close/volume are skipped and recorded as `skipped_sessions` in the audit.
 4. **Enrichment** — Each raw DD becomes a full record:

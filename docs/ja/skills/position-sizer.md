@@ -58,6 +58,7 @@ Position Sizerは、「何株買うべきか？」という問いに対し、リ
 | Python 3.9+ | 必須 | スクリプト実行用 |
 | APIキー | 不要 | 純粋な計算ツール |
 | インターネット接続 | 不要 | 完全オフライン動作 |
+| パラメータプロファイル | 任意 | `--profile trading_profile.json`（または `$TRADING_PROFILE`）で `account_size` / `risk_pct` / `max_position_pct` / `max_sector_pct` / `atr_multiplier` の個人デフォルトを供給。明示的な CLI フラグが常に優先。テンプレート: リポジトリ直下の `trading_profile.example.json` |
 
 追加のPythonパッケージのインストールは不要です（標準ライブラリのみ使用）。
 

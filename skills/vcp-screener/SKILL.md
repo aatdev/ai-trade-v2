@@ -16,9 +16,11 @@ Screen S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP),
 
 ## Prerequisites
 
-- FMP API key (set `FMP_API_KEY` environment variable or pass `--api-key`)
-- Free tier (250 calls/day) is sufficient for default screening (top 100 candidates)
-- Paid tier recommended for full S&P 500 screening (`--full-sp500`)
+- No API key required: OHLCV comes from the shared TradingView data layer
+  (`scripts/lib/tv_client.py` — vendored `tv` CLI via TradingView Desktop/CDP,
+  with a `state/metrics` cache fast path). `--api-key` / `FMP_API_KEY` is still
+  accepted for backward compatibility but ignored by the TradingView bridge.
+- TradingView Desktop (CDP) reachable, or a fresh metrics cache, for live data
 
 ## Workflow
 

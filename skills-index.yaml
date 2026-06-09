@@ -62,6 +62,10 @@ skills:
     type: calculation
     requirement: not_required
     note: Consumes VCP screener output; pure calculation + Alpaca order templates
+  - id: tradingview
+    type: market_data
+    requirement: not_required
+    note: Optional earnings-date gate (--earnings-gate-days) via public scanner.tradingview.com; no API key
   inputs:
   - vcp_candidates
   - account_size
@@ -414,10 +418,10 @@ skills:
   timeframe: daily
   difficulty: intermediate
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
-    requirement: required
-    note: Daily QQQ/SPY OHLCV via FMP
+    requirement: not_required
+    note: Daily S&P 500 / QQQ OHLCV via the shared TradingView data layer; no API key
   inputs:
   - sp500_ohlcv
   - nasdaq_ohlcv
@@ -434,10 +438,10 @@ skills:
   timeframe: daily
   difficulty: intermediate
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
-    requirement: required
-    note: Financial Modeling Prep API
+    requirement: not_required
+    note: Daily QQQ/SPY OHLCV via the shared TradingView data layer; no API key
   inputs:
   - qqq_ohlcv
   - spy_ohlcv
@@ -531,10 +535,10 @@ skills:
   timeframe: weekly
   difficulty: advanced
   integrations:
-  - id: yfinance_or_csv
+  - id: tradingview
     type: market_data
-    requirement: recommended
-    note: Cross-asset ratio data via yfinance or local CSV
+    requirement: not_required
+    note: ETF ratios and treasury yields via the shared TradingView data layer; no API key
   inputs:
   - cross_asset_ratios
   - yield_curve_data
@@ -616,10 +620,14 @@ skills:
   timeframe: daily
   difficulty: intermediate
   integrations:
+  - id: tradingview
+    type: market_data
+    requirement: not_required
+    note: Index/ETF/VIX quotes, history and VIX term structure via the shared TradingView data layer; no API key
   - id: public_csv
     type: local_file
     requirement: required
-    note: Public market data CSVs; no API key required
+    note: TraderMonty 200DMA breadth CSV (auto-fetch); 50DMA breadth and put/call entered manually
   inputs:
   - public_market_data_csv
   outputs:
@@ -964,10 +972,10 @@ skills:
   timeframe: daily
   difficulty: advanced
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
-    requirement: required
-    note: S&P 500 / custom-universe OHLCV via FMP; offline --fixture mode for testing
+    requirement: not_required
+    note: S&P 500 / custom-universe OHLCV via the shared TradingView data layer; offline --fixture mode for testing
   inputs:
   - sp500_ohlcv
   outputs:
@@ -1098,10 +1106,10 @@ skills:
   timeframe: event-driven
   difficulty: beginner
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
-    requirement: optional
-    note: Financial Modeling Prep API
+    requirement: not_required
+    note: MAE/MFE postmortem prices via the shared TradingView data layer; no API key
   inputs:
   - screener_report
   - trade_actions
@@ -1248,10 +1256,10 @@ skills:
   timeframe: daily
   difficulty: intermediate
   integrations:
-  - id: fmp
+  - id: tradingview
     type: market_data
-    requirement: required
-    note: S&P 500 OHLCV via FMP
+    requirement: not_required
+    note: S&P 500 OHLCV via the shared TradingView data layer (vendored tv CLI / metrics cache); no API key
   inputs:
   - sp500_ohlcv
   outputs:

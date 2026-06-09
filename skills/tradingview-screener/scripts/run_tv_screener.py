@@ -435,6 +435,22 @@ def _build_filter2(universe: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Filter presets — reusable, measurable screen recipes
+# ---------------------------------------------------------------------------
+
+FILTER_PRESETS: dict[str, str] = {
+    # Medium-term (2 weeks – 3 months) long-momentum funnel:
+    # liquidity floor + Stage-2 trend structure + 3/6-month momentum.
+    # Pair with `--exchanges NASDAQ,NYSE --sort -perf_3m`.
+    "midterm-momentum": (
+        "close>15,mkt_cap>2B,avg_volume>750K,"
+        "close>SMA50,close>SMA200,SMA50>SMA200,"
+        "perf_3m>10,perf_6m>15"
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Filter token parsing
 # ---------------------------------------------------------------------------
 
@@ -841,6 +857,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Comma-separated filter tokens (e.g. 'mkt_cap>10B,pe<20,div_yield=3..8').",
     )
+    parser.add_argument(
+        "--filter-preset",
+        default=None,
+        help=(
+            f"Named filter preset ({', '.join(sorted(FILTER_PRESETS))}); "
+            "--filters tokens are applied on top of the preset."
+        ),
+    )
     parser.add_argument("--sectors", default=None, help="Comma-separated TV sector names.")
     parser.add_argument("--industries", default=None, help="Comma-separated TV industry names.")
     parser.add_argument("--countries", default=None, help="Comma-separated country names.")
@@ -908,6 +932,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     filters = _csv(args.filters)
+    if args.filter_preset:
+        preset = FILTER_PRESETS.get(args.filter_preset)
+        if preset is None:
+            print(
+                f"Error: unknown filter preset '{args.filter_preset}'. "
+                f"Choose from: {', '.join(sorted(FILTER_PRESETS))}.",
+                file=sys.stderr,
+            )
+            return 1
+        filters = _csv(preset) + filters
+        if args.screen_name == "scan":
+            args.screen_name = args.filter_preset
     sectors = _csv(args.sectors)
     industries = _csv(args.industries)
     countries = _csv(args.countries)
