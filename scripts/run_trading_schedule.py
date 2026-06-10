@@ -136,6 +136,31 @@ def load_env_file(path: Path = ENV_FILE) -> None:
             os.environ.setdefault(key, value.strip().strip("'\""))
 
 
+# Homebrew / user-local bin dirs that cron drops (it starts with
+# PATH=/usr/bin:/bin). The vendored `tv` CLI shells out to `node`, and the
+# claude CLI lives under ~/.local/bin, so neither is reachable otherwise. A
+# bare `PATH=...` line in .env cannot fix this because load_env_file() uses
+# setdefault and cron already exports PATH — the prepend must happen in code.
+_RUNTIME_BIN_DIRS = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    str(Path.home() / ".local" / "bin"),
+)
+
+
+def ensure_runtime_path() -> None:
+    """Prepend known Homebrew / user-local bin dirs to PATH (idempotent).
+
+    Keeps subprocesses we spawn (the `tv`/`node` data layer, the headless
+    `claude` workflows, skill scripts) able to find their executables when the
+    scheduler runs under cron/launchd, which start with a minimal PATH.
+    """
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    missing = [d for d in _RUNTIME_BIN_DIRS if d not in parts and os.path.isdir(d)]
+    if missing:
+        os.environ["PATH"] = os.pathsep.join([*missing, *parts])
+
+
 # --------------------------------------------------------------------------- #
 # Trading data layout ($TRADING_DATE_DIR)
 #
@@ -150,6 +175,7 @@ def load_env_file(path: Path = ENV_FILE) -> None:
 #   logs/       schedule + autopilot logs and state
 # --------------------------------------------------------------------------- #
 load_env_file()  # the path constants below depend on TRADING_DATE_DIR
+ensure_runtime_path()  # cron PATH=/usr/bin:/bin can't see node/tv/claude
 
 
 def _resolve_trading_data_dir() -> Path:
