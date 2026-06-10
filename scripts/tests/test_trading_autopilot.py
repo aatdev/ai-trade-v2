@@ -292,3 +292,36 @@ class TestMain:
         rc = ap.main(["--now", f"{TUE}T15:05:00", "--no-telegram"])
         assert rc == 0
         assert calls["slots"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Telegram delivery under cron (bare environment + .env credentials)
+# --------------------------------------------------------------------------- #
+class TestSendTelegram:
+    def test_invokes_script_when_creds_present(self, monkeypatch):
+        captured = {}
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+        monkeypatch.setattr(ap.subprocess, "run", lambda cmd, **kw: captured.setdefault("cmd", cmd))
+        ap.send_telegram("hello")
+        assert str(ap.TELEGRAM_SCRIPT) in captured["cmd"]
+        assert "hello" in captured["cmd"]
+
+    def test_skips_without_creds(self, monkeypatch):
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        called = []
+        monkeypatch.setattr(ap.subprocess, "run", lambda *a, **k: called.append(a))
+        ap.send_telegram("hello")
+        assert called == []
+
+
+def test_main_loads_env_file(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(ap, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(ap, "RUN_LOG_DIR", tmp_path / "runs")
+    monkeypatch.setattr(ap, "LOCK_FILE", tmp_path / "ap.lock")
+    monkeypatch.setattr(ap.schedule, "load_env_file", lambda *a, **k: called.append(True))
+    rc = ap.main(["--now", f"{TUE}T09:00:00", "--no-telegram"])
+    assert rc == 0
+    assert called == [True]

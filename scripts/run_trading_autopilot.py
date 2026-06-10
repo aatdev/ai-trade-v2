@@ -342,6 +342,10 @@ def main(argv: list[str] | None = None) -> int:
         now = dt.datetime.now()
     date_str = now.date().isoformat()
 
+    # cron starts with a bare environment; pull Telegram creds / CLAUDE_BIN
+    # from the gitignored .env (also inherited by the schedule subprocess).
+    schedule.load_env_file()
+
     run_log = RunLog(RUN_LOG_DIR / f"autopilot_{now.strftime('%Y-%m-%d_%H%M%S')}.log")
     prune_old_run_logs(RUN_LOG_DIR)
 

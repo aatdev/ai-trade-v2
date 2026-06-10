@@ -3,6 +3,7 @@
 import datetime as dt
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "run_trading_schedule.py"
@@ -220,3 +221,74 @@ def test_monthly_msg_has_rules_and_action():
     assert "🧭 ПРАВИЛА НА СЛЕД. МЕСЯЦ" in msg
     assert "• tighter stops" in msg
     assert "monthly/2026-06.md" in msg
+
+
+# --------------------------------------------------------------------------- #
+# .env loading (cron/launchd start with a bare environment)
+# --------------------------------------------------------------------------- #
+class TestLoadEnvFile:
+    def test_parses_export_and_plain_lines(self, tmp_path):
+        env = tmp_path / ".env"
+        env.write_text(
+            "# comment\n"
+            "export _TS_TEST_TOKEN=abc:123\n"
+            "_TS_TEST_CHAT='-10042'\n"
+            "\n"
+            "not a key value line\n"
+        )
+        os.environ.pop("_TS_TEST_TOKEN", None)
+        os.environ.pop("_TS_TEST_CHAT", None)
+        try:
+            ts.load_env_file(env)
+            assert os.environ["_TS_TEST_TOKEN"] == "abc:123"
+            assert os.environ["_TS_TEST_CHAT"] == "-10042"
+        finally:
+            os.environ.pop("_TS_TEST_TOKEN", None)
+            os.environ.pop("_TS_TEST_CHAT", None)
+
+    def test_existing_environment_wins(self, tmp_path, monkeypatch):
+        env = tmp_path / ".env"
+        env.write_text("export _TS_TEST_TOKEN=from_file\n")
+        monkeypatch.setenv("_TS_TEST_TOKEN", "from_shell")
+        ts.load_env_file(env)
+        assert os.environ["_TS_TEST_TOKEN"] == "from_shell"
+
+    def test_missing_file_is_noop(self, tmp_path):
+        ts.load_env_file(tmp_path / "absent.env")  # must not raise
+
+
+def test_main_loads_env_file(monkeypatch):
+    called = []
+    monkeypatch.setattr(ts, "load_env_file", lambda *a, **k: called.append(True))
+    rc = ts.main(["--slot", "premarket", "--date", "2026-01-01", "--dry-run", "--no-telegram"])
+    assert rc == 0
+    assert called == [True]
+
+
+# --------------------------------------------------------------------------- #
+# claude CLI resolution (cron PATH lacks ~/.local/bin)
+# --------------------------------------------------------------------------- #
+class TestResolveClaudeBin:
+    def test_env_override_wins(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BIN", "/opt/custom/claude")
+        assert ts.resolve_claude_bin() == "/opt/custom/claude"
+
+    def test_found_on_path(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BIN", raising=False)
+        monkeypatch.setattr(ts.shutil, "which", lambda name: "/somewhere/claude")
+        assert ts.resolve_claude_bin() == "claude"
+
+    def test_falls_back_to_known_locations(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("CLAUDE_BIN", raising=False)
+        monkeypatch.setattr(ts.shutil, "which", lambda name: None)
+        fake = tmp_path / "claude"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        monkeypatch.setattr(ts, "CLAUDE_FALLBACK_PATHS", [fake])
+        assert ts.resolve_claude_bin() == str(fake)
+
+    def test_nothing_found_returns_bare_name(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BIN", raising=False)
+        monkeypatch.setattr(ts.shutil, "which", lambda name: None)
+        monkeypatch.setattr(ts, "CLAUDE_FALLBACK_PATHS", [])
+        assert ts.resolve_claude_bin() == "claude"

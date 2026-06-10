@@ -43,12 +43,14 @@ import json
 import logging
 import logging.handlers
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = PROJECT_ROOT / ".env"
 WORKFLOWS_DIR = PROJECT_ROOT / "workflows"
 SCHEDULE_DIR = PROJECT_ROOT / "reports" / "schedule"
 LOG_FILE = PROJECT_ROOT / "logs" / "trading_schedule.log"
@@ -94,6 +96,53 @@ US_MARKET_HOLIDAYS = {
     "2027-11-25",
     "2027-12-24",
 }
+
+
+# --------------------------------------------------------------------------- #
+# Environment (cron/launchd start with a bare environment)
+# --------------------------------------------------------------------------- #
+def load_env_file(path: Path = ENV_FILE) -> None:
+    """Load ``KEY=VALUE`` / ``export KEY=VALUE`` lines into ``os.environ``.
+
+    Telegram credentials and API keys live in the gitignored ``.env``;
+    scheduled runs (cron/launchd) never source it, so they would otherwise
+    silently skip Telegram. Variables already in the environment always win.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key:
+            os.environ.setdefault(key, value.strip().strip("'\""))
+
+
+# Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
+CLAUDE_FALLBACK_PATHS = [
+    Path.home() / ".local" / "bin" / "claude",
+    Path("/opt/homebrew/bin/claude"),
+    Path("/usr/local/bin/claude"),
+]
+
+
+def resolve_claude_bin() -> str:
+    """Locate the claude CLI: $CLAUDE_BIN > PATH > known install dirs."""
+    override = os.environ.get("CLAUDE_BIN")
+    if override:
+        return override
+    if shutil.which("claude"):
+        return "claude"
+    for candidate in CLAUDE_FALLBACK_PATHS:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return "claude"  # let run_claude surface the launch error
 
 
 # --------------------------------------------------------------------------- #
@@ -188,11 +237,12 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
     """Run one workflow headlessly via ``claude -p``. Returns success bool.
 
     Configurable via env:
-      CLAUDE_BIN                        path to the claude CLI (default "claude")
+      CLAUDE_BIN                        path to the claude CLI (default: PATH,
+                                        then known install dirs)
       TRADING_SCHEDULE_PERMISSION_MODE  --permission-mode value (default bypassPermissions)
       TRADING_SCHEDULE_CLAUDE_FLAGS     extra space-separated flags appended verbatim
     """
-    claude_bin = os.environ.get("CLAUDE_BIN", "claude")
+    claude_bin = resolve_claude_bin()
     perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
     cmd = [claude_bin, "-p", prompt, "--permission-mode", perm_mode, "--output-format", "text"]
     extra = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "").split()
@@ -651,6 +701,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     setup_logging(verbose=args.verbose)
+    load_env_file()
     run_started = time.monotonic()
 
     if args.date:
