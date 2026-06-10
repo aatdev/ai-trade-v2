@@ -1,33 +1,45 @@
 #!/usr/bin/env python3
-"""Trading autopilot — hourly self-dispatching wrapper over run_trading_schedule.py.
+"""Trading autopilot — self-dispatching wrapper over run_trading_schedule.py.
 
-Designed to be fired every hour (or more often) by cron/launchd. Each run:
+Designed to be fired every 15 minutes by cron/launchd
+(``*/15 * * * *`` — the intraday monitor needs that cadence; all other slots
+simply dedupe themselves). Each run:
 
   1. Looks at the clock (CET wall time), the US trading calendar, and its own
      state file, and decides which scheduled step — if any — is due:
-       * ``premarket``     window 15:00–21:00 CET on US trading days
-       * ``evening-prep``  window 22:15–23:59 CET on US trading days
-       * ``monthly``       first Sunday of the month, from 11:00 CET
+       * ``premarket``     window 15:00–21:00 CET on US trading days (once)
+       * ``intraday``      window 15:30–22:00 CET on US trading days,
+                           repeatable every INTRADAY_INTERVAL_MIN minutes:
+                           headless quote check that fires OPEN / CLOSE-type
+                           signals (auto mode)
+       * ``evening-prep``  window 22:15–23:59 CET on US trading days (once)
+       * ``weekly``        Saturday from 12:00 CET (once)
+       * ``monthly``       first Sunday of the month, from 11:00 CET (once)
   2. Executes the step by delegating to ``run_trading_schedule.py --slot ...``
-     (the battle-tested orchestrator: claude -p workflows, gate files,
-     Telegram digests).
+     (the battle-tested orchestrator: claude -p workflows, deterministic
+     screeners, gate files, Telegram digests).
   3. Writes a detailed per-run log to ``$TRADING_DATE_DIR/logs/autopilot/autopilot_<ts>.log``
      (decision, reason, full child output, state before/after) — including
      no-op runs.
   4. Sends Telegram messages for IMPORTANT events only (slot failure /
-     retries exhausted / exposure-gate decision change). Successful slots
-     already send their own rich digests from the schedule script — the
-     autopilot does not duplicate them.
+     retries exhausted / exposure-gate decision change / intraday failure
+     streak). Successful slots already send their own rich digests from the
+     schedule script — the autopilot does not duplicate them.
 
-Idempotent per day: a slot that finished successfully is never re-run; a
-failed slot is retried on subsequent runs up to MAX_ATTEMPTS while its window
-is open. A PID lock file prevents overlapping runs. ``--dry-run`` decides and
-logs but mutates no state and sends nothing.
+Idempotent per day: a once-a-day slot that finished successfully is never
+re-run; a failed one is retried on subsequent runs up to MAX_ATTEMPTS while
+its window is open. The intraday monitor is repeatable by design and alerts
+only after INTRADAY_FAILURE_ALERT_STREAK consecutive failures. A PID lock
+file prevents overlapping runs. ``--dry-run`` decides and logs but mutates no
+state and sends nothing.
+
+Cron line (auto mode):
+    */15 * * * * cd <repo> && /usr/bin/python3 scripts/run_trading_autopilot.py >> trading-data/logs/autopilot_cron.log 2>&1
 
 Stdlib only. Manual testing:
     python3 scripts/run_trading_autopilot.py --dry-run
-    python3 scripts/run_trading_autopilot.py --now 2026-06-10T15:05:00 --dry-run
-    python3 scripts/run_trading_autopilot.py --force-slot premarket
+    python3 scripts/run_trading_autopilot.py --now 2026-06-10T16:05:00 --dry-run
+    python3 scripts/run_trading_autopilot.py --force-slot intraday
 """
 
 from __future__ import annotations
@@ -52,10 +64,18 @@ TELEGRAM_SCRIPT = PROJECT_ROOT / "skills" / "send-telegram" / "scripts" / "send_
 
 PREMARKET_START = dt.time(15, 0)
 PREMARKET_END = dt.time(21, 0)
+INTRADAY_START = dt.time(15, 30)
+INTRADAY_END = dt.time(22, 0)
 EVENING_START = dt.time(22, 15)
 MONTHLY_START = dt.time(11, 0)
+WEEKLY_START = dt.time(12, 0)
 
 MAX_ATTEMPTS = 2
+# The intraday monitor is repeatable: re-run no sooner than this many minutes
+# after the previous run (cron fires every 15 min: `*/15 * * * *`).
+INTRADAY_INTERVAL_MIN = 15
+# Telegram only after this many CONSECUTIVE intraday failures (reset on success).
+INTRADAY_FAILURE_ALERT_STREAK = 3
 RUN_LOG_RETENTION_DAYS = 30
 
 # Reuse the schedule orchestrator's calendar + gate-file helpers (single
@@ -104,7 +124,14 @@ def prune_old_run_logs(directory: Path, days: int = RUN_LOG_RETENTION_DAYS) -> N
 # State
 # --------------------------------------------------------------------------- #
 def default_state(date_str: str = "") -> dict:
-    return {"date": date_str, "slots": {}, "monthly": {}, "last_gate_decision": None}
+    return {
+        "date": date_str,
+        "slots": {},
+        "monthly": {},
+        "weekly": {},
+        "intraday": {},
+        "last_gate_decision": None,
+    }
 
 
 def load_state(path: Path) -> dict:
@@ -136,11 +163,13 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def rollover_state(state: dict, today: dt.date) -> dict:
-    """New day -> reset per-day slot records; keep monthly + last gate."""
+    """New day -> reset per-day slot/intraday records; keep monthly, weekly
+    (keyed by date) and the last gate decision."""
     if state.get("date") == today.isoformat():
         return state
     fresh = default_state(today.isoformat())
     fresh["monthly"] = state.get("monthly", {})
+    fresh["weekly"] = state.get("weekly", {})
     fresh["last_gate_decision"] = state.get("last_gate_decision")
     return fresh
 
@@ -177,6 +206,17 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
             return "none", "monthly: попытки исчерпаны (см. лог последнего запуска)"
         return "monthly", "первое воскресенье месяца, время monthly-review"
 
+    # Weekly background block: Saturday from 12:00 (plan step 8).
+    if d.weekday() == 5:
+        record = state.get("weekly", {}).get(d.isoformat(), {})
+        if t < WEEKLY_START:
+            return "none", f"суббота: недельный блок запускается с {WEEKLY_START:%H:%M}"
+        if _is_done(record):
+            return "none", "недельный блок (weekly) уже выполнен сегодня"
+        if _is_exhausted(record):
+            return "none", "weekly: попытки исчерпаны (см. лог последнего запуска)"
+        return "weekly", "суббота: недельный блок (DD, macro, FTD, top-risk)"
+
     if not schedule.is_us_trading_day(d):
         return "none", "не торговый день в США (выходной/праздник) — шагов нет"
 
@@ -189,21 +229,31 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
             return "none", "evening-prep: попытки исчерпаны — нужен ручной разбор"
         return "evening-prep", "после закрытия США: полный режим + скрин на завтра"
 
-    # Premarket: 15:00 — 21:00.
+    # Premarket: 15:00 — 21:00; has priority while it is still pending.
     if PREMARKET_START <= t < PREMARKET_END:
         record = _slot_record(state, "premarket")
-        if _is_done(record):
-            return "none", "premarket уже выполнен — сессия: ведение позиций по алертам"
-        if _is_exhausted(record):
-            return (
-                "none",
-                "premarket: попытки исчерпаны — действуй по вчерашнему гейту (fail-safe restrict)",
-            )
-        return "premarket", "премаркет США: быстрая проверка режима + напоминание про ордера"
+        if not _is_done(record) and not _is_exhausted(record):
+            return "premarket", "премаркет США: быстрая проверка режима + напоминание про ордера"
+
+    # Intraday signal monitor: 15:30 — 22:00, repeatable every
+    # INTRADAY_INTERVAL_MIN minutes (premarket already handled above).
+    if INTRADAY_START <= t < INTRADAY_END:
+        last = (state.get("intraday") or {}).get("last_at")
+        if last:
+            try:
+                elapsed_min = (now - dt.datetime.fromisoformat(last)).total_seconds() / 60
+            except ValueError:
+                elapsed_min = INTRADAY_INTERVAL_MIN
+            if elapsed_min < INTRADAY_INTERVAL_MIN:
+                wait = max(1, INTRADAY_INTERVAL_MIN - int(elapsed_min))
+                return "none", f"intraday: следующий чек через ~{wait} мин"
+        return "intraday", "сессия США: мониторинг сигналов (watchlist + открытые позиции)"
 
     if t < PREMARKET_START:
         return "none", f"до премаркета шагов нет (следующий шаг в {PREMARKET_START:%H:%M} CET)"
-    return "none", f"между сессией и вечерним прогоном (следующий шаг в {EVENING_START:%H:%M} CET)"
+    if t < INTRADAY_START:
+        return "none", f"premarket обработан; мониторинг сессии начнётся в {INTRADAY_START:%H:%M}"
+    return "none", f"интрадей-окно закрыто (вечерний прогон в {EVENING_START:%H:%M} CET)"
 
 
 def detect_gate_change(state: dict, decision: str) -> tuple[str, str] | None:
@@ -320,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--now", help="Override wall-clock (ISO, e.g. 2026-06-10T15:05:00) for testing.")
     p.add_argument(
         "--force-slot",
-        choices=("premarket", "evening-prep", "monthly"),
+        choices=("premarket", "evening-prep", "intraday", "weekly", "monthly"),
         help="Bypass windows/dedupe and run this slot now.",
     )
     p.add_argument(
@@ -382,6 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         # Record the attempt up-front so a crash still counts toward retries.
+        # (intraday is repeatable: only last_at/runs, no attempts semantics)
         if not args.dry_run:
             if action == "monthly":
                 month_key = now.strftime("%Y-%m")
@@ -390,6 +441,18 @@ def main(argv: list[str] | None = None) -> int:
                 record["status"] = "running"
                 record["at"] = now.isoformat(timespec="seconds")
                 state["monthly"][month_key] = record
+            elif action == "weekly":
+                week_key = now.date().isoformat()
+                record = state["weekly"].get(week_key, {"attempts": 0})
+                record["attempts"] = record.get("attempts", 0) + 1
+                record["status"] = "running"
+                record["at"] = now.isoformat(timespec="seconds")
+                state["weekly"][week_key] = record
+            elif action == "intraday":
+                record = state.get("intraday") or {}
+                record["last_at"] = now.isoformat(timespec="seconds")
+                record["runs"] = record.get("runs", 0) + 1
+                state["intraday"] = record
             else:
                 record = state["slots"].get(action, {"attempts": 0})
                 record["attempts"] = record.get("attempts", 0) + 1
@@ -407,6 +470,25 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if not args.dry_run:
+            if action == "intraday":
+                # Repeatable monitor: no done/failed dedupe; alert only when a
+                # failure streak suggests the monitoring loop is actually down.
+                if rc == 0:
+                    record["consecutive_failures"] = 0
+                else:
+                    streak = record.get("consecutive_failures", 0) + 1
+                    record["consecutive_failures"] = streak
+                    if streak == INTRADAY_FAILURE_ALERT_STREAK:
+                        tg(
+                            f"⛔️ Autopilot · {date_str}\n"
+                            f"Интрадей-мониторинг падает {streak} раз подряд (rc={rc}).\n"
+                            f"Сигналы open/close сейчас НЕ приходят — проверь вручную.\n"
+                            f"Лог: {run_log.path}"
+                        )
+                save_state(STATE_FILE, state)
+                run_log.write(f"run complete rc={rc}")
+                return rc
+
             record["status"] = "done" if rc == 0 else "failed"
             record["rc"] = rc
             save_state(STATE_FILE, state)

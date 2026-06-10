@@ -25,9 +25,23 @@ keeps these anchored to the US open/close through the DST transition weeks):
                             place bracket orders / arm breakout triggers for the
                             watchlist built the previous evening, and to manage
                             open positions through the session.
-  evening-prep  ~22:15      Post-US-close. Full regime on fresh EOD data, and
-                            (only if allow) the swing-opportunity screen to build
-                            tomorrow's watchlist.
+  intraday      15:30-22:00 AUTO MODE. Cheap headless quote check (public
+                            TradingView scanner, no claude): fires concrete
+                            OPEN signals when a watchlist trigger is crossed and
+                            CLOSE-type signals (stop hit / near stop / +2R) for
+                            open positions. Meant to run every ~15 min via the
+                            autopilot; each signal is sent to Telegram once a day.
+  evening-prep  ~22:15      AUTO MODE (hybrid). Full regime via claude, then the
+                            deterministic pipeline: vcp-screener -> portfolio
+                            heat -> breakout-trade-planner -> claude chart
+                            validation of the top candidates -> watchlist with
+                            exact entry/stop/target/shares + thesis ingest.
+                            Under restrict/cash-priority the short branch runs
+                            instead (swing-short-screener, plan step 6) when the
+                            market-pressure conditions hold.
+  weekly        Sat ~12:00  Weekly background block (plan step 8): IBD
+                            distribution days, macro regime, FTD detector
+                            (deterministic) + market-top via claude/WebSearch.
   monthly       Sun ~11:00  Monthly performance review. launchd fires every
                             Sunday; the script keeps only the FIRST Sunday.
 
@@ -151,6 +165,40 @@ SCREENERS_DIR = TRADING_DATA_DIR / "screeners"
 PLANS_DIR = TRADING_DATA_DIR / "plans"
 JOURNAL_DIR = TRADING_DATA_DIR / "journal"
 LOG_FILE = TRADING_DATA_DIR / "logs" / "trading_schedule.log"
+SIGNALS_STATE_FILE = TRADING_DATA_DIR / "logs" / "intraday_signals_state.json"
+
+# Auto-mode helper modules (stdlib-only, shared with tests).
+sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "lib"))
+import trading_signals as tsig  # noqa: E402
+import tv_alerts as talerts  # noqa: E402
+
+# Bound at module level so tests can monkeypatch the probe in one place.
+tv_available = talerts.tv_available
+
+# Tickers we auto-created [WL] TradingView alerts for (cleanup on next sync).
+ALERTS_STATE_FILE = TRADING_DATA_DIR / "logs" / "watchlist_alerts_state.json"
+
+# Deterministic skill scripts orchestrated by the auto mode (hybrid pipeline).
+SKILLS_DIR = PROJECT_ROOT / "skills"
+VCP_SCREEN_SCRIPT = SKILLS_DIR / "vcp-screener" / "scripts" / "screen_vcp.py"
+SHORT_SCREEN_SCRIPT = SKILLS_DIR / "swing-short-screener" / "scripts" / "screen_short.py"
+PLANNER_SCRIPT = SKILLS_DIR / "breakout-trade-planner" / "scripts" / "plan_breakout_trades.py"
+TRADER_MEMORY_CLI = SKILLS_DIR / "trader-memory-core" / "scripts" / "trader_memory_cli.py"
+IBD_SCRIPT = SKILLS_DIR / "ibd-distribution-day-monitor" / "scripts" / "ibd_monitor.py"
+MACRO_SCRIPT = SKILLS_DIR / "macro-regime-detector" / "scripts" / "macro_regime_detector.py"
+FTD_SCRIPT = SKILLS_DIR / "ftd-detector" / "scripts" / "ftd_detector.py"
+
+# Intraday monitoring window (CET wall clock; US session 15:30-22:00).
+INTRADAY_START = dt.time(15, 30)
+INTRADAY_END = dt.time(22, 0)
+# How many top candidates get the claude chart-validation pass (hybrid mode).
+VALIDATION_TOP_N = 3
+# Short branch market-pressure gates (trading plan step 6): top-risk score OR
+# distribution-day count, and no fresh confirmed FTD.
+SHORT_TOP_RISK_MIN = 41.0
+SHORT_DD_MIN = 3
+# market_top / ftd reports older than this are treated as absent (fail-safe).
+MARKET_REPORT_MAX_AGE_DAYS = 7
 
 
 def _rel(p: Path) -> str:
@@ -318,6 +366,87 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Deterministic skill-script execution (auto mode)
+# --------------------------------------------------------------------------- #
+def _now_time() -> dt.time:
+    """Current wall-clock time. Separated so tests can freeze it."""
+    return dt.datetime.now().time()
+
+
+def _read_json(path) -> dict | None:
+    """Tolerant JSON-object reader: None on any I/O / parse / shape problem."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _latest(directory: Path, pattern: str) -> Path | None:
+    """Newest file matching pattern (by mtime), or None."""
+    try:
+        files = sorted(Path(directory).glob(pattern), key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return None
+    return files[-1] if files else None
+
+
+def run_skill_script(
+    cmd: list, *, label: str, dry_run: bool, timeout: int, output_glob: tuple | None = None
+) -> Path | None:
+    """Run one deterministic skill script under the current interpreter.
+
+    Returns the newest file matching ``output_glob=(directory, pattern)`` that
+    appeared during the run, or None on failure / dry-run / no output asked.
+    Failures are logged and degrade the pipeline instead of crashing the slot.
+    """
+    full = [sys.executable] + [str(c) for c in cmd]
+    log(f"--- skill script START: {label} (timeout={timeout}s) ---")
+    if dry_run:
+        log(f"(dry-run) would run: {' '.join(full)}")
+        return None
+
+    started_wall = time.time()
+    started = time.monotonic()
+    # TV_NO_CACHE=1: the trader wants screeners/heat on LIVE TradingView chart
+    # data, never the metrics-cache snapshot (which can lag a day).
+    env = {**os.environ, "TV_NO_CACHE": "1"}
+    try:
+        res = subprocess.run(
+            full, cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        log(f"{label}: timed out after {timeout}s", logging.ERROR)
+        return None
+    except OSError as exc:
+        log(f"{label}: launch error: {exc}", logging.ERROR)
+        return None
+
+    elapsed = time.monotonic() - started
+    if res.returncode != 0:
+        log(
+            f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{(res.stderr or '')[-1000:]}",
+            logging.ERROR,
+        )
+        return None
+    log(f"--- skill script DONE: {label} in {elapsed:.0f}s ---")
+
+    if not output_glob:
+        return None
+    directory, pattern = output_glob
+    try:
+        produced = [
+            p for p in Path(directory).glob(pattern) if p.stat().st_mtime >= started_wall - 2
+        ]
+    except OSError:
+        produced = []
+    if not produced:
+        log(f"{label}: завершился успешно, но не создал файл {pattern}", logging.WARNING)
+        return None
+    return max(produced, key=lambda p: p.stat().st_mtime)
+
+
+# --------------------------------------------------------------------------- #
 # Gate file (exposure_decision) I/O
 # --------------------------------------------------------------------------- #
 def decision_path(date_str: str) -> Path:
@@ -440,6 +569,62 @@ as JSON:
 This is review only -- do NOT place any trades. Keep narration short."""
 
 
+def validation_prompt(date_str: str, candidates: list, validation_path: Path) -> str:
+    lines = "\n".join(
+        f"- {c.get('ticker')} ({c.get('side')}): вход {c.get('pivot')}, стоп {c.get('stop')}"
+        for c in candidates
+    )
+    return f"""Hybrid auto-mode chart validation for {date_str} (US equities, swing horizon).
+
+For EACH candidate below, apply the technical-analyst skill on the daily AND
+weekly chart (TradingView Desktop MCP if running, otherwise the skill's data
+layer). Judge ONLY structural integrity: base intact, not climactic or
+over-extended, support not broken, volume consistent with the setup. Reject
+ONLY on clear structural damage — when in doubt, pass.
+
+Candidates:
+{lines}
+
+Write EXACTLY this JSON file to: {validation_path}
+{{
+  "date": "{date_str}",
+  "verdicts": [
+    {{"ticker": "XXX", "verdict": "pass" | "reject", "note": "<= 1 sentence"}}
+  ]
+}}
+One verdict per candidate. Do NOT place any trades. Keep narration short."""
+
+
+def weekly_prompt(date_str: str, summary_path: Path) -> str:
+    return f"""Run the scheduled Saturday weekly market block for {date_str} (CET schedule).
+
+The deterministic reports (IBD distribution days QQQ/SPY, macro regime, FTD
+detector) were just generated under {_rel(MARKET_DIR)}/. Now:
+1. Find the two manual market-top inputs via WebSearch: percent of S&P 500
+   stocks above their 50DMA (barchart.com) and the CBOE equity put/call ratio
+   (cboe.com).
+2. Run skills/market-top-detector/scripts/market_top_detector.py
+   --breadth-50dma <num> --put-call <num> --output-dir {_rel(MARKET_DIR)}/
+3. Synthesize the week ahead from all fresh reports (exposure-coach
+   perspective): selling pressure, top risk, macro regime, FTD status, what it
+   means for the long and short branches.
+
+Write a machine-readable summary to EXACTLY this path:
+  {summary_path}
+as JSON:
+{{
+  "workflow": "weekly-market-block",
+  "date": "{date_str}",
+  "top_risk_score": <num or null>,
+  "top_risk_zone": "<zone>",
+  "distribution_days": {{"qqq": <int or null>, "spy": <int or null>}},
+  "macro_regime": "<regime>",
+  "ftd_status": "<status>",
+  "implications": ["short bullet", "..."]
+}}
+This is analysis only -- do NOT place any trades. Keep narration short."""
+
+
 # --------------------------------------------------------------------------- #
 # Reminder text helpers
 #
@@ -529,7 +714,8 @@ def build_premarket_msg(date_str: str, dec: dict, wl: Path | None) -> str:
     )
 
 
-def build_evening_closed_msg(date_str: str, dec: dict) -> str:
+def build_evening_closed_msg(date_str: str, dec: dict, extra: str = "") -> str:
+    extra_block = f"\n{extra}" if extra else ""
     return (
         f"🌙 EVENING PREP · {date_str} (~22:15 CET)\n"
         "Workflow: market-regime-daily · exposure_decision\n\n"
@@ -541,6 +727,123 @@ def build_evening_closed_msg(date_str: str, dec: dict) -> str:
         "✅ ДЕЙСТВИЕ\n"
         "Завтра: только ведение/закрытие открытых позиций. "
         "trade-memory-loop по закрытым сделкам."
+        f"{extra_block}"
+    )
+
+
+def build_evening_short_msg(date_str: str, dec: dict, wl_rel, candidates: list, reason: str) -> str:
+    cand_block = (
+        f"\n\n🧭 ШОРТ-КАНДИДАТЫ (одной строкой каждый)\n{_candidate_lines(candidates)}"
+        if candidates
+        else "\n\n🧭 ШОРТ-КАНДИДАТЫ: скринер не дал кандидатов грейда B и выше."
+    )
+    return (
+        f"🌙 EVENING PREP · {date_str} (~22:15 CET)\n"
+        "Workflow: market-regime-daily + swing-short-screener · ШОРТ-ветка\n\n"
+        "📌 ВЕРДИКТ\n"
+        f"• Экспозиция: {_verdict_exposure(dec)}\n"
+        f"• Рынок под давлением: {reason}\n"
+        f"• Шорт-кандидатов на завтра: {len(candidates)}"
+        f"{_rationale_block(dec)}"
+        f"{cand_block}\n\n"
+        "✅ ДЕЙСТВИЕ\n"
+        "Завтра в сессию (15:30–22:00) мониторинг пришлёт триггеры OPEN_SHORT.\n"
+        "Правила шорта: риск 1% (половинный), стоп НАД последним нижним максимумом, "
+        "тайм-стоп 10 т.д., крыть 50% на 2R, НЕ держать через отчёт.\n"
+        f"Файл: {wl_rel}"
+    )
+
+
+def _usd(v) -> str:
+    if v in (None, ""):
+        return "$?"
+    try:
+        return f"${float(v):g}"
+    except (TypeError, ValueError):
+        return f"${v}"
+
+
+def _intraday_signal_lines(s: dict) -> str:
+    ticker, sig_type, price = s["ticker"], s["type"], s.get("price")
+    c = s.get("candidate") or {}
+    p = s.get("position") or {}
+    if sig_type in (tsig.OPEN_LONG, tsig.OPEN_SHORT):
+        is_long = sig_type == tsig.OPEN_LONG
+        qty = f"{c['shares']} акц" if c.get("shares") else "размер: position-sizer"
+        risk = f" · риск {_usd(c.get('risk_dollars'))}" if c.get("risk_dollars") else ""
+        tail = (
+            "   Bracket-ордер (вход + стоп + тейк); после исполнения записать вход в журнал (шаг 3)."
+            if is_long
+            else "   Sell-short bracket; правила: риск 1%, тайм-стоп 10 т.д., не держать через отчёт."
+        )
+        return (
+            f"{'🟢' if is_long else '🔻'} ОТКРОЙ {'ЛОНГ' if is_long else 'ШОРТ'} {ticker} "
+            f"@ {_usd(price)} — триггер {_usd(c.get('pivot'))} сработал\n"
+            f"   {qty} · стоп {_usd(c.get('stop'))} · цель {_usd(c.get('target'))}{risk}\n"
+            f"{tail}"
+        )
+    if sig_type == tsig.MISSED:
+        return (
+            f"🚫 {ticker}: цена {_usd(price)} вне зоны входа "
+            f"(хуже {_usd(c.get('worst_entry'))}) — НЕ гнаться."
+        )
+    if sig_type == tsig.SKIPPED_CAPACITY:
+        return (
+            f"⏸ {ticker}: триггер сработал @ {_usd(price)}, "
+            f"но {s.get('reason', 'лимиты портфеля заняты')} — пропуск."
+        )
+    if sig_type == tsig.STOP_HIT:
+        return (
+            f"⛔️ {ticker}: цена {_usd(price)} за стопом {_usd(p.get('stop_loss'))} — "
+            "проверь, что стоп-ордер исполнился. Вечером: закрыть тезис + постмортем (шаг 7)."
+        )
+    if sig_type == tsig.NEAR_STOP:
+        return (
+            f"⚠️ {ticker}: {_usd(price)} — до стопа {_usd(p.get('stop_loss'))} меньше 1%. "
+            "Стоп не двигать; просто будь у экрана."
+        )
+    if sig_type == tsig.TWO_R:
+        return (
+            f"💰 {ticker}: +2R @ {_usd(price)} — продай 50% позиции, "
+            f"стоп остатка в безубыток {_usd(p.get('entry_price'))}."
+        )
+    return f"• {ticker}: {sig_type} @ {_usd(price)}"
+
+
+def build_intraday_msg(date_str: str, signals: list) -> str:
+    body = "\n\n".join(_intraday_signal_lines(s) for s in signals)
+    return (
+        f"⚡️ INTRADAY · {date_str}\n"
+        "Мониторинг watchlist + открытых позиций (цены могут отставать до ~15 мин)\n\n"
+        f"{body}\n\n"
+        "Журнал входов/выходов: python3 skills/trader-memory-core/scripts/trader_memory_cli.py store list"
+    )
+
+
+def build_weekly_msg(date_str: str, data: dict | None, det: dict) -> str:
+    det_line = " · ".join(f"{'✅' if ok else '⚠️'} {name}" for name, ok in det.items())
+    if not data:
+        body = f"Сводный JSON не создан — см. отчёты в {_rel(MARKET_DIR)}/ и лог."
+    else:
+        dd = data.get("distribution_days") or {}
+        body = (
+            "📌 ВЕРДИКТ\n"
+            f"• Top-risk: {data.get('top_risk_score', '?')} ({data.get('top_risk_zone', '?')})\n"
+            f"• Distribution days: QQQ {dd.get('qqq', '?')} / SPY {dd.get('spy', '?')}\n"
+            f"• Макрорежим: {data.get('macro_regime', '?')}\n"
+            f"• FTD: {data.get('ftd_status', '?')}"
+        )
+        implications = data.get("implications") or []
+        if implications:
+            body += "\n\n🧭 НА НЕДЕЛЮ\n" + "\n".join(f"• {i}" for i in implications[:6])
+    return (
+        f"📅 WEEKLY · {date_str} (суббота ~12:00 CET)\n"
+        "Workflow: weekly-market-block · ibd + macro + ftd + market-top\n\n"
+        f"{body}\n\n"
+        f"Скрипты: {det_line}\n\n"
+        "✅ ДЕЙСТВИЕ\n"
+        "Ничего руками: вечерние прогоны всю неделю подхватывают свежие JSON из "
+        f"{_rel(MARKET_DIR)}/ (гейт + условия шорт-ветки)."
     )
 
 
@@ -594,6 +897,15 @@ def build_monthly_msg(date_str: str, data: dict | None) -> str:
 # Slot handlers
 # --------------------------------------------------------------------------- #
 def slot_premarket(date_str: str, args) -> int:
+    # Fresh heat snapshot so the intraday monitor sees today's open positions
+    # (stops / entries) even before any evening run. Non-fatal on failure.
+    run_skill_script(
+        [TRADER_MEMORY_CLI, "heat"],
+        label="portfolio-heat (premarket refresh)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
+    )
     gate = decision_path(date_str)
     ok = run_claude(
         regime_prompt(date_str, gate, quick=True),
@@ -617,8 +929,259 @@ def slot_premarket(date_str: str, args) -> int:
     )
 
     msg = build_premarket_msg(date_str, dec, latest_watchlist())
+    # Surface a missing TradingView Desktop IMMEDIATELY: without it the heat
+    # refresh above and tonight's screen/alert sync will not work.
+    if not args.dry_run and not tv_available():
+        msg = (
+            _tv_down_text(
+                "Premarket: heat-обновление и вечерний скрин/алерты без TradingView не сработают."
+            )
+            + "\n\n"
+            + msg
+        )
     notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
     return 0 if ok or args.dry_run else 1
+
+
+def _tv_down_text(context: str) -> str:
+    return (
+        "❗️ TradingView Desktop недоступен (CDP :9222).\n"
+        f"{context}\n"
+        "Запусти TradingView (tv launch / launch_tv_debug_mac.sh) и повтори слот."
+    )
+
+
+def _sync_tv_alerts(wl: dict, args) -> str:
+    """Sync TV alerts with the watchlist; returns a digest line for Telegram.
+    On TV being down sends its own IMMEDIATE notification."""
+    if args.dry_run:
+        log("(dry-run) would sync TradingView alerts with the watchlist")
+        return ""
+    if not tv_available():
+        notify(
+            _tv_down_text("Алерты TradingView по watchlist НЕ выставлены и не сняты."),
+            dry_run=args.dry_run,
+            no_telegram=args.no_telegram,
+        )
+        return "⏰ Алерты TV: НЕ выставлены — TradingView недоступен"
+    res = talerts.sync_watchlist_alerts(wl, ALERTS_STATE_FILE, project_root=PROJECT_ROOT)
+    line = (
+        f"⏰ Алерты TV: +{res['created']} новых, −{res['deleted']} устаревших, "
+        f"без изменений {res['kept']}"
+    )
+    if res["errors"]:
+        line += f", ошибок {res['errors']}"
+        log("alert sync errors: " + "; ".join(res["error_details"]), logging.WARNING)
+    log(line)
+    return line
+
+
+def _run_chart_validation(date_str: str, candidates: list, args) -> dict | None:
+    """Hybrid step: claude + technical-analyst verdicts for the top candidates.
+    None (no filtering) when there is nothing to validate or claude failed."""
+    if not candidates:
+        return None
+    vpath = SCHEDULE_DIR / f"watchlist_validation_{date_str}.json"
+    ok = run_claude(
+        validation_prompt(date_str, candidates, vpath),
+        label="chart validation (technical-analyst)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+    )
+    if not ok or args.dry_run:
+        return None
+    return _read_json(vpath)
+
+
+def _validation_candidates_from_plan(plan: dict | None) -> list[dict]:
+    orders = (plan or {}).get("actionable_orders") or []
+    ranked = sorted(orders, key=lambda o: o.get("composite_score") or 0, reverse=True)
+    return [
+        {
+            "ticker": o.get("symbol"),
+            "side": "long",
+            "pivot": (o.get("trade_plan") or {}).get("signal_entry"),
+            "stop": (o.get("trade_plan") or {}).get("stop_loss_price"),
+        }
+        for o in ranked[:VALIDATION_TOP_N]
+    ]
+
+
+def _validation_note(wl: dict, validation: dict | None) -> str:
+    rejected = wl.get("rejected_by_validation") or []
+    if validation is None:
+        if not (wl.get("candidates") or rejected):
+            return ""
+        return "графики не проверены (валидация недоступна — действуй по чек-листу 5.3)"
+    passed = sum(1 for c in wl.get("candidates") or [] if c.get("validated"))
+    note = f"проверено по графикам: {passed} прошло, {len(rejected)} отклонено"
+    if rejected:
+        note += " (" + ", ".join(c.get("ticker", "?") for c in rejected) + ")"
+    return note
+
+
+def _write_watchlist(wl: dict, date_str: str, args) -> Path:
+    wl_path = SCHEDULE_DIR / f"watchlist_{date_str}.json"
+    if not args.dry_run:
+        SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
+        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+    return wl_path
+
+
+def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
+    """Deterministic screen -> plan -> hybrid validation -> watchlist + theses."""
+    vcp = run_skill_script(
+        [VCP_SCREEN_SCRIPT, "--top", "10"],
+        label="vcp-screener (top 10)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(SCREENERS_DIR, "vcp_screener_*.json"),
+    )
+    heat = run_skill_script(
+        [TRADER_MEMORY_CLI, "heat"],
+        label="portfolio-heat",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
+    )
+    plan_path = None
+    if vcp:
+        cmd = [PLANNER_SCRIPT, "--input", vcp]
+        if heat:
+            cmd += ["--current-exposure-json", heat]
+        plan_path = run_skill_script(
+            cmd,
+            label="breakout-trade-planner",
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+            output_glob=(PLANS_DIR, "breakout_trade_plan_*.json"),
+        )
+    plan = _read_json(plan_path) if plan_path else None
+
+    validation = _run_chart_validation(date_str, _validation_candidates_from_plan(plan), args)
+    wl = tsig.build_watchlist(
+        date_str,
+        "allow",
+        plan,
+        None,
+        validation,
+        source_plan=_rel(plan_path) if plan_path else None,
+    )
+    wl_path = _write_watchlist(wl, date_str, args)
+    if vcp and not args.dry_run:
+        run_skill_script(
+            [TRADER_MEMORY_CLI, "ingest", "--source", "vcp-screener", "--input", vcp],
+            label="thesis-ingest (trader-memory-core)",
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
+    return wl_path, wl, _validation_note(wl, validation)
+
+
+def _any_ftd_detected(node) -> bool:
+    """Recursive search for a truthy ftd_detected anywhere in a report JSON."""
+    if isinstance(node, dict):
+        if node.get("ftd_detected"):
+            return True
+        return any(_any_ftd_detected(v) for v in node.values())
+    if isinstance(node, list):
+        return any(_any_ftd_detected(v) for v in node)
+    return False
+
+
+def _short_conditions() -> tuple[bool, str]:
+    """Plan step 6: shorts only under market pressure and with no fresh FTD.
+    Missing/stale evidence -> no shorts (fail-safe)."""
+    path = _latest(MARKET_DIR, "market_top_*.json")
+    max_age = MARKET_REPORT_MAX_AGE_DAYS * 86400
+    if not path or time.time() - path.stat().st_mtime > max_age:
+        return (
+            False,
+            "нет свежего market_top отчёта (суббота, шаг 8) — шорт-скрин пропущен (fail-safe)",
+        )
+    data = _read_json(path) or {}
+    score = (data.get("composite") or {}).get("composite_score") or 0
+    dd = (data.get("components") or {}).get("distribution_days") or {}
+    dd_count = dd.get("effective_count") or (dd.get("clustering") or {}).get("total_count") or 0
+    ftd = bool((data.get("follow_through_day") or {}).get("ftd_detected"))
+    ftd_path = _latest(MARKET_DIR, "ftd_detector_*.json")
+    if ftd_path and ftd_path.stat().st_mtime > path.stat().st_mtime:
+        ftd = _any_ftd_detected(_read_json(ftd_path) or {})
+
+    if not (score >= SHORT_TOP_RISK_MIN or dd_count >= SHORT_DD_MIN):
+        return False, f"давления нет (top-risk {score}, DD {dd_count}) — шорт-скрин не нужен"
+    if ftd:
+        return False, "подтверждён свежий FTD — шортить запрещено (правило 6.4)"
+    return True, f"top-risk {score} / DD {dd_count}, свежего FTD нет"
+
+
+def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) -> int:
+    rc = 0 if regime_ok or args.dry_run else 1
+    active, reason = _short_conditions()
+    if not active:
+        notify(
+            build_evening_closed_msg(date_str, dec, extra=f"Шорт-ветка: {reason}."),
+            dry_run=args.dry_run,
+            no_telegram=args.no_telegram,
+        )
+        return rc
+
+    # The short screen reads LIVE chart data (cache off) and the alerts go
+    # through TradingView — without TV Desktop the branch cannot run.
+    if not args.dry_run and not tv_available():
+        notify(
+            _tv_down_text(
+                "Вечерний ШОРТ-скрин и алерты невозможны: данные и алерты идут через TradingView."
+            ),
+            dry_run=args.dry_run,
+            no_telegram=args.no_telegram,
+        )
+        return 1
+
+    short_path = run_skill_script(
+        [SHORT_SCREEN_SCRIPT, "--min-grade", "B", "--top", "10"],
+        label="swing-short-screener (grade B+)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(SCREENERS_DIR, "swing_short_screener_*.json"),
+    )
+    shorts = ((_read_json(short_path) or {}).get("candidates") or []) if short_path else []
+    val_candidates = [
+        {
+            "ticker": s.get("symbol"),
+            "side": "short",
+            "pivot": (s.get("trade_levels") or {}).get("entry"),
+            "stop": (s.get("trade_levels") or {}).get("stop"),
+        }
+        for s in shorts[:VALIDATION_TOP_N]
+    ]
+    validation = _run_chart_validation(date_str, val_candidates, args)
+    profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    wl = tsig.build_watchlist(
+        date_str,
+        dec["decision"],
+        None,
+        shorts,
+        validation,
+        account_size=profile.get("account_size"),
+        notes=reason,
+        source_plan=_rel(short_path) if short_path else None,
+    )
+    wl_path = _write_watchlist(wl, date_str, args)
+    msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
+    val_note = _validation_note(wl, validation)
+    if val_note:
+        msg += f"\n\n🔎 Валидация: {val_note}"
+    alert_line = _sync_tv_alerts(wl, args)
+    if alert_line:
+        msg += f"\n\n{alert_line}"
+    notify(
+        msg,
+        file=str(wl_path) if wl_path.exists() else None,
+        dry_run=args.dry_run,
+        no_telegram=args.no_telegram,
+    )
+    return rc
 
 
 def slot_evening_prep(date_str: str, args) -> int:
@@ -645,39 +1208,165 @@ def slot_evening_prep(date_str: str, args) -> int:
     )
 
     if dec["decision"] != "allow":
+        return _evening_short_branch(date_str, dec, args, regime_ok=ok)
+
+    # The long pipeline reads LIVE chart data (cache off) and ends with TV
+    # alert sync — both need TradingView Desktop. Notify IMMEDIATELY when down.
+    if not args.dry_run and not tv_available():
         notify(
-            build_evening_closed_msg(date_str, dec),
+            _tv_down_text(
+                "Вечерний скрин невозможен: скринеры читают живой график (кэш отключён), алерты не выставить."
+            ),
             dry_run=args.dry_run,
             no_telegram=args.no_telegram,
         )
-        return 0 if ok or args.dry_run else 1
+        return 1
 
-    # Gate is allow -> build tomorrow's watchlist
-    watchlist = SCHEDULE_DIR / f"watchlist_{date_str}.json"
-    ok2 = run_claude(
-        opportunity_prompt(date_str, gate, watchlist),
-        label="swing-opportunity-daily (evening screen)",
-        dry_run=args.dry_run,
-        timeout=args.timeout,
-    )
-    candidates = []
-    if watchlist.exists():
-        try:
-            candidates = (
-                json.loads(watchlist.read_text(encoding="utf-8")).get("candidates", []) or []
-            )
-        except (json.JSONDecodeError, OSError):
-            candidates = []
-    wl_rel = watchlist.relative_to(PROJECT_ROOT) if watchlist.exists() else "(файл не создан)"
-
+    # Gate is allow -> deterministic long pipeline + hybrid chart validation
+    wl_path, wl, val_note = _evening_long_branch(date_str, args)
+    candidates = wl.get("candidates") or []
+    wl_rel = _rel(wl_path) if wl_path.exists() else "(файл не создан)"
     msg = build_evening_allow_msg(date_str, dec, wl_rel, candidates)
+    if val_note:
+        msg += f"\n\n🔎 Валидация: {val_note}"
+    alert_line = _sync_tv_alerts(wl, args)
+    if alert_line:
+        msg += f"\n\n{alert_line}"
     notify(
         msg,
-        file=str(watchlist) if watchlist.exists() else None,
+        file=str(wl_path) if wl_path.exists() else None,
         dry_run=args.dry_run,
         no_telegram=args.no_telegram,
     )
-    return 0 if (ok and ok2) or args.dry_run else 1
+    return 0 if ok or args.dry_run else 1
+
+
+def slot_intraday(date_str: str, args) -> int:
+    """Cheap quote check (no claude): OPEN triggers from the watchlist and
+    manage-signals (stop / near-stop / +2R) for open positions, via Telegram."""
+    if not args.force:
+        now_t = _now_time()
+        if not (INTRADAY_START <= now_t < INTRADAY_END):
+            log(
+                f"intraday: {now_t:%H:%M} вне окна "
+                f"{INTRADAY_START:%H:%M}–{INTRADAY_END:%H:%M} CET — пропуск"
+            )
+            return 0
+
+    wl_path = latest_watchlist()
+    wl = _read_json(wl_path) if wl_path else None
+    heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
+    heat = _read_json(heat_path) if heat_path else None
+    dec = read_decision(decision_path(date_str))
+
+    tickers = sorted(
+        (
+            {str(c.get("ticker", "")).upper() for c in (wl or {}).get("candidates") or []}
+            | {str(p.get("ticker", "")).upper() for p in (heat or {}).get("positions") or []}
+        )
+        - {""}
+    )
+    if not tickers:
+        log("intraday: нет тикеров для мониторинга (watchlist пуст, открытых позиций нет)")
+        return 0
+    if args.dry_run:
+        log(
+            f"(dry-run) intraday: запросил бы котировки для {', '.join(tickers)} "
+            f"(гейт {dec['decision']}); сигналы не оцениваются"
+        )
+        return 0
+
+    state = tsig.load_signals_state(SIGNALS_STATE_FILE, date_str)
+    try:
+        quotes = tsig.fetch_quotes(tickers)
+    except tsig.QuotesError as exc:
+        log(f"intraday: не удалось получить котировки: {exc}", logging.ERROR)
+        return 1
+
+    signals = tsig.evaluate_signals(wl, heat, quotes, dec["decision"], set(state.get("sent") or {}))
+    if not signals:
+        log(f"intraday: {len(tickers)} тикеров проверено — новых сигналов нет")
+        return 0
+
+    # Entries that ran away (MISSED) are no longer actionable -> drop their
+    # [WL] TradingView alerts right now; warn when TV is down.
+    msg = build_intraday_msg(date_str, signals)
+    missed = sorted({s["ticker"] for s in signals if s["type"] == tsig.MISSED})
+    if missed:
+        if tv_available():
+            res = talerts.purge_watchlist_alerts(
+                missed, ALERTS_STATE_FILE, project_root=PROJECT_ROOT
+            )
+            line = f"⏰ Сняты алерты TV: {', '.join(missed)} (−{res['deleted']})"
+            if res["errors"]:
+                line += f", ошибок {res['errors']}"
+                log("alert purge errors: " + "; ".join(res["error_details"]), logging.WARNING)
+            msg += f"\n\n{line}"
+        else:
+            msg += f"\n\n❗️ TradingView недоступен — сними алерты по {', '.join(missed)} вручную"
+
+    notify(
+        msg,
+        dry_run=args.dry_run,
+        no_telegram=args.no_telegram,
+    )
+    tsig.mark_sent(
+        state, [s["key"] for s in signals], dt.datetime.now().isoformat(timespec="seconds")
+    )
+    tsig.save_signals_state(SIGNALS_STATE_FILE, state)
+    return 0
+
+
+def slot_weekly(date_str: str, args) -> int:
+    """Saturday weekly block (plan step 8): deterministic background reports,
+    then claude for the two manual market-top inputs + synthesis."""
+    # The deterministic scripts read LIVE chart data (cache off) — without
+    # TradingView Desktop they cannot run. Notify IMMEDIATELY and skip them.
+    tv_ok = args.dry_run or tv_available()
+    if not tv_ok:
+        notify(
+            _tv_down_text("Недельный блок: DD/macro/FTD скрипты читают живой график и пропущены."),
+            dry_run=args.dry_run,
+            no_telegram=args.no_telegram,
+        )
+
+    det: dict[str, bool] = {}
+    steps = [
+        (
+            "ibd-distribution-days",
+            [IBD_SCRIPT, "--symbols", "QQQ,SPY"],
+            "ibd_distribution_day_monitor_*.json",
+        ),
+        ("macro-regime", [MACRO_SCRIPT], "macro_regime_*.json"),
+        ("ftd-detector", [FTD_SCRIPT], "ftd_detector_*.json"),
+    ]
+    for label, cmd, pattern in steps:
+        det[label] = tv_ok and (
+            run_skill_script(
+                cmd,
+                label=label,
+                dry_run=args.dry_run,
+                timeout=args.timeout,
+                output_glob=(MARKET_DIR, pattern),
+            )
+            is not None
+        )
+
+    summary = SCHEDULE_DIR / f"weekly_review_{date_str}.json"
+    ok = run_claude(
+        weekly_prompt(date_str, summary),
+        label="weekly market-top + synthesis",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+    )
+    data = _read_json(summary)
+    notify(
+        build_weekly_msg(date_str, data, det),
+        file=str(summary) if summary.exists() else None,
+        dry_run=args.dry_run,
+        no_telegram=args.no_telegram,
+    )
+    return 0 if ok or args.dry_run else 1
 
 
 def slot_monthly(date_str: str, args) -> int:
@@ -707,6 +1396,8 @@ def slot_monthly(date_str: str, args) -> int:
 SLOTS = {
     "premarket": slot_premarket,
     "evening-prep": slot_evening_prep,
+    "intraday": slot_intraday,
+    "weekly": slot_weekly,
     "monthly": slot_monthly,
 }
 
@@ -771,11 +1462,14 @@ def main(argv: list[str] | None = None) -> int:
 
     # Calendar gates
     if (
-        args.slot in ("premarket", "evening-prep")
+        args.slot in ("premarket", "evening-prep", "intraday")
         and not args.force
         and not is_us_trading_day(today)
     ):
         log(f"{date_str} is not a US trading day -- skipping slot {args.slot}.")
+        return _finish(0)
+    if args.slot == "weekly" and not args.force and today.weekday() != 5:
+        log(f"{date_str} is not a Saturday -- skipping weekly block.")
         return _finish(0)
     if args.slot == "monthly" and not args.force and not is_first_sunday(today):
         log(f"{date_str} is not the first Sunday of the month -- skipping monthly review.")

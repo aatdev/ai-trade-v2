@@ -12,7 +12,7 @@ generated: true
 # Signals Alerts
 {: .no_toc }
 
-Создать, удалить или синхронизировать алерты в TradingView Desktop на основе журнала `results/analysis/signals.md`. По каждому сигналу — 5 алертов приоритетного сценария (Trigger / Stop / T1 / T2 / T3). Use whenever the user asks to создать/удалить/обновить алерты по журналу сигналов, синхронизировать TradingView с signals.md, "поставить триггеры из журнала", "снять алерты по тикерам", "пересоздай алерты", "/signals-alerts", "signals alerts sync".
+Создать, удалить или синхронизировать алерты в TradingView Desktop на основе журнала `trading-data/analysis/signals.md`. По каждому сигналу — 5 алертов приоритетного сценария (Trigger / Stop / T1 / T2 / T3). Use whenever the user asks to создать/удалить/обновить алерты по журналу сигналов, синхронизировать TradingView с signals.md, "поставить триггеры из журнала", "снять алерты по тикерам", "пересоздай алерты", "/signals-alerts", "signals alerts sync".
 {: .fs-6 .fw-300 }
 
 <span class="badge badge-free">API不要</span>

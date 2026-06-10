@@ -36,7 +36,8 @@ def _at(hhmm: str, date_str: str = TUE) -> dt.datetime:
 # --------------------------------------------------------------------------- #
 class TestDecideAction:
     def test_weekend_none(self):
-        action, reason = ap.decide_action(_at("16:00", "2026-06-06"), _state())  # Saturday
+        # 2nd Sunday: neither monthly nor a trading day
+        action, reason = ap.decide_action(_at("16:00", "2026-06-14"), _state())
         assert action == "none"
         assert "торгов" in reason or "выходн" in reason.lower()
 
@@ -52,24 +53,66 @@ class TestDecideAction:
         action, _ = ap.decide_action(_at("15:05"), _state())
         assert action == "premarket"
 
-    def test_premarket_done_is_noop(self):
-        action, reason = ap.decide_action(_at("16:00"), _slot_state("premarket", "done", 1))
+    def test_premarket_done_hands_over_to_intraday(self):
+        action, _ = ap.decide_action(_at("16:00"), _slot_state("premarket", "done", 1))
+        assert action == "intraday"
+
+    def test_premarket_done_before_intraday_window_is_noop(self):
+        action, _ = ap.decide_action(_at("15:15"), _slot_state("premarket", "done", 1))
         assert action == "none"
-        assert "premarket" in reason
 
     def test_premarket_failed_retries(self):
         action, _ = ap.decide_action(_at("16:00"), _slot_state("premarket", "failed", 1))
         assert action == "premarket"
 
-    def test_premarket_exhausted_is_noop(self):
+    def test_premarket_exhausted_hands_over_to_intraday(self):
         state = _slot_state("premarket", "failed", ap.MAX_ATTEMPTS)
+        action, _ = ap.decide_action(_at("16:00"), state)
+        assert action == "intraday"
+
+    def test_between_intraday_and_evening_none(self):
+        action, _ = ap.decide_action(_at("22:05"), _state())
+        assert action == "none"
+
+    def test_intraday_after_premarket_window(self):
+        # 21:00-22:00: premarket window over, session monitoring continues
+        action, _ = ap.decide_action(_at("21:30"), _state())
+        assert action == "intraday"
+
+    def test_intraday_respects_interval(self):
+        state = _slot_state("premarket", "done", 1)
+        state["intraday"] = {"last_at": f"{TUE}T15:55:00", "runs": 1}
         action, reason = ap.decide_action(_at("16:00"), state)
         assert action == "none"
-        assert "попыт" in reason
+        assert "intraday" in reason
 
-    def test_between_windows_none(self):
-        action, _ = ap.decide_action(_at("21:30"), _state())
+    def test_intraday_runs_again_after_interval(self):
+        state = _slot_state("premarket", "done", 1)
+        state["intraday"] = {"last_at": f"{TUE}T15:40:00", "runs": 1}
+        action, _ = ap.decide_action(_at("16:00"), state)
+        assert action == "intraday"
+
+    def test_saturday_before_noon_is_noop(self):
+        action, reason = ap.decide_action(_at("11:00", "2026-06-13"), _state())
         assert action == "none"
+        assert "12:00" in reason
+
+    def test_saturday_runs_weekly(self):
+        action, _ = ap.decide_action(_at("12:05", "2026-06-13"), _state())
+        assert action == "weekly"
+
+    def test_saturday_weekly_done_is_noop(self):
+        state = _state()
+        state["weekly"]["2026-06-13"] = {"status": "done", "attempts": 1}
+        action, _ = ap.decide_action(_at("13:00", "2026-06-13"), state)
+        assert action == "none"
+
+    def test_saturday_weekly_exhausted_is_noop(self):
+        state = _state()
+        state["weekly"]["2026-06-13"] = {"status": "failed", "attempts": ap.MAX_ATTEMPTS}
+        action, reason = ap.decide_action(_at("13:00", "2026-06-13"), state)
+        assert action == "none"
+        assert "попыт" in reason
 
     def test_evening_window_runs_evening(self):
         action, _ = ap.decide_action(_at("22:20"), _state())
@@ -126,6 +169,14 @@ class TestState:
         assert rolled["slots"] == {}
         assert rolled["monthly"]["2026-05"]["status"] == "done"
         assert rolled["last_gate_decision"] == "allow"
+
+    def test_rollover_keeps_weekly_resets_intraday(self):
+        state = _state()
+        state["weekly"]["2026-06-06"] = {"status": "done", "attempts": 1}
+        state["intraday"] = {"last_at": "2026-06-09T16:00:00", "runs": 9}
+        rolled = ap.rollover_state(state, dt.date(2026, 6, 10))
+        assert rolled["weekly"]["2026-06-06"]["status"] == "done"
+        assert rolled["intraday"] == {}
 
     def test_rollover_same_day_is_identity(self):
         state = _slot_state("premarket", "done", 1)
@@ -247,11 +298,59 @@ class TestMain:
         assert len(run_logs) == 1
         assert "premarket" in run_logs[0].read_text()
 
-        # Second run the same hour must be a no-op
+        # Premarket done -> the next run inside the session monitors intraday
         rc2 = ap.main(["--now", f"{TUE}T16:05:00", "--no-telegram"])
         assert rc2 == 0
-        assert calls["slots"] == ["premarket"]  # unchanged
-        assert len(list((tmp_path / "runs").glob("autopilot_*.log"))) == 2
+        assert calls["slots"] == ["premarket", "intraday"]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state["intraday"]["last_at"] == f"{TUE}T16:05:00"
+
+        # ...but not more often than the 15-minute interval
+        rc3 = ap.main(["--now", f"{TUE}T16:10:00", "--no-telegram"])
+        assert rc3 == 0
+        assert calls["slots"] == ["premarket", "intraday"]  # unchanged
+
+        rc4 = ap.main(["--now", f"{TUE}T16:25:00", "--no-telegram"])
+        assert rc4 == 0
+        assert calls["slots"] == ["premarket", "intraday", "intraday"]
+
+    def test_weekly_dispatch_and_dedupe(self, tmp_path, monkeypatch):
+        calls = self._wire(tmp_path, monkeypatch)
+        rc = ap.main(["--now", "2026-06-13T12:05:00", "--no-telegram"])
+        assert rc == 0
+        assert calls["slots"] == ["weekly"]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state["weekly"]["2026-06-13"]["status"] == "done"
+
+        rc2 = ap.main(["--now", "2026-06-13T13:05:00", "--no-telegram"])
+        assert rc2 == 0
+        assert calls["slots"] == ["weekly"]  # unchanged
+
+    def test_intraday_failures_alert_only_after_streak(self, tmp_path, monkeypatch):
+        calls = self._wire(tmp_path, monkeypatch, rc=1, gate_decision="restrict")
+        base = ap.default_state(TUE)
+        base["slots"]["premarket"] = {"status": "done", "attempts": 1}
+        (tmp_path / "state.json").write_text(json.dumps(base))
+
+        ap.main(["--now", f"{TUE}T16:00:00"])
+        ap.main(["--now", f"{TUE}T16:20:00"])
+        assert not any("Интрадей" in t for t in calls["telegrams"])
+        ap.main(["--now", f"{TUE}T16:40:00"])
+        assert any("Интрадей" in t for t in calls["telegrams"])
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state["intraday"]["consecutive_failures"] == 3
+
+    def test_intraday_success_resets_failure_streak(self, tmp_path, monkeypatch):
+        calls = self._wire(tmp_path, monkeypatch, rc=0, gate_decision="restrict")
+        base = ap.default_state(TUE)
+        base["slots"]["premarket"] = {"status": "done", "attempts": 1}
+        base["intraday"] = {"last_at": f"{TUE}T15:40:00", "runs": 2, "consecutive_failures": 2}
+        (tmp_path / "state.json").write_text(json.dumps(base))
+
+        ap.main(["--now", f"{TUE}T16:00:00", "--no-telegram"])
+        assert calls["slots"] == ["intraday"]
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state["intraday"]["consecutive_failures"] == 0
 
     def test_noop_run_still_writes_log(self, tmp_path, monkeypatch):
         calls = self._wire(tmp_path, monkeypatch)

@@ -1,0 +1,498 @@
+"""Tests for scripts/lib/trading_signals.py (auto-mode signal engine)."""
+
+import importlib.util
+import json
+from pathlib import Path
+
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "lib" / "trading_signals.py"
+_spec = importlib.util.spec_from_file_location("trading_signals", _MODULE_PATH)
+sig = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(sig)
+
+
+# --------------------------------------------------------------------------- #
+# Fixtures
+# --------------------------------------------------------------------------- #
+def make_plan(**overrides):
+    """Minimal breakout_trade_plan JSON in the planner's real shape."""
+    plan = {
+        "schema_version": "1.0",
+        "summary": {"actionable_count": 1, "revalidation_count": 1},
+        "actionable_orders": [
+            {
+                "symbol": "NVDA",
+                "sector": "Technology",
+                "composite_score": 78.5,
+                "execution_state": "Pre-breakout",
+                "plan_type": "pending_breakout",
+                "trade_plan": {
+                    "signal_entry": 155.20,
+                    "worst_entry": 157.50,
+                    "stop_loss_price": 151.30,
+                    "target_price": 163.70,
+                    "shares": 380,
+                    "risk_dollars": 2356.0,
+                },
+            }
+        ],
+        "revalidation": [
+            {
+                "symbol": "AMD",
+                "plan_type": "late_breakout_revalidation",
+                "pivot": 150.0,
+                "current_price": 152.5,
+                "max_entry_price": 153.0,
+            }
+        ],
+    }
+    plan.update(overrides)
+    return plan
+
+
+def make_short_candidates():
+    return [
+        {
+            "symbol": "NFLX",
+            "sector": "Communication Services",
+            "composite_score": 82.5,
+            "grade": "A",
+            "trade_levels": {"entry": 245.0, "stop": 260.0, "stop_pct": 6.1, "target_2r": 215.0},
+            "metrics": {"price": 245.3},
+        }
+    ]
+
+
+def make_watchlist(candidates):
+    return {
+        "workflow": "swing-opportunity-daily",
+        "date": "2026-06-11",
+        "exposure_decision": "allow",
+        "candidates": candidates,
+    }
+
+
+def long_candidate(**overrides):
+    c = {
+        "ticker": "NVDA",
+        "side": "long",
+        "setup": "VCP Pre-breakout",
+        "pivot": 155.20,
+        "worst_entry": 157.50,
+        "stop": 151.30,
+        "target": 163.70,
+        "shares": 380,
+        "risk_dollars": 2356.0,
+        "score": 78.5,
+        "validated": True,
+    }
+    c.update(overrides)
+    return c
+
+
+def short_candidate(**overrides):
+    c = {
+        "ticker": "NFLX",
+        "side": "short",
+        "setup": "Stage 4 (grade A)",
+        "pivot": 245.0,
+        "worst_entry": 240.1,
+        "stop": 260.0,
+        "target": 215.0,
+        "shares": 100,
+        "risk_dollars": 1500.0,
+        "score": 82.5,
+        "validated": None,
+    }
+    c.update(overrides)
+    return c
+
+
+def make_heat(**overrides):
+    heat = {
+        "account_size": 150000.0,
+        "open_risk_pct": 0.0,
+        "remaining_heat_pct": 6.0,
+        "remaining_heat_dollars": 9000.0,
+        "remaining_position_slots": 6,
+        "max_portfolio_heat_pct": 6.0,
+        "positions": [],
+    }
+    heat.update(overrides)
+    return heat
+
+
+def long_position(**overrides):
+    p = {
+        "thesis_id": "th_aapl_pvt_20260602_2c8b",
+        "ticker": "AAPL",
+        "entry_price": 100.0,
+        "shares": 100,
+        "stop_loss": 95.0,
+    }
+    p.update(overrides)
+    return p
+
+
+def short_position(**overrides):
+    p = {
+        "thesis_id": "th_nflx_short_20260605_aa11",
+        "ticker": "NFLX",
+        "entry_price": 245.0,
+        "shares": 100,
+        "stop_loss": 260.0,  # stop above entry -> short
+    }
+    p.update(overrides)
+    return p
+
+
+def _types(signals):
+    return [(s["ticker"], s["type"]) for s in signals]
+
+
+# --------------------------------------------------------------------------- #
+# size_short
+# --------------------------------------------------------------------------- #
+class TestSizeShort:
+    def test_basic_formula(self):
+        # $150k * 1% = $1500 risk; stop-entry = 3 -> 500 shares
+        assert sig.size_short(150000, entry=50.0, stop=53.0) == 500
+
+    def test_capped_by_max_position_pct(self):
+        # 1% of 150k / 1.0 = 1500 shares -> $300k position > 25% cap ($37.5k -> 187 shares)
+        assert sig.size_short(150000, entry=200.0, stop=201.0) == 187
+
+    def test_invalid_stop_returns_zero(self):
+        assert sig.size_short(150000, entry=50.0, stop=50.0) == 0
+        assert sig.size_short(150000, entry=50.0, stop=49.0) == 0
+
+
+# --------------------------------------------------------------------------- #
+# build_watchlist
+# --------------------------------------------------------------------------- #
+class TestBuildWatchlist:
+    def test_actionable_orders_become_long_candidates(self):
+        wl = sig.build_watchlist("2026-06-11", "allow", make_plan(), None, None)
+        nvda = [c for c in wl["candidates"] if c["ticker"] == "NVDA"][0]
+        assert nvda["side"] == "long"
+        assert nvda["pivot"] == 155.20
+        assert nvda["worst_entry"] == 157.50
+        assert nvda["stop"] == 151.30
+        assert nvda["target"] == 163.70
+        assert nvda["shares"] == 380
+        assert nvda["validated"] is None
+
+    def test_revalidation_included_without_shares(self):
+        wl = sig.build_watchlist("2026-06-11", "allow", make_plan(), None, None)
+        amd = [c for c in wl["candidates"] if c["ticker"] == "AMD"][0]
+        assert amd["shares"] is None
+        assert amd["pivot"] == 150.0
+        assert amd["worst_entry"] == 153.0
+
+    def test_short_candidates_sized_at_one_percent(self):
+        wl = sig.build_watchlist(
+            "2026-06-11",
+            "restrict",
+            None,
+            make_short_candidates(),
+            None,
+            account_size=150000,
+        )
+        nflx = wl["candidates"][0]
+        assert nflx["side"] == "short"
+        assert nflx["pivot"] == 245.0
+        assert nflx["stop"] == 260.0
+        assert nflx["target"] == 215.0
+        # 1% of 150k = 1500 / (260-245) = 100 shares
+        assert nflx["shares"] == 100
+
+    def test_validation_reject_drops_candidate(self):
+        validation = {
+            "verdicts": [{"ticker": "NVDA", "verdict": "reject", "note": "broken weekly structure"}]
+        }
+        wl = sig.build_watchlist("2026-06-11", "allow", make_plan(), None, validation)
+        tickers = [c["ticker"] for c in wl["candidates"]]
+        assert "NVDA" not in tickers
+        assert wl["rejected_by_validation"][0]["ticker"] == "NVDA"
+
+    def test_validation_pass_marks_validated(self):
+        validation = {"verdicts": [{"ticker": "NVDA", "verdict": "pass", "note": "clean base"}]}
+        wl = sig.build_watchlist("2026-06-11", "allow", make_plan(), None, validation)
+        nvda = [c for c in wl["candidates"] if c["ticker"] == "NVDA"][0]
+        assert nvda["validated"] is True
+        assert nvda["validation_note"] == "clean base"
+
+    def test_schema_top_level(self):
+        wl = sig.build_watchlist("2026-06-11", "allow", make_plan(), None, None, notes="n")
+        assert wl["workflow"] == "swing-opportunity-daily"
+        assert wl["date"] == "2026-06-11"
+        assert wl["exposure_decision"] == "allow"
+        assert wl["notes"] == "n"
+
+    def test_empty_inputs_give_empty_candidates(self):
+        wl = sig.build_watchlist("2026-06-11", "restrict", None, None, None)
+        assert wl["candidates"] == []
+
+
+# --------------------------------------------------------------------------- #
+# evaluate_signals — opening
+# --------------------------------------------------------------------------- #
+class TestOpenSignals:
+    def test_open_long_fires_between_pivot_and_worst_entry(self):
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 156.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "OPEN_LONG")]
+        assert signals[0]["price"] == 156.0
+        assert signals[0]["candidate"]["shares"] == 380
+
+    def test_no_open_long_below_pivot(self):
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 154.0}}, "allow", set())
+        assert signals == []
+
+    def test_missed_above_worst_entry(self):
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 160.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "MISSED")]
+
+    def test_no_open_long_when_gate_not_allow(self):
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NVDA": {"price": 156.0}}, "restrict", set()
+        )
+        assert signals == []
+
+    def test_open_short_fires_when_gate_restrict(self):
+        wl = make_watchlist([short_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NFLX": {"price": 244.0}}, "restrict", set()
+        )
+        assert _types(signals) == [("NFLX", "OPEN_SHORT")]
+
+    def test_short_suppressed_when_gate_allow(self):
+        wl = make_watchlist([short_candidate()])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NFLX": {"price": 244.0}}, "allow", set())
+        assert signals == []
+
+    def test_short_missed_below_chase_band(self):
+        wl = make_watchlist([short_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NFLX": {"price": 230.0}}, "cash-priority", set()
+        )
+        assert _types(signals) == [("NFLX", "MISSED")]
+
+    def test_no_capacity_slots_emits_skipped(self):
+        wl = make_watchlist([long_candidate()])
+        heat = make_heat(remaining_position_slots=0)
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "SKIPPED_CAPACITY")]
+
+    def test_no_heat_budget_emits_skipped(self):
+        wl = make_watchlist([long_candidate()])
+        heat = make_heat(remaining_heat_dollars=1000.0)  # candidate risks 2356
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "SKIPPED_CAPACITY")]
+
+    def test_slots_consumed_in_score_order(self):
+        a = long_candidate(ticker="AAA", score=90.0)
+        b = long_candidate(ticker="BBB", score=50.0)
+        wl = make_watchlist([b, a])
+        heat = make_heat(remaining_position_slots=1)
+        quotes = {"AAA": {"price": 156.0}, "BBB": {"price": 156.0}}
+        signals = sig.evaluate_signals(wl, heat, quotes, "allow", set())
+        assert ("AAA", "OPEN_LONG") in _types(signals)
+        assert ("BBB", "SKIPPED_CAPACITY") in _types(signals)
+
+    def test_no_open_for_already_open_position(self):
+        wl = make_watchlist([long_candidate(ticker="AAPL")])
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(wl, heat, {"AAPL": {"price": 156.0}}, "allow", set())
+        assert ("AAPL", "OPEN_LONG") not in _types(signals)
+
+    def test_missing_quote_is_silent(self):
+        wl = make_watchlist([long_candidate()])
+        assert sig.evaluate_signals(wl, make_heat(), {}, "allow", set()) == []
+
+
+# --------------------------------------------------------------------------- #
+# evaluate_signals — managing open positions
+# --------------------------------------------------------------------------- #
+class TestManageSignals:
+    def test_stop_hit_long(self):
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 94.5}}, "allow", set())
+        assert _types(signals) == [("AAPL", "STOP_HIT")]
+
+    def test_near_stop_long(self):
+        heat = make_heat(positions=[long_position()])
+        # stop 95, +1% band -> 95.95
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 95.5}}, "allow", set())
+        assert _types(signals) == [("AAPL", "NEAR_STOP")]
+
+    def test_stop_hit_suppresses_near_stop(self):
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 95.0}}, "allow", set())
+        assert _types(signals) == [("AAPL", "STOP_HIT")]
+
+    def test_two_r_long(self):
+        heat = make_heat(positions=[long_position()])
+        # risk = 5 -> 2R at 110
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 110.0}}, "allow", set())
+        assert _types(signals) == [("AAPL", "TWO_R")]
+
+    def test_quiet_zone_no_signal(self):
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 100.0}}, "allow", set())
+        assert signals == []
+
+    def test_stop_hit_short(self):
+        heat = make_heat(positions=[short_position()])
+        signals = sig.evaluate_signals(None, heat, {"NFLX": {"price": 261.0}}, "restrict", set())
+        assert _types(signals) == [("NFLX", "STOP_HIT")]
+
+    def test_two_r_short(self):
+        heat = make_heat(positions=[short_position()])
+        # risk = 15 -> 2R at 215
+        signals = sig.evaluate_signals(None, heat, {"NFLX": {"price": 214.0}}, "restrict", set())
+        assert _types(signals) == [("NFLX", "TWO_R")]
+
+    def test_manage_signals_fire_regardless_of_gate(self):
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(
+            None, heat, {"AAPL": {"price": 94.0}}, "cash-priority", set()
+        )
+        assert _types(signals) == [("AAPL", "STOP_HIT")]
+
+    def test_side_detected_from_stop_above_entry(self):
+        heat = make_heat(positions=[short_position()])
+        signals = sig.evaluate_signals(None, heat, {"NFLX": {"price": 261.0}}, "allow", set())
+        assert signals[0]["side"] == "short"
+
+
+# --------------------------------------------------------------------------- #
+# evaluate_signals — dedup
+# --------------------------------------------------------------------------- #
+class TestDedup:
+    def test_sent_keys_are_skipped(self):
+        heat = make_heat(positions=[long_position()])
+        sent = {"AAPL:STOP_HIT"}
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 94.0}}, "allow", sent)
+        assert signals == []
+
+    def test_signal_key_format(self):
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 94.0}}, "allow", set())
+        assert signals[0]["key"] == "AAPL:STOP_HIT"
+
+
+# --------------------------------------------------------------------------- #
+# Signals state (dedup persistence)
+# --------------------------------------------------------------------------- #
+class TestSignalsState:
+    def test_load_missing_returns_default(self, tmp_path):
+        state = sig.load_signals_state(tmp_path / "nope.json", "2026-06-11")
+        assert state == {"date": "2026-06-11", "sent": {}}
+
+    def test_roundtrip(self, tmp_path):
+        path = tmp_path / "state.json"
+        state = {"date": "2026-06-11", "sent": {"NVDA:OPEN_LONG": "2026-06-11T16:00:00"}}
+        sig.save_signals_state(path, state)
+        assert sig.load_signals_state(path, "2026-06-11") == state
+
+    def test_rollover_on_new_date(self, tmp_path):
+        path = tmp_path / "state.json"
+        sig.save_signals_state(
+            path, {"date": "2026-06-10", "sent": {"NVDA:OPEN_LONG": "2026-06-10T16:00:00"}}
+        )
+        state = sig.load_signals_state(path, "2026-06-11")
+        assert state == {"date": "2026-06-11", "sent": {}}
+
+    def test_corrupt_file_returns_default(self, tmp_path):
+        path = tmp_path / "state.json"
+        path.write_text("{not json", encoding="utf-8")
+        state = sig.load_signals_state(path, "2026-06-11")
+        assert state == {"date": "2026-06-11", "sent": {}}
+
+    def test_mark_sent(self):
+        state = {"date": "2026-06-11", "sent": {}}
+        sig.mark_sent(state, ["NVDA:OPEN_LONG"], "2026-06-11T16:05:00")
+        assert state["sent"]["NVDA:OPEN_LONG"] == "2026-06-11T16:05:00"
+
+
+# --------------------------------------------------------------------------- #
+# fetch_quotes (scanner HTTP mocked)
+# --------------------------------------------------------------------------- #
+class TestFetchQuotes:
+    def test_parses_scanner_rows(self, monkeypatch):
+        captured = {}
+
+        def fake_post(url, payload, timeout=30):
+            captured["url"] = url
+            captured["payload"] = payload
+            return {
+                "totalCount": 2,
+                "data": [
+                    {"s": "NASDAQ:NVDA", "d": ["NVDA", 156.0, 1000000]},
+                    {"s": "NASDAQ:AAPL", "d": ["AAPL", 230.5, 2000000]},
+                ],
+            }
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        quotes = sig.fetch_quotes(["NVDA", "AAPL"])
+        assert quotes["NVDA"]["price"] == 156.0
+        assert quotes["AAPL"]["price"] == 230.5
+        assert "scanner.tradingview.com" in captured["url"]
+        names_filter = [f for f in captured["payload"]["filter"] if f["left"] == "name"][0]
+        assert set(names_filter["right"]) == {"NVDA", "AAPL"}
+
+    def test_first_row_wins_for_duplicate_names(self, monkeypatch):
+        def fake_post(url, payload, timeout=30):
+            return {
+                "data": [
+                    {"s": "NYSE:F", "d": ["F", 12.0, 100]},
+                    {"s": "AMEX:F", "d": ["F", 99.0, 100]},
+                ]
+            }
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        assert sig.fetch_quotes(["F"])["F"]["price"] == 12.0
+
+    def test_null_close_is_skipped(self, monkeypatch):
+        def fake_post(url, payload, timeout=30):
+            return {"data": [{"s": "NASDAQ:XXX", "d": ["XXX", None, 100]}]}
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        assert sig.fetch_quotes(["XXX"]) == {}
+
+    def test_empty_ticker_list_short_circuits(self, monkeypatch):
+        def boom(*a, **k):
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(sig, "_http_post_json", boom)
+        assert sig.fetch_quotes([]) == {}
+
+    def test_network_error_raises_quotes_error(self, monkeypatch):
+        calls = []
+
+        def fake_post(url, payload, timeout=30):
+            calls.append(1)
+            raise sig.TransientQuotesError("boom")
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        monkeypatch.setattr(sig.time, "sleep", lambda s: None)
+        try:
+            sig.fetch_quotes(["NVDA"], max_retries=3)
+        except sig.QuotesError:
+            pass
+        else:
+            raise AssertionError("expected QuotesError")
+        assert len(calls) == 3
+
+
+# --------------------------------------------------------------------------- #
+# Watchlist JSON is serializable
+# --------------------------------------------------------------------------- #
+def test_watchlist_json_serializable():
+    wl = sig.build_watchlist(
+        "2026-06-11", "allow", make_plan(), make_short_candidates(), None, account_size=150000
+    )
+    json.dumps(wl)

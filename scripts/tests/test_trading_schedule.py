@@ -134,23 +134,28 @@ def test_evening_prep_dry_run_runs_without_network(monkeypatch):
     assert calls["notify"] == 1
 
 
-def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch):
-    """When the regime step writes an `allow` gate, the opportunity screen runs."""
+def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch, tmp_path):
+    """When the regime step writes an `allow` gate, the hybrid screen runs."""
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    monkeypatch.setattr(ts, "SCREENERS_DIR", tmp_path / "screeners")
+    monkeypatch.setattr(ts, "PLANS_DIR", tmp_path / "plans")
+    monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path / "journal")
 
     def fake_run_claude(prompt, *, label, dry_run, timeout):
         if "market-regime-daily" in label:
             # emulate the regime workflow writing the gate file
             gate = ts.decision_path("2026-06-02")
+            gate.parent.mkdir(parents=True, exist_ok=True)
             gate.write_text(json.dumps({"decision": "allow", "rationale": "ok"}))
         return True
 
     sent = []
     monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    monkeypatch.setattr(ts, "run_skill_script", lambda *a, **k: None)
+    monkeypatch.setattr(ts, "tv_available", lambda **k: True)
+    monkeypatch.setattr(ts, "_sync_tv_alerts", lambda wl, args: "")
     monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
-    try:
-        rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-02", "--no-telegram"])
-    finally:
-        ts.decision_path("2026-06-02").unlink(missing_ok=True)
+    rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-02", "--no-telegram"])
     assert rc == 0
     assert sent and "ALLOW" in sent[0]
 
@@ -292,3 +297,539 @@ class TestResolveClaudeBin:
         monkeypatch.setattr(ts.shutil, "which", lambda name: None)
         monkeypatch.setattr(ts, "CLAUDE_FALLBACK_PATHS", [])
         assert ts.resolve_claude_bin() == "claude"
+
+
+# --------------------------------------------------------------------------- #
+# Auto mode: shared fixtures
+# --------------------------------------------------------------------------- #
+def _patch_trading_dirs(monkeypatch, tmp_path):
+    """Redirect every trading-data dir constant into tmp_path."""
+    monkeypatch.setattr(ts, "TRADING_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    monkeypatch.setattr(ts, "MARKET_DIR", tmp_path / "market")
+    monkeypatch.setattr(ts, "SCREENERS_DIR", tmp_path / "screeners")
+    monkeypatch.setattr(ts, "PLANS_DIR", tmp_path / "plans")
+    monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path / "journal")
+    monkeypatch.setattr(ts, "SIGNALS_STATE_FILE", tmp_path / "logs" / "intraday_signals_state.json")
+    for d in ("schedule", "market", "screeners", "plans", "journal", "logs"):
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+
+
+def _write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _gate(tmp_path, date_str, decision):
+    return _write_json(
+        tmp_path / "schedule" / f"exposure_decision_{date_str}.json",
+        {"decision": decision, "rationale": "test"},
+    )
+
+
+def _watchlist_file(tmp_path, date_str, candidates):
+    return _write_json(
+        tmp_path / "schedule" / f"watchlist_{date_str}.json",
+        {
+            "workflow": "swing-opportunity-daily",
+            "date": date_str,
+            "exposure_decision": "allow",
+            "candidates": candidates,
+        },
+    )
+
+
+def _heat_file(tmp_path, positions=(), slots=6, heat_dollars=9000.0):
+    return _write_json(
+        tmp_path / "journal" / "portfolio_heat_2026-06-11_120000.json",
+        {
+            "account_size": 150000.0,
+            "remaining_position_slots": slots,
+            "remaining_heat_dollars": heat_dollars,
+            "positions": list(positions),
+        },
+    )
+
+
+_NVDA_CANDIDATE = {
+    "ticker": "NVDA",
+    "side": "long",
+    "setup": "VCP Pre-breakout",
+    "pivot": 155.2,
+    "worst_entry": 157.5,
+    "stop": 151.3,
+    "target": 163.7,
+    "shares": 380,
+    "risk_dollars": 2356.0,
+    "score": 78.5,
+}
+
+
+# --------------------------------------------------------------------------- #
+# Intraday slot
+# --------------------------------------------------------------------------- #
+class TestIntradaySlot:
+    def test_skips_outside_window_without_force(self, monkeypatch, tmp_path, capsys):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        monkeypatch.setattr(ts, "_now_time", lambda: dt.time(10, 0))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--no-telegram"])
+        assert rc == 0
+        assert "вне окна" in capsys.readouterr().out
+
+    def test_open_signal_sent_and_deduped(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+        _heat_file(tmp_path)
+        monkeypatch.setattr(
+            ts.tsig, "fetch_quotes", lambda tickers, **k: {"NVDA": {"price": 156.0}}
+        )
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert len(sent) == 1
+        assert "ОТКРОЙ ЛОНГ NVDA" in sent[0]
+        assert "380" in sent[0]
+        # state persisted -> second run is silent
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert len(sent) == 1
+
+    def test_stop_hit_signal_for_open_position(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "restrict")
+        _heat_file(
+            tmp_path,
+            positions=[{"ticker": "AAPL", "entry_price": 100.0, "shares": 100, "stop_loss": 95.0}],
+        )
+        monkeypatch.setattr(ts.tsig, "fetch_quotes", lambda tickers, **k: {"AAPL": {"price": 94.0}})
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert sent and "AAPL" in sent[0] and "стоп" in sent[0].lower()
+
+    def test_quotes_error_returns_1(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+
+        def boom(tickers, **k):
+            raise ts.tsig.QuotesError("scanner down")
+
+        monkeypatch.setattr(ts.tsig, "fetch_quotes", boom)
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 1
+
+    def test_no_tickers_is_noop(self, monkeypatch, tmp_path, capsys):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert "нет тикеров" in capsys.readouterr().out
+
+    def test_dry_run_never_touches_network(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+
+        def boom(tickers, **k):
+            raise AssertionError("network call in dry-run")
+
+        monkeypatch.setattr(ts.tsig, "fetch_quotes", boom)
+        rc = ts.main(
+            ["--slot", "intraday", "--date", "2026-06-11", "--force", "--dry-run", "--no-telegram"]
+        )
+        assert rc == 0
+
+    def test_non_trading_day_skips(self, monkeypatch, tmp_path, capsys):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-13", "--no-telegram"])
+        assert rc == 0
+        assert "not a US trading day" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# Evening hybrid pipeline
+# --------------------------------------------------------------------------- #
+def _plan_fixture(tmp_path):
+    return _write_json(
+        tmp_path / "plans" / "breakout_trade_plan_2026-06-11_221500.json",
+        {
+            "actionable_orders": [
+                {
+                    "symbol": "NVDA",
+                    "sector": "Technology",
+                    "composite_score": 78.5,
+                    "execution_state": "Pre-breakout",
+                    "plan_type": "pending_breakout",
+                    "trade_plan": {
+                        "signal_entry": 155.2,
+                        "worst_entry": 157.5,
+                        "stop_loss_price": 151.3,
+                        "target_price": 163.7,
+                        "shares": 380,
+                        "risk_dollars": 2356.0,
+                    },
+                }
+            ],
+            "revalidation": [],
+        },
+    )
+
+
+class TestEveningHybrid:
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path,
+        *,
+        decision,
+        validation=None,
+        market_top=None,
+        short_candidates=None,
+        tv_up=True,
+    ):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(tmp_path / "trading_profile.json", {"account_size": 150000})
+        plan_path = _plan_fixture(tmp_path)
+        short_path = _write_json(
+            tmp_path / "screeners" / "swing_short_screener_2026-06-11_221500.json",
+            {"candidates": short_candidates or []},
+        )
+        if market_top is not None:
+            _write_json(tmp_path / "market" / "market_top_2026-06-11_120000.json", market_top)
+
+        script_calls = []
+
+        def fake_run_skill_script(cmd, *, label, dry_run, timeout, output_glob=None):
+            script_calls.append(label)
+            if "vcp" in label:
+                return _write_json(
+                    tmp_path / "screeners" / "vcp_screener_2026-06-11_221000.json", {"results": []}
+                )
+            if "heat" in label:
+                return _heat_file(tmp_path)
+            if "planner" in label:
+                return plan_path
+            if "short" in label:
+                return short_path
+            return None
+
+        def fake_run_claude(prompt, *, label, dry_run, timeout):
+            if "market-regime-daily" in label:
+                _gate(tmp_path, "2026-06-11", decision)
+            if "validation" in label and validation is not None:
+                _write_json(
+                    tmp_path / "schedule" / "watchlist_validation_2026-06-11.json", validation
+                )
+                return validation is not False
+            return True
+
+        sent = []
+        synced = []
+        monkeypatch.setattr(ts, "run_skill_script", fake_run_skill_script)
+        monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+        monkeypatch.setattr(ts, "tv_available", lambda **k: tv_up)
+        monkeypatch.setattr(
+            ts.talerts,
+            "sync_watchlist_alerts",
+            lambda wl, state_path, **k: synced.append(wl)
+            or {
+                "created": 3,
+                "deleted": 1,
+                "kept": 0,
+                "skipped": 0,
+                "errors": 0,
+                "error_details": [],
+            },
+        )
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-11", "--no-telegram"])
+        self.synced = synced
+        return rc, script_calls, sent
+
+    def test_allow_runs_deterministic_chain_and_builds_watchlist(self, monkeypatch, tmp_path):
+        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="allow")
+        assert rc == 0
+        assert any("vcp" in c for c in calls)
+        assert any("heat" in c for c in calls)
+        assert any("planner" in c for c in calls)
+        assert any("ingest" in c for c in calls)
+        wl = json.loads(
+            (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
+        )
+        assert wl["candidates"][0]["ticker"] == "NVDA"
+        assert wl["candidates"][0]["shares"] == 380
+        assert sent and "NVDA" in sent[0]
+
+    def test_validation_reject_drops_candidate(self, monkeypatch, tmp_path):
+        validation = {
+            "date": "2026-06-11",
+            "verdicts": [{"ticker": "NVDA", "verdict": "reject", "note": "broken base"}],
+        }
+        rc, _, sent = self._run(monkeypatch, tmp_path, decision="allow", validation=validation)
+        assert rc == 0
+        wl = json.loads(
+            (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
+        )
+        assert wl["candidates"] == []
+        assert wl["rejected_by_validation"][0]["ticker"] == "NVDA"
+
+    def test_restrict_with_market_pressure_runs_short_screen(self, monkeypatch, tmp_path):
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        shorts = [
+            {
+                "symbol": "NFLX",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": 245.0, "stop": 260.0, "target_2r": 215.0},
+            }
+        ]
+        rc, calls, sent = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            short_candidates=shorts,
+        )
+        assert rc == 0
+        assert any("short" in c for c in calls)
+        wl = json.loads(
+            (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
+        )
+        assert wl["candidates"][0]["side"] == "short"
+        assert wl["candidates"][0]["shares"] == 100  # 1% of 150k / 15
+        assert sent and "ШОРТ" in sent[0]
+
+    def test_restrict_without_market_top_skips_shorts(self, monkeypatch, tmp_path):
+        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="restrict")
+        assert rc == 0
+        assert not any("short" in c for c in calls)
+        assert sent and "ЗАКРЫТ" in sent[0]
+
+    def test_fresh_ftd_blocks_shorts(self, monkeypatch, tmp_path):
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": True},
+        }
+        rc, calls, _ = self._run(monkeypatch, tmp_path, decision="restrict", market_top=market_top)
+        assert rc == 0
+        assert not any("short" in c for c in calls)
+
+
+# --------------------------------------------------------------------------- #
+# Weekly slot
+# --------------------------------------------------------------------------- #
+class TestWeeklySlot:
+    def test_skips_on_non_saturday(self, monkeypatch, tmp_path, capsys):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        rc = ts.main(["--slot", "weekly", "--date", "2026-06-10", "--dry-run", "--no-telegram"])
+        assert rc == 0
+        assert "not a Saturday" in capsys.readouterr().out
+
+    def test_runs_deterministic_scripts_and_claude(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            ts,
+            "run_skill_script",
+            lambda cmd, *, label, dry_run, timeout, output_glob=None: calls.append(label),
+        )
+
+        def fake_run_claude(prompt, *, label, dry_run, timeout):
+            _write_json(
+                tmp_path / "schedule" / "weekly_review_2026-06-13.json",
+                {"top_risk_score": 51.5, "macro_regime": "Contraction"},
+            )
+            return True
+
+        monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "weekly", "--date", "2026-06-13", "--no-telegram"])
+        assert rc == 0
+        assert any("ibd" in c for c in calls)
+        assert any("macro" in c for c in calls)
+        assert any("ftd" in c for c in calls)
+        assert sent and "WEEKLY" in sent[0]
+
+
+# --------------------------------------------------------------------------- #
+# Auto-mode prompts and messages
+# --------------------------------------------------------------------------- #
+def test_validation_prompt_lists_candidates_and_path():
+    cands = [{"ticker": "NVDA", "side": "long", "pivot": 155.2, "stop": 151.3}]
+    prompt = ts.validation_prompt("2026-06-11", cands, Path("/tmp/v.json"))
+    assert "NVDA" in prompt
+    assert "/tmp/v.json" in prompt
+    assert '"pass" | "reject"' in prompt
+
+
+def test_weekly_prompt_contains_summary_path():
+    prompt = ts.weekly_prompt("2026-06-13", Path("/tmp/weekly.json"))
+    assert "/tmp/weekly.json" in prompt
+    assert "market-top" in prompt.lower() or "market_top" in prompt.lower()
+
+
+def test_intraday_msg_formats_signal_types():
+    signals = [
+        {
+            "key": "NVDA:OPEN_LONG",
+            "type": "OPEN_LONG",
+            "ticker": "NVDA",
+            "side": "long",
+            "price": 156.0,
+            "candidate": _NVDA_CANDIDATE,
+        },
+        {
+            "key": "AAPL:STOP_HIT",
+            "type": "STOP_HIT",
+            "ticker": "AAPL",
+            "side": "long",
+            "price": 94.0,
+            "position": {"ticker": "AAPL", "entry_price": 100.0, "stop_loss": 95.0, "shares": 100},
+        },
+        {
+            "key": "MSFT:TWO_R",
+            "type": "TWO_R",
+            "ticker": "MSFT",
+            "side": "long",
+            "price": 110.0,
+            "position": {"ticker": "MSFT", "entry_price": 100.0, "stop_loss": 95.0, "shares": 50},
+        },
+    ]
+    msg = ts.build_intraday_msg("2026-06-11", signals)
+    assert "ОТКРОЙ ЛОНГ NVDA" in msg
+    assert "стоп" in msg
+    assert "постмортем" in msg  # STOP_HIT follow-up
+    assert "продай 50%" in msg  # TWO_R rule
+
+
+# --------------------------------------------------------------------------- #
+# TV alerts integration + no-cache + TV availability
+# --------------------------------------------------------------------------- #
+class TestTvIntegration:
+    def test_evening_allow_syncs_alerts_and_reports(self, monkeypatch, tmp_path):
+        helper = TestEveningHybrid()
+        rc, _, sent = helper._run(monkeypatch, tmp_path, decision="allow")
+        assert rc == 0
+        assert helper.synced, "sync_watchlist_alerts must be called"
+        assert any("Алерты TV" in m for m in sent)
+
+    def test_evening_allow_tv_down_notifies_immediately_rc1(self, monkeypatch, tmp_path):
+        helper = TestEveningHybrid()
+        rc, calls, sent = helper._run(monkeypatch, tmp_path, decision="allow", tv_up=False)
+        assert rc == 1
+        assert sent and "TradingView" in sent[0]
+        assert not any("vcp" in c for c in calls)  # screen skipped without TV
+
+    def test_evening_short_branch_tv_down_notifies_rc1(self, monkeypatch, tmp_path):
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        helper = TestEveningHybrid()
+        rc, calls, sent = helper._run(
+            monkeypatch, tmp_path, decision="restrict", market_top=market_top, tv_up=False
+        )
+        assert rc == 1
+        assert sent and "TradingView" in sent[0]
+        assert not any("short" in c for c in calls)
+
+    def test_intraday_missed_purges_alerts(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        monkeypatch.setattr(ts, "ALERTS_STATE_FILE", tmp_path / "logs" / "alerts_state.json")
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+        _heat_file(tmp_path)
+        monkeypatch.setattr(
+            ts.tsig, "fetch_quotes", lambda tickers, **k: {"NVDA": {"price": 170.0}}
+        )  # far above worst_entry -> MISSED
+        monkeypatch.setattr(ts, "tv_available", lambda **k: True)
+        purged = []
+        monkeypatch.setattr(
+            ts.talerts,
+            "purge_watchlist_alerts",
+            lambda tickers, state_path, **k: purged.append(list(tickers))
+            or {
+                "created": 0,
+                "deleted": 3,
+                "kept": 0,
+                "skipped": 0,
+                "errors": 0,
+                "error_details": [],
+            },
+        )
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert purged == [["NVDA"]]
+        assert sent and "Сняты алерты" in sent[0]
+
+    def test_intraday_missed_tv_down_warns_in_message(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+        monkeypatch.setattr(
+            ts.tsig, "fetch_quotes", lambda tickers, **k: {"NVDA": {"price": 170.0}}
+        )
+        monkeypatch.setattr(ts, "tv_available", lambda **k: False)
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert sent and "вручную" in sent[0]
+
+    def test_weekly_tv_down_notifies_and_skips_det_scripts(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        calls = []
+        monkeypatch.setattr(
+            ts,
+            "run_skill_script",
+            lambda cmd, *, label, dry_run, timeout, output_glob=None: calls.append(label),
+        )
+        monkeypatch.setattr(ts, "tv_available", lambda **k: False)
+        monkeypatch.setattr(ts, "run_claude", lambda *a, **k: True)
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "weekly", "--date", "2026-06-13", "--no-telegram"])
+        assert rc == 0
+        assert calls == []  # deterministic scripts skipped without TV
+        assert any("TradingView" in m for m in sent)
+
+    def test_premarket_tv_down_prepends_warning(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        monkeypatch.setattr(ts, "run_skill_script", lambda *a, **k: None)
+        monkeypatch.setattr(ts, "run_claude", lambda *a, **k: True)
+        monkeypatch.setattr(ts, "tv_available", lambda **k: False)
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "premarket", "--date", "2026-06-11", "--no-telegram"])
+        assert rc == 0
+        assert sent and "TradingView" in sent[0]
+
+
+def test_run_skill_script_disables_tv_cache(monkeypatch):
+    captured = {}
+
+    class _Res:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _Res()
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_run)
+    ts.run_skill_script(["echo"], label="x", dry_run=False, timeout=10)
+    assert captured["env"]["TV_NO_CACHE"] == "1"

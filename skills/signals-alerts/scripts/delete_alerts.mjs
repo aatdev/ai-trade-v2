@@ -17,6 +17,10 @@
  *   # diff-режим для sync: удалить только устаревшие (которых нет в плане)
  *   node delete_alerts.mjs --keep-from-plan --file plan.json
  *
+ *   # сузить «наши» до алертов, содержащих подстроку в message (например,
+ *   # авто-алерты watchlist помечены тегом [WL] — ручные алерты не трогаются)
+ *   node delete_alerts.mjs --tickers BSX --message-contains "[WL]"
+ *
  * stdout: JSON { results: [{ ticker, deleted: [...], kept: [...], not_found, errors }], summary }
  */
 import fs from 'node:fs';
@@ -30,13 +34,14 @@ import { evaluate } from '../../../vendor/tradingview-mcp/src/connection.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const out = { tickers: null, file: null, keepFromPlan: false, saveLayout: true };
+  const out = { tickers: null, file: null, keepFromPlan: false, saveLayout: true, messageContains: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--tickers' || a === '-t') out.tickers = argv[++i].split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
     else if (a === '--file' || a === '-f') out.file = argv[++i];
     else if (a === '--keep-from-plan') out.keepFromPlan = true;
     else if (a === '--no-save-layout') out.saveLayout = false;
+    else if (a === '--message-contains') out.messageContains = argv[++i];
   }
   return out;
 }
@@ -97,8 +102,31 @@ async function rowCount() {
 }
 
 async function ensureAlertsPanel() {
-  if ((await rowCount()) > 0) return { ok: true, rows: await rowCount() };
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if ((await rowCount()) > 0) return { ok: true, rows: await rowCount() };
+    // The widget can open on the "Log" tab (fired alerts, empty-state text
+    // "No alerts triggered yet") — the active-alerts rows live on the "Alerts"
+    // tab (button#list). Switch tabs WITHOUT toggling the panel closed.
+    const tabState = await evaluate(`
+      (function(){
+        var tab = document.querySelector('button#list');
+        if (!tab) return 'no_tab';
+        if (tab.getAttribute('aria-selected') === 'true') return 'selected';
+        tab.click();
+        return 'switched';
+      })()
+    `);
+    if (tabState === 'switched') {
+      await sleep(900);
+      continue;
+    }
+    if (tabState === 'selected') {
+      await sleep(600);
+      // The list tab is open; zero rows here means a legitimately empty list
+      // (targets will be reported as not_found_in_ui), not a closed panel.
+      return { ok: true, rows: await rowCount() };
+    }
+    // No tab strip in the DOM -> the panel is closed; open it.
     await evaluate(`
       (function(){
         var b = document.querySelector('[data-name="alerts"]')
@@ -108,7 +136,6 @@ async function ensureAlertsPanel() {
       })()
     `);
     await sleep(1200);
-    if ((await rowCount()) > 0) return { ok: true, rows: await rowCount() };
   }
   return { ok: false, rows: 0 };
 }
@@ -247,8 +274,12 @@ async function removeChartMarkers(ticker, alertsToDelete, result) {
   }
 }
 
-async function deleteForTicker(ticker, allAlerts, keepMessages) {
-  const ours = allAlerts.filter((a) => (a?.message || '').startsWith(`${ticker}:`));
+async function deleteForTicker(ticker, allAlerts, keepMessages, messageContains) {
+  const ours = allAlerts.filter(
+    (a) =>
+      (a?.message || '').startsWith(`${ticker}:`) &&
+      (!messageContains || (a?.message || '').includes(messageContains))
+  );
   const result = { ticker, deleted: [], kept: [], errors: [], not_found_in_ui: [] };
 
   const toDelete = keepMessages
@@ -313,7 +344,11 @@ async function main() {
   const allAlerts = listed?.alerts || [];
 
   const hasAnythingToDelete = tickers.some((t) => {
-    const ours = allAlerts.filter((a) => (a?.message || '').startsWith(`${t}:`));
+    const ours = allAlerts.filter(
+      (a) =>
+        (a?.message || '').startsWith(`${t}:`) &&
+        (!args.messageContains || (a?.message || '').includes(args.messageContains))
+    );
     const keep = keepByTicker?.get(t.toUpperCase());
     return keep ? ours.some((a) => !keep.has(a.message)) : ours.length > 0;
   });
@@ -338,7 +373,7 @@ async function main() {
   const results = [];
   for (const t of tickers) {
     const keep = keepByTicker ? (keepByTicker.get(t.toUpperCase()) || new Set()) : null;
-    const r = await deleteForTicker(t, allAlerts, keep);
+    const r = await deleteForTicker(t, allAlerts, keep, args.messageContains);
     results.push(r);
   }
 

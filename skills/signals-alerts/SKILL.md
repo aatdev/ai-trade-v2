@@ -104,6 +104,10 @@ node parse_signals.mjs --tickers BSX | node delete_alerts.mjs
 
 # diff-режим (для sync): снести только устаревшие — те, чьего message нет в плане
 node .claude/skills/signals-alerts/scripts/delete_alerts.mjs --keep-from-plan --file plan.json
+
+# сузить «наши» до алертов с подстрокой в message: авто-алерты watchlist
+# (run_trading_schedule, тег [WL]) удаляются, ручные алерты журнала не трогаются
+node .claude/skills/signals-alerts/scripts/delete_alerts.mjs --tickers NVDA --message-contains "[WL]"
 ```
 
 Что делает:
