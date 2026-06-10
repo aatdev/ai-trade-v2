@@ -10,4 +10,4 @@ metadata:
 Always respond to this user in Russian.
 
 **Why:** Explicitly requested on 2026-06-01.
-**How to apply:** Write all prose responses in Russian, regardless of the language of the task or codebase. Code, file paths, and commands stay as-is.
+**How to apply:** Write all prose responses and reports in Russian, regardless of the language of the task or codebase. Code, file paths, and commands stay as-is.
