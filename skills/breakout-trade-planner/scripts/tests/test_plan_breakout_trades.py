@@ -565,7 +565,9 @@ class TestMainWithProfile:
         assert plans["parameters"]["base_risk_pct"] == 2.0
         assert plans["parameters"]["account_size"] == 150000
 
-    def test_missing_account_size_errors(self, tmp_path):
+    def test_missing_account_size_errors(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRADING_PROFILE", raising=False)
+        monkeypatch.setenv("TRADING_DATE_DIR", str(tmp_path))  # no trading_profile.json here
         input_path = self._write_input(tmp_path)
         with pytest.raises(SystemExit):
             main(["--input", input_path, "--output-dir", str(tmp_path / "out")])

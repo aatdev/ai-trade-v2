@@ -80,6 +80,47 @@ PLANNER_PROFILE_KEYS = {
 }
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
+def _default_profile():
+    """Profile default: $TRADING_PROFILE, else $TRADING_DATE_DIR/trading_profile.json."""
+    import os
+
+    prof = os.environ.get("TRADING_PROFILE")
+    if prof:
+        return prof
+    base = _trading_data_dir()
+    if base is not None and (base / "trading_profile.json").is_file():
+        return str(base / "trading_profile.json")
+    return None
+
+
 def load_profile(path: str, applied_keys: set[str]) -> dict:
     """Load a JSON parameter profile and return the keys this script applies.
 
@@ -719,7 +760,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", required=True, help="VCP screener JSON path")
     parser.add_argument(
         "--profile",
-        default=os.environ.get("TRADING_PROFILE"),
+        default=_default_profile(),
         help=(
             "JSON parameter profile (account_size, risk_pct, ...). Explicit CLI "
             "flags override profile values. Default: $TRADING_PROFILE."
@@ -759,13 +800,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--current-exposure-json", default=None)
-    parser.add_argument("--output-dir", default="reports/")
+    parser.add_argument("--output-dir", default=_default_output_dir("plans"))
     return parser
 
 
 def main(argv: list[str] | None = None):
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument("--profile", default=os.environ.get("TRADING_PROFILE"))
+    pre.add_argument("--profile", default=_default_profile())
     pre_args, _ = pre.parse_known_args(argv)
 
     parser = build_arg_parser()

@@ -49,6 +49,34 @@ DEFAULT_MIN_PRICE = 5.0
 DEFAULT_MIN_DOLLAR_VOL = 3_000_000.0
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
 def passes_short_filter(
     metrics: dict,
     min_price: float = DEFAULT_MIN_PRICE,
@@ -230,7 +258,11 @@ def parse_arguments(argv=None) -> argparse.Namespace:
         help="Reject names below this avg daily dollar volume",
     )
     p.add_argument("--as-of", help="Date label for the report (YYYY-MM-DD); else today")
-    p.add_argument("--output-dir", default="reports/", help="Output directory (default reports/)")
+    p.add_argument(
+        "--output-dir",
+        default=_default_output_dir("screeners"),
+        help="Output directory (default: $TRADING_DATE_DIR/screeners, else reports/)",
+    )
     return p.parse_args(argv)
 
 

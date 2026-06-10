@@ -38,6 +38,34 @@ REGIME_SCORES = {
 }
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
 def load_json_file(path: Optional[Path]) -> Optional[dict]:
     """Load a JSON file if it exists and is valid."""
     if path is None or not path.exists():
@@ -556,8 +584,8 @@ def main():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("reports"),
-        help="Output directory for reports (default: reports/)",
+        default=_default_output_dir("market", "reports"),
+        help="Output directory for reports (default: $TRADING_DATE_DIR/market, else reports/)",
     )
     parser.add_argument("--json-only", action="store_true", help="Output JSON only, skip markdown")
 

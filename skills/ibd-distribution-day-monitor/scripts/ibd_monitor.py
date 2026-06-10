@@ -49,6 +49,34 @@ RULE_VERSION = "ibd_dd_v1.0"
 DEFAULT_CONFIG_PATH = HERE.parent / "config" / "default.yaml"
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--symbols", default=None, help="Comma-separated, e.g. QQQ,SPY")
@@ -59,7 +87,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--as-of", default=None, help="YYYY-MM-DD; default = latest session")
     p.add_argument("--config", default=None)
     p.add_argument("--api-key", default=None)
-    p.add_argument("--output-dir", default="reports/")
+    p.add_argument("--output-dir", default=_default_output_dir("market"))
     return p.parse_args(argv)
 
 

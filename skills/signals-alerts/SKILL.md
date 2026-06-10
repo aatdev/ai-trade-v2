@@ -1,13 +1,13 @@
 ---
 name: signals-alerts
-description: Создать, удалить или синхронизировать алерты в TradingView Desktop на основе журнала `results/analysis/signals.md`. По каждому сигналу — 5 алертов приоритетного сценария (Trigger / Stop / T1 / T2 / T3). Use whenever the user asks to создать/удалить/обновить алерты по журналу сигналов, синхронизировать TradingView с signals.md, "поставить триггеры из журнала", "снять алерты по тикерам", "пересоздай алерты", "/signals-alerts", "signals alerts sync".
+description: Создать, удалить или синхронизировать алерты в TradingView Desktop на основе журнала `trading-data/analysis/signals.md`. По каждому сигналу — 5 алертов приоритетного сценария (Trigger / Stop / T1 / T2 / T3). Use whenever the user asks to создать/удалить/обновить алерты по журналу сигналов, синхронизировать TradingView с signals.md, "поставить триггеры из журнала", "снять алерты по тикерам", "пересоздай алерты", "/signals-alerts", "signals alerts sync".
 ---
 
 # signals-alerts — синхронизация алертов TradingView с журналом
 
 ## Назначение
 
-Этот скилл читает `results/analysis/signals.md`, извлекает по каждому блоку приоритетный сценарий (направление + Trigger / Stop / T1 / T2 / T3) и приводит набор алертов в TradingView Desktop к плану — точечно (diff), а не «снести всё и пересоздать».
+Этот скилл читает `trading-data/analysis/signals.md`, извлекает по каждому блоку приоритетный сценарий (направление + Trigger / Stop / T1 / T2 / T3) и приводит набор алертов в TradingView Desktop к плану — точечно (diff), а не «снести всё и пересоздать».
 
 **Принцип sync — diff:** алерты, совпадающие по `message`, остаются нетронутыми; недостающие — создаются; устаревшие (которых уже нет в плане) — удаляются. Никаких массовых сносов.
 
@@ -208,7 +208,7 @@ cat ./tmp/signals_plan_*.json | node .claude/skills/signals-alerts/scripts/creat
 ```markdown
 ## /signals-alerts — <action> — YYYY-MM-DD HH:MM
 
-**Журнал:** `reports/analysis/signals.md` (N сигналов прочитано)
+**Журнал:** `trading-data/analysis/signals.md` (N сигналов прочитано)
 **Фильтр тикеров:** ALL | <список>
 **TradingView:** ✅ доступен
 **Режим:** sync (diff) | create | delete | list
@@ -246,7 +246,7 @@ cat ./tmp/signals_plan_*.json | node .claude/skills/signals-alerts/scripts/creat
 
 ## Связанные файлы
 
-- `reports/analysis/signals.md` — источник сигналов (читается).
+- `trading-data/analysis/signals.md` — источник сигналов (читается).
 - `.claude/skills/ticker-analysis/SKILL.md` (Шаг 5) — каноническая схема «5 алертов на приоритетный сценарий», шаблоны `message`.
 - `src/core/alerts.js`, `src/core/chart.js`, `src/core/ui.js`, `src/core/health.js` — функции, которые скрипты импортируют напрямую.
 - `feedback_create_alerts.md` (в auto-memory) — почему `alert_create` требует CDP-mouse-click + Input.insertText, и почему удаление — только через UI.

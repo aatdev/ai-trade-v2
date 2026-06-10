@@ -47,6 +47,10 @@ reviews/
 # Kept out of commits so production state never leaks into the repo.
 state/
 
+# Personal trading artifacts ($TRADING_DATE_DIR): gate files, screener output,
+# trade plans, thesis journal, autopilot logs. Never committed.
+trading-data/
+
 # CI artifacts
 htmlcov/
 .coverage

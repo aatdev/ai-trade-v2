@@ -21,6 +21,34 @@ JOURNAL_DIR_NAME = "journal"
 # -- MAE / MFE ----------------------------------------------------------------
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
 def compute_mae_mfe(thesis: dict, price_adapter: Any | None = None) -> dict[str, float | None]:
     """Compute Maximum Adverse Excursion and Maximum Favorable Excursion.
 
@@ -269,7 +297,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     parser = argparse.ArgumentParser(description="Trader Memory Core — review tools")
-    parser.add_argument("--state-dir", default="state/theses")
+    parser.add_argument(
+        "--state-dir", default=_default_output_dir("journal/theses", "state/theses")
+    )
     sub = parser.add_subparsers(dest="command")
 
     # review-due
@@ -279,7 +309,9 @@ if __name__ == "__main__":
     # postmortem
     pm_p = sub.add_parser("postmortem", help="Generate postmortem for a thesis")
     pm_p.add_argument("thesis_id")
-    pm_p.add_argument("--journal-dir", default=None)
+    pm_p.add_argument(
+        "--journal-dir", default=_default_output_dir("journal/postmortems", None)
+    )
 
     # summary
     sub.add_parser("summary", help="Show summary statistics")

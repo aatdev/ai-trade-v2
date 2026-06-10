@@ -1,20 +1,21 @@
 #!/usr/bin/env node
 /**
  * prune_signals.mjs — удаляет все блоки сигналов по указанному тикеру
- * из `results/analysis/signals.md` (in-place).
+ * из журнала `signals.md` (по умолчанию `$TRADING_DATE_DIR/analysis/signals.md`,
+ * in-place).
  *
  * Назначение: перед дозаписью свежего сигнала по TICKER (Шаг 5 в
  * ticker-analysis) старые блоки этого же тикера должны быть удалены,
  * чтобы в журнале оставалась ровно одна актуальная запись на тикер.
  * Историческая копия отчёта по-прежнему лежит в
- * `results/analysis/TICKER/DATE/report.md`.
+ * `$TRADING_DATE_DIR/analysis/TICKER/DATE/report.md`.
  *
  * Блок — это секция от заголовка `## YYYY-MM-DD — TICKER — STATUS`
  * до следующего разделителя `---`. Совпадение тикера определяется
  * по заголовку (case-sensitive — тикеры всегда uppercase).
  *
  * CLI:
- *   node prune_signals.mjs --ticker TICKER [--input results/analysis/signals.md] [--dry-run]
+ *   node prune_signals.mjs --ticker TICKER [--input trading-data/analysis/signals.md] [--dry-run]
  *
  * Выход (stdout):
  *   { removed: N, kept: M, ticker: "TICKER", source: "...", file_missing?: true }
@@ -25,7 +26,29 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../..');
-const DEFAULT_INPUT = path.join(REPO_ROOT, 'reports/analysis/signals.md');
+
+// Корень торговых артефактов: $TRADING_DATE_DIR (env или строка в repo .env).
+function tradingDataDir() {
+  let base = process.env.TRADING_DATE_DIR;
+  if (!base) {
+    try {
+      for (let line of fs.readFileSync(path.join(REPO_ROOT, '.env'), 'utf8').split('\n')) {
+        line = line.trim().replace(/^export\s+/, '');
+        if (line.startsWith('TRADING_DATE_DIR=')) {
+          base = line.slice('TRADING_DATE_DIR='.length).trim().replace(/^['"]|['"]$/g, '');
+          break;
+        }
+      }
+    } catch { /* нет .env — используем старый путь */ }
+  }
+  if (!base) return null;
+  return path.isAbsolute(base) ? base : path.join(REPO_ROOT, base);
+}
+
+const TRADING_DATA_DIR = tradingDataDir();
+const DEFAULT_INPUT = TRADING_DATA_DIR
+  ? path.join(TRADING_DATA_DIR, 'analysis/signals.md')
+  : path.join(REPO_ROOT, 'reports/analysis/signals.md');
 
 function parseArgs(argv) {
   const out = { input: DEFAULT_INPUT, ticker: null, dryRun: false };

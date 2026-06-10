@@ -234,11 +234,27 @@ class TestMain:
         report = json.loads(sorted(out.glob("portfolio_heat_*.json"))[-1].read_text())
         assert report["account_size"] == 150000
 
-    def test_main_missing_account_size_errors(self, tmp_path):
+    def test_main_missing_account_size_errors(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRADING_PROFILE", raising=False)
+        monkeypatch.setenv("TRADING_DATE_DIR", str(tmp_path))  # no trading_profile.json here
         state = tmp_path / "theses"
         state.mkdir()
         with pytest.raises(SystemExit):
             portfolio_heat.main(["--state-dir", str(state), "--output-dir", str(tmp_path / "o")])
+
+    def test_main_profile_falls_back_to_trading_data_dir(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TRADING_PROFILE", raising=False)
+        monkeypatch.setenv("TRADING_DATE_DIR", str(tmp_path))
+        (tmp_path / "trading_profile.json").write_text(
+            json.dumps({"account_size": 150000, "max_portfolio_heat_pct": 6.0, "max_positions": 6})
+        )
+        state = tmp_path / "theses"
+        state.mkdir()
+        out = tmp_path / "out"
+        rc = portfolio_heat.main(["--state-dir", str(state), "--output-dir", str(out)])
+        assert rc == 0
+        report = json.loads(sorted(out.glob("portfolio_heat_*.json"))[-1].read_text())
+        assert report["account_size"] == 150000
 
     def test_main_missing_state_dir_errors(self, tmp_path):
         rc = portfolio_heat.main(

@@ -23,6 +23,34 @@ logger = logging.getLogger(__name__)
 _ADAPTERS: dict[str, callable] = {}
 
 
+def _trading_data_dir():
+    """Personal trading artifacts root: $TRADING_DATE_DIR (env or repo .env)."""
+    import os
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    base = os.environ.get("TRADING_DATE_DIR")
+    if not base:
+        try:
+            for line in (repo_root / ".env").read_text(encoding="utf-8").splitlines():
+                line = line.strip().removeprefix("export ").lstrip()
+                if line.startswith("TRADING_DATE_DIR="):
+                    base = line.partition("=")[2].strip().strip("'\"")
+                    break
+        except OSError:
+            pass
+    if not base:
+        return None
+    base_path = Path(base).expanduser()
+    return base_path if base_path.is_absolute() else repo_root / base_path
+
+
+def _default_output_dir(bucket, fallback="reports/"):
+    """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
+    base = _trading_data_dir()
+    return str(base / bucket) if base else fallback
+
+
 def _adapter(source_name: str):
     """Decorator to register an ingest adapter."""
 
@@ -497,7 +525,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ingest skill output into Trader Memory Core")
     parser.add_argument("--source", required=True, help="Source skill name")
     parser.add_argument("--input", required=True, help="Path to JSON input file")
-    parser.add_argument("--state-dir", default="state/theses", help="Thesis state directory")
+    parser.add_argument(
+        "--state-dir",
+        default=_default_output_dir("journal/theses", "state/theses"),
+        help="Thesis state directory (default: $TRADING_DATE_DIR/journal/theses)",
+    )
     args = parser.parse_args()
 
     ids = ingest(args.source, args.input, args.state_dir)

@@ -451,8 +451,10 @@ class TestOutput:
         assert result.returncode == 0
         assert "153 shares" in result.stdout
 
-    def test_cli_missing_required(self):
+    def test_cli_missing_required(self, tmp_path):
         """Missing --account-size -> SystemExit."""
+        import os
+
         script = "skills/position-sizer/scripts/position_sizer.py"
         result = subprocess.run(
             [
@@ -468,6 +470,8 @@ class TestOutput:
             capture_output=True,
             text=True,
             cwd=str(Path(__file__).resolve().parents[4]),
+            # isolate from the personal $TRADING_DATE_DIR/trading_profile.json
+            env={**os.environ, "TRADING_PROFILE": "", "TRADING_DATE_DIR": str(tmp_path)},
         )
         assert result.returncode != 0
 
@@ -588,9 +592,11 @@ class TestProfile:
         result = self._latest_result(out)
         assert result["mode"] == "budget"
 
-    def test_main_missing_account_size_errors(self, tmp_path):
+    def test_main_missing_account_size_errors(self, tmp_path, monkeypatch):
         from position_sizer import main
 
+        monkeypatch.delenv("TRADING_PROFILE", raising=False)
+        monkeypatch.setenv("TRADING_DATE_DIR", str(tmp_path))  # no trading_profile.json here
         with pytest.raises(SystemExit):
             main(
                 [

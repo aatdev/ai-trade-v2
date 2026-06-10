@@ -11,7 +11,7 @@ Designed to be fired every hour (or more often) by cron/launchd. Each run:
   2. Executes the step by delegating to ``run_trading_schedule.py --slot ...``
      (the battle-tested orchestrator: claude -p workflows, gate files,
      Telegram digests).
-  3. Writes a detailed per-run log to ``logs/autopilot/autopilot_<ts>.log``
+  3. Writes a detailed per-run log to ``$TRADING_DATE_DIR/logs/autopilot/autopilot_<ts>.log``
      (decision, reason, full child output, state before/after) — including
      no-op runs.
   4. Sends Telegram messages for IMPORTANT events only (slot failure /
@@ -47,9 +47,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCHEDULE_SCRIPT = PROJECT_ROOT / "scripts" / "run_trading_schedule.py"
 TELEGRAM_SCRIPT = PROJECT_ROOT / "skills" / "send-telegram" / "scripts" / "send_telegram.py"
 
-STATE_FILE = PROJECT_ROOT / "logs" / "autopilot_state.json"
-RUN_LOG_DIR = PROJECT_ROOT / "logs" / "autopilot"
-LOCK_FILE = PROJECT_ROOT / "logs" / "autopilot.lock"
+# Resolved below, after the schedule module (single source of truth for the
+# $TRADING_DATE_DIR layout) is imported.
 
 PREMARKET_START = dt.time(15, 0)
 PREMARKET_END = dt.time(21, 0)
@@ -60,10 +59,16 @@ MAX_ATTEMPTS = 2
 RUN_LOG_RETENTION_DAYS = 30
 
 # Reuse the schedule orchestrator's calendar + gate-file helpers (single
-# source of truth for the holiday list and the fail-safe gate parser).
+# source of truth for the holiday list, the fail-safe gate parser and the
+# $TRADING_DATE_DIR layout).
 _spec = importlib.util.spec_from_file_location("run_trading_schedule", SCHEDULE_SCRIPT)
 schedule = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(schedule)
+
+AUTOPILOT_LOGS_DIR = schedule.TRADING_DATA_DIR / "logs"
+STATE_FILE = AUTOPILOT_LOGS_DIR / "autopilot_state.json"
+RUN_LOG_DIR = AUTOPILOT_LOGS_DIR / "autopilot"
+LOCK_FILE = AUTOPILOT_LOGS_DIR / "autopilot.lock"
 
 
 # --------------------------------------------------------------------------- #

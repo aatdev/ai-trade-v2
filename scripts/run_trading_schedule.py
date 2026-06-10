@@ -52,8 +52,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = PROJECT_ROOT / ".env"
 WORKFLOWS_DIR = PROJECT_ROOT / "workflows"
-SCHEDULE_DIR = PROJECT_ROOT / "reports" / "schedule"
-LOG_FILE = PROJECT_ROOT / "logs" / "trading_schedule.log"
 TELEGRAM_SCRIPT = PROJECT_ROOT / "skills" / "send-telegram" / "scripts" / "send_telegram.py"
 
 VALID_DECISIONS = ("allow", "restrict", "cash-priority")
@@ -122,6 +120,45 @@ def load_env_file(path: Path = ENV_FILE) -> None:
         key = key.strip()
         if key:
             os.environ.setdefault(key, value.strip().strip("'\""))
+
+
+# --------------------------------------------------------------------------- #
+# Trading data layout ($TRADING_DATE_DIR)
+#
+# Every personal trading artifact lives under one root (default trading-data/,
+# overridable via TRADING_DATE_DIR in the environment or .env):
+#   schedule/   machine-readable gates: exposure_decision / watchlist / monthly
+#   market/     regime reads: breadth, uptrend, exposure posture, top, macro...
+#   screeners/  candidate screens: vcp / tradingview / swing-short / canslim
+#   plans/      breakout trade plans, position sizing
+#   journal/    thesis state (theses/), postmortems/, heat, monthly/ notes
+#   analysis/   per-ticker deep dives + signals.md
+#   logs/       schedule + autopilot logs and state
+# --------------------------------------------------------------------------- #
+load_env_file()  # the path constants below depend on TRADING_DATE_DIR
+
+
+def _resolve_trading_data_dir() -> Path:
+    raw = os.environ.get("TRADING_DATE_DIR", "trading-data")
+    p = Path(raw).expanduser()
+    return p if p.is_absolute() else PROJECT_ROOT / p
+
+
+TRADING_DATA_DIR = _resolve_trading_data_dir()
+SCHEDULE_DIR = TRADING_DATA_DIR / "schedule"
+MARKET_DIR = TRADING_DATA_DIR / "market"
+SCREENERS_DIR = TRADING_DATA_DIR / "screeners"
+PLANS_DIR = TRADING_DATA_DIR / "plans"
+JOURNAL_DIR = TRADING_DATA_DIR / "journal"
+LOG_FILE = TRADING_DATA_DIR / "logs" / "trading_schedule.log"
+
+
+def _rel(p: Path) -> str:
+    """Repo-relative path string for prompts/messages (absolute if outside)."""
+    try:
+        return str(p.relative_to(PROJECT_ROOT))
+    except ValueError:
+        return str(p)
 
 
 # Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
@@ -330,7 +367,8 @@ def regime_prompt(date_str: str, gate_path: Path, *, quick: bool) -> str:
 Read the manifest at workflows/market-regime-daily.yaml and execute its steps in
 order by invoking the named skills: market-breadth-analyzer, uptrend-analyzer,
 (optional) market-top-detector and market-news-analyst, then exposure-coach.
-Save the usual report artifacts under reports/.
+Save the report artifacts (market_breadth, uptrend, market_top, exposure_posture,
+news) under {_rel(MARKET_DIR)}/ — pass --output-dir {_rel(MARKET_DIR)}/ to every script.
 
 CRITICAL -- also write a machine-readable gate file to EXACTLY this path:
   {gate_path}
@@ -356,7 +394,9 @@ permitted. Read the manifest at workflows/swing-opportunity-daily.yaml and
 execute its steps: run the screeners (vcp-screener, optionally canslim-screener
 / theme-detector), validate setups with technical-analyst, size with
 position-sizer, and register each surviving idea as an IDEA thesis via
-trader-memory-core. Save the usual report artifacts under reports/.
+trader-memory-core. Save artifacts into the trading data layout:
+screener output under {_rel(SCREENERS_DIR)}/, position sizing under {_rel(PLANS_DIR)}/,
+thesis state dir {_rel(JOURNAL_DIR)}/theses.
 
 Also write a concise watchlist gate file to EXACTLY this path:
   {watchlist_path}
@@ -380,9 +420,10 @@ def monthly_prompt(date_str: str, summary_path: Path) -> str:
 
 Read the manifest at workflows/monthly-performance-review.yaml and execute its
 steps via trader-memory-core, signal-postmortem and backtest-expert: aggregate
-the month's closed theses, run the aggregate postmortem and performance-coach
-review, revalidate hypotheses, and produce the monthly decision log plus rule
-changes for next month. Save the usual report artifacts under reports/.
+the month's closed theses (state dir {_rel(JOURNAL_DIR)}/theses), run the aggregate
+postmortem and performance-coach review, revalidate hypotheses, and produce the
+monthly decision log plus rule changes for next month. Save the report
+artifacts under {_rel(JOURNAL_DIR)}/ (postmortems into {_rel(JOURNAL_DIR)}/postmortems/).
 
 Also write a concise summary gate file to EXACTLY this path:
   {summary_path}
@@ -526,7 +567,7 @@ def build_evening_allow_msg(date_str: str, dec: dict, wl_rel, candidates: list) 
 
 def build_monthly_msg(date_str: str, data: dict | None) -> str:
     if not data:
-        body = "Отчёт сформирован — см. reports/."
+        body = f"Отчёт сформирован — см. {_rel(JOURNAL_DIR)}/."
     else:
         rules = data.get("rule_changes_for_next_month", []) or []
         rules_block = (
@@ -539,7 +580,8 @@ def build_monthly_msg(date_str: str, data: dict | None) -> str:
             f"• Закрыто сделок: {data.get('trades_closed', '?')} · "
             f"win-rate {data.get('win_rate_pct', '?')}% · avg R {data.get('avg_R', '?')}"
             f"{rules_block}\n\n"
-            f"✅ ДЕЙСТВИЕ\nПеренести правила в monthly/{date_str[:7]}.md. Полный отчёт в reports/."
+            f"✅ ДЕЙСТВИЕ\nПеренести правила в {_rel(JOURNAL_DIR)}/monthly/{date_str[:7]}.md. "
+            f"Полный отчёт в {_rel(JOURNAL_DIR)}/."
         )
     return (
         f"📊 MONTHLY REVIEW · {date_str} (1-е вс месяца, ~11:00 CET)\n"

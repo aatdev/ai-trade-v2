@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * parse_signals.mjs — парсер `results/analysis/signals.md`.
+ * parse_signals.mjs — парсер журнала сигналов `signals.md`
+ * (по умолчанию `$TRADING_DATE_DIR/analysis/signals.md`).
  *
  * Выход: JSON-объект { signals: [...], skipped: [...] } в stdout.
  * Для каждого валидного сигнала формирует "alerts" — массив из 5 алертов
@@ -9,7 +10,7 @@
  * для скрипта create_alerts.mjs.
  *
  * CLI:
- *   node parse_signals.mjs [--input results/analysis/signals.md]
+ *   node parse_signals.mjs [--input trading-data/analysis/signals.md]
  *                          [--tickers BSX,LULU,...]
  *
  * Тикеры в --tickers матчатся case-insensitive.
@@ -20,7 +21,29 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '../../..');
-const DEFAULT_INPUT = path.join(REPO_ROOT, 'reports/analysis/signals.md');
+
+// Корень торговых артефактов: $TRADING_DATE_DIR (env или строка в repo .env).
+function tradingDataDir() {
+  let base = process.env.TRADING_DATE_DIR;
+  if (!base) {
+    try {
+      for (let line of fs.readFileSync(path.join(REPO_ROOT, '.env'), 'utf8').split('\n')) {
+        line = line.trim().replace(/^export\s+/, '');
+        if (line.startsWith('TRADING_DATE_DIR=')) {
+          base = line.slice('TRADING_DATE_DIR='.length).trim().replace(/^['"]|['"]$/g, '');
+          break;
+        }
+      }
+    } catch { /* нет .env — используем старый путь */ }
+  }
+  if (!base) return null;
+  return path.isAbsolute(base) ? base : path.join(REPO_ROOT, base);
+}
+
+const TRADING_DATA_DIR = tradingDataDir();
+const DEFAULT_INPUT = TRADING_DATA_DIR
+  ? path.join(TRADING_DATA_DIR, 'analysis/signals.md')
+  : path.join(REPO_ROOT, 'reports/analysis/signals.md');
 
 function parseArgs(argv) {
   const out = { input: DEFAULT_INPUT, tickers: null };
