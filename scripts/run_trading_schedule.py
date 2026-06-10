@@ -192,6 +192,12 @@ PLANS_DIR = TRADING_DATA_DIR / "plans"
 JOURNAL_DIR = TRADING_DATA_DIR / "journal"
 LOG_FILE = TRADING_DATA_DIR / "logs" / "trading_schedule.log"
 SIGNALS_STATE_FILE = TRADING_DATA_DIR / "logs" / "intraday_signals_state.json"
+# Single-run lock: only one real (non-dry-run) schedule process may drive the
+# (single) TradingView Desktop chart + shared trading-data state at a time.
+LOCK_FILE = TRADING_DATA_DIR / "logs" / "trading_schedule.lock"
+# Exit code for "another run holds the lock" — distinct from 0 (ok) / 1 (error)
+# so the autopilot can back off and retry instead of flagging a hard failure.
+EXIT_BUSY = 75  # EX_TEMPFAIL
 
 # Auto-mode helper modules (stdlib-only, shared with tests).
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "lib"))
@@ -1429,6 +1435,61 @@ SLOTS = {
 
 
 # --------------------------------------------------------------------------- #
+# Single-run lock (PID file; mirrors run_trading_autopilot's lock helpers so the
+# two scripts stay decoupled). The autopilot holds its own autopilot.lock and
+# spawns this script as a child, so a *separate* lock file here is deliberate:
+# it serialises concurrent schedule runs (manual + manual, or manual + the
+# autopilot's child) without the parent/child deadlock a shared file would cause.
+# --------------------------------------------------------------------------- #
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OverflowError, OSError):
+        return True  # exists but not ours / unkillable -> treat as alive
+    return True
+
+
+def _lock_holder(path: Path) -> str:
+    try:
+        return Path(path).read_text().strip() or "?"
+    except OSError:
+        return "?"
+
+
+def acquire_lock(path: Path) -> bool:
+    """Atomically claim the lock. False if a live process already holds it."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        try:
+            pid = int(path.read_text().strip())
+        except (ValueError, OSError):
+            pid = -1
+        if pid > 0 and _pid_alive(pid):
+            return False
+        try:
+            path.unlink()  # stale lock from a dead process
+        except OSError:
+            return False
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as f:
+        f.write(str(os.getpid()))
+    return True
+
+
+def release_lock(path: Path) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
@@ -1501,6 +1562,16 @@ def main(argv: list[str] | None = None) -> int:
         log(f"{date_str} is not the first Sunday of the month -- skipping monthly review.")
         return _finish(0)
 
+    # Serialise real runs: never let two schedule processes drive the single
+    # TradingView chart / shared state at once. Dry-runs touch neither, so they
+    # skip the lock (and stay test-friendly).
+    if not args.dry_run and not acquire_lock(LOCK_FILE):
+        log(
+            f"another run_trading_schedule is active (pid {_lock_holder(LOCK_FILE)}) -- "
+            f"exiting to avoid racing the TradingView chart",
+            logging.WARNING,
+        )
+        return _finish(EXIT_BUSY)
     try:
         return _finish(SLOTS[args.slot](date_str, args))
     except Exception as exc:  # never leave launchd without a breadcrumb
@@ -1511,6 +1582,9 @@ def main(argv: list[str] | None = None) -> int:
             no_telegram=args.no_telegram,
         )
         return _finish(1)
+    finally:
+        if not args.dry_run:
+            release_lock(LOCK_FILE)
 
 
 if __name__ == "__main__":

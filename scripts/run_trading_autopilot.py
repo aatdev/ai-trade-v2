@@ -469,6 +469,21 @@ def main(argv: list[str] | None = None) -> int:
             run_log=run_log,
         )
 
+        if rc == schedule.EXIT_BUSY:
+            # Another schedule run (e.g. a manual one) holds the lock. Back off
+            # quietly: undo the up-front attempt bump and leave the slot
+            # dispatchable so the next tick retries — no failure, no Telegram.
+            run_log.write("schedule busy (lock held by another run) — backing off, will retry")
+            if not args.dry_run:
+                if action == "intraday":
+                    record["runs"] = max(0, record.get("runs", 1) - 1)
+                else:
+                    record["attempts"] = max(0, record.get("attempts", 1) - 1)
+                    record["status"] = "pending"
+                save_state(STATE_FILE, state)
+            run_log.write("run complete rc=0 (busy backoff)")
+            return 0
+
         if not args.dry_run:
             if action == "intraday":
                 # Repeatable monitor: no done/failed dedupe; alert only when a

@@ -140,6 +140,7 @@ def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "SCREENERS_DIR", tmp_path / "screeners")
     monkeypatch.setattr(ts, "PLANS_DIR", tmp_path / "plans")
     monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path / "journal")
+    monkeypatch.setattr(ts, "LOCK_FILE", tmp_path / "schedule.lock")
 
     def fake_run_claude(prompt, *, label, dry_run, timeout):
         if "market-regime-daily" in label:
@@ -158,6 +159,63 @@ def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch, tmp_path):
     rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-02", "--no-telegram"])
     assert rc == 0
     assert sent and "ALLOW" in sent[0]
+
+
+# --------------------------------------------------------------------------- #
+# Single-run lock
+# --------------------------------------------------------------------------- #
+def _run_slotted(monkeypatch, lock, *extra, calls=None):
+    """Invoke main() for a stubbed evening-prep slot, with LOCK_FILE patched."""
+    monkeypatch.setattr(ts, "LOCK_FILE", lock)
+
+    def _slot(date_str, args):
+        if calls is not None:
+            calls.append(date_str)
+        return 0
+
+    monkeypatch.setattr(ts, "SLOTS", {"evening-prep": _slot})
+    return ts.main(
+        ["--slot", "evening-prep", "--date", "2026-06-02", "--force", "--no-telegram", *extra]
+    )
+
+
+def test_lock_busy_returns_exit_busy_without_running(monkeypatch, tmp_path):
+    lock = tmp_path / "schedule.lock"
+    lock.write_text(str(os.getpid()))  # a live PID (this process) already holds it
+    calls = []
+    rc = _run_slotted(monkeypatch, lock, calls=calls)
+    assert rc == ts.EXIT_BUSY
+    assert calls == []  # slot body never ran
+    assert lock.read_text().strip() == str(os.getpid())  # foreign lock left intact
+
+
+def test_lock_acquired_and_released_on_success(monkeypatch, tmp_path):
+    lock = tmp_path / "schedule.lock"
+    calls = []
+    rc = _run_slotted(monkeypatch, lock, calls=calls)
+    assert rc == 0
+    assert calls == ["2026-06-02"]  # slot ran
+    assert not lock.exists()  # released in finally
+
+
+def test_dry_run_ignores_lock(monkeypatch, tmp_path):
+    lock = tmp_path / "schedule.lock"
+    lock.write_text(str(os.getpid()))  # held — a real run would refuse
+    calls = []
+    rc = _run_slotted(monkeypatch, lock, "--dry-run", calls=calls)
+    assert rc == 0
+    assert calls == ["2026-06-02"]  # dry-run still ran
+    assert lock.read_text().strip() == str(os.getpid())  # lock untouched
+
+
+def test_stale_lock_from_dead_pid_is_reclaimed(monkeypatch, tmp_path):
+    lock = tmp_path / "schedule.lock"
+    lock.write_text("999999")  # PID that does not exist
+    calls = []
+    rc = _run_slotted(monkeypatch, lock, calls=calls)
+    assert rc == 0
+    assert calls == ["2026-06-02"]
+    assert not lock.exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -535,15 +593,17 @@ class TestEveningHybrid:
         monkeypatch.setattr(
             ts.talerts,
             "sync_watchlist_alerts",
-            lambda wl, state_path, **k: synced.append(wl)
-            or {
-                "created": 3,
-                "deleted": 1,
-                "kept": 0,
-                "skipped": 0,
-                "errors": 0,
-                "error_details": [],
-            },
+            lambda wl, state_path, **k: (
+                synced.append(wl)
+                or {
+                    "created": 3,
+                    "deleted": 1,
+                    "kept": 0,
+                    "skipped": 0,
+                    "errors": 0,
+                    "error_details": [],
+                }
+            ),
         )
         monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
         rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-11", "--no-telegram"])
@@ -758,15 +818,17 @@ class TestTvIntegration:
         monkeypatch.setattr(
             ts.talerts,
             "purge_watchlist_alerts",
-            lambda tickers, state_path, **k: purged.append(list(tickers))
-            or {
-                "created": 0,
-                "deleted": 3,
-                "kept": 0,
-                "skipped": 0,
-                "errors": 0,
-                "error_details": [],
-            },
+            lambda tickers, state_path, **k: (
+                purged.append(list(tickers))
+                or {
+                    "created": 0,
+                    "deleted": 3,
+                    "kept": 0,
+                    "skipped": 0,
+                    "errors": 0,
+                    "error_details": [],
+                }
+            ),
         )
         sent = []
         monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))

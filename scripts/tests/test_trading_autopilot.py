@@ -424,3 +424,25 @@ def test_main_loads_env_file(tmp_path, monkeypatch):
     rc = ap.main(["--now", f"{TUE}T09:00:00", "--no-telegram"])
     assert rc == 0
     assert called == [True]
+
+
+def test_schedule_busy_backs_off_quietly(tmp_path, monkeypatch):
+    """When the schedule child reports EXIT_BUSY (a concurrent run holds the
+    lock), the slot stays dispatchable, the attempt bump is rolled back, and no
+    failure Telegram is sent."""
+    state_file = tmp_path / "state.json"
+    monkeypatch.setattr(ap, "STATE_FILE", state_file)
+    monkeypatch.setattr(ap, "RUN_LOG_DIR", tmp_path / "runs")
+    monkeypatch.setattr(ap, "LOCK_FILE", tmp_path / "ap.lock")
+    monkeypatch.setattr(ap.schedule, "load_env_file", lambda *a, **k: None)
+    monkeypatch.setattr(ap, "run_slot", lambda *a, **k: ap.schedule.EXIT_BUSY)
+    sent = []
+    monkeypatch.setattr(ap, "send_telegram", sent.append)
+
+    rc = ap.main(["--force-slot", "evening-prep", "--now", f"{TUE}T22:30:00"])
+
+    assert rc == 0
+    record = ap.load_state(state_file)["slots"]["evening-prep"]
+    assert record["status"] == "pending"  # left dispatchable for the next tick
+    assert record["attempts"] == 0  # the up-front attempt bump was rolled back
+    assert sent == []  # quiet backoff — no failure alarm
