@@ -5,6 +5,12 @@ import os
 import subprocess
 import sys
 
+# Telegram hard limits: a sendMessage `text` may be up to 4096 chars, but a
+# sendDocument/sendPhoto `caption` is capped at 1024. Long messages must
+# therefore go out as standalone text, not as a file caption.
+TG_TEXT_LIMIT = 4096
+TG_CAPTION_LIMIT = 1024
+
 
 def load_dotenv(filepath=".env"):
     if os.path.exists(filepath):
@@ -16,6 +22,67 @@ def load_dotenv(filepath=".env"):
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+def _split_text(text, limit=TG_TEXT_LIMIT):
+    """Split text into <=limit-char chunks, preferring line boundaries and
+    hard-splitting any single line that is itself longer than the limit."""
+    chunks, cur = [], ""
+    for line in text.splitlines(keepends=True):
+        while len(line) > limit:  # a single over-long line
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if cur and len(cur) + len(line) > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur += line
+    if cur:
+        chunks.append(cur)
+    return chunks or [text]
+
+
+def plan_requests(message, file, *, caption_limit=TG_CAPTION_LIMIT, text_limit=TG_TEXT_LIMIT):
+    """Decide the ordered Telegram API calls for a message/file combination.
+
+    - file + short message  -> one sendDocument with the message as caption
+    - file + long message   -> sendMessage chunk(s) first, then the file alone
+    - file only             -> sendDocument with no caption
+    - message only          -> sendMessage chunk(s)
+    """
+    message = message or ""
+    reqs = []
+    if file:
+        if message and len(message) <= caption_limit:
+            reqs.append({"kind": "document", "file": file, "caption": message})
+        else:
+            if message:
+                reqs += [{"kind": "message", "text": c} for c in _split_text(message, text_limit)]
+            reqs.append({"kind": "document", "file": file, "caption": None})
+    elif message:
+        reqs += [{"kind": "message", "text": c} for c in _split_text(message, text_limit)]
+    return reqs
+
+
+def _build_curl(token, chat_id, req):
+    # Use --form-string (not -F) for text fields: -F interprets a leading '@'/'<'
+    # as a file reference and treats ';' as the start of a field modifier
+    # (e.g. ';type='), silently truncating values that contain those. The
+    # document part below does need -F so '@' loads the file.
+    if req["kind"] == "message":
+        endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
+        cmd = ["curl", "-s", "-X", "POST", endpoint, "--form-string", f"chat_id={chat_id}"]
+        cmd += ["--form-string", f"text={req['text']}"]
+    else:  # document
+        endpoint = f"https://api.telegram.org/bot{token}/sendDocument"
+        cmd = ["curl", "-s", "-X", "POST", endpoint, "--form-string", f"chat_id={chat_id}"]
+        if req.get("caption"):
+            cmd += ["--form-string", f"caption={req['caption']}"]
+        cmd += ["-F", f"document=@{req['file']}"]
+    return cmd
 
 
 def main():
@@ -50,51 +117,26 @@ def main():
         print(f"Error: File not found ({args.file})", file=sys.stderr)
         sys.exit(1)
 
-    # Determine Telegram API Endpoint
-    if args.file:
-        # Use sendDocument for files
-        endpoint = f"https://api.telegram.org/bot{args.token}/sendDocument"
-    else:
-        # Use sendMessage for simple chat
-        endpoint = f"https://api.telegram.org/bot{args.token}/sendMessage"
+    for req in plan_requests(args.message, args.file):
+        cmd = _build_curl(args.token, args.chat_id, req)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            resp = json.loads(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print(f"Error executing curl: {e}", file=sys.stderr)
+            sys.exit(1)
+        except json.JSONDecodeError:
+            print(f"Failed to parse Telegram response: {result.stdout}", file=sys.stderr)
+            sys.exit(1)
 
-    # Use --form-string (not -F) for text fields: -F interprets a leading '@'/'<'
-    # as a file reference and treats ';' as the start of a field modifier
-    # (e.g. ';type='), which silently truncates messages that contain a
-    # semicolon. --form-string takes the value literally.
-    cmd = ["curl", "-s", "-X", "POST", endpoint, "--form-string", f"chat_id={args.chat_id}"]
-
-    if args.message:
-        if args.file:
-            # If a file is sent, text is passed as a 'caption'
-            cmd.extend(["--form-string", f"caption={args.message}"])
-        else:
-            # If strictly text, passed as 'text'
-            cmd.extend(["--form-string", f"text={args.message}"])
-
-    if args.file:
-        # Add the file part (-F is required here so '@' loads the file)
-        cmd.extend(["-F", f"document=@{args.file}"])
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        resp = json.loads(result.stdout)
-
-        if resp.get("ok"):
-            print("Successfully sent to Telegram.")
-            sys.exit(0)
-        else:
+        if not resp.get("ok"):
             print(
                 f"Telegram API Error: {resp.get('description', 'Unknown error')}", file=sys.stderr
             )
             sys.exit(1)
 
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing curl: {e}", file=sys.stderr)
-        sys.exit(1)
-    except json.JSONDecodeError:
-        print(f"Failed to parse Telegram response: {result.stdout}", file=sys.stderr)
-        sys.exit(1)
+    print("Successfully sent to Telegram.")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
