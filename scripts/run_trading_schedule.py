@@ -57,6 +57,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -231,6 +232,12 @@ SHORT_TOP_RISK_MIN = 41.0
 SHORT_DD_MIN = 3
 # market_top / ftd reports older than this are treated as absent (fail-safe).
 MARKET_REPORT_MAX_AGE_DAYS = 7
+# How many top watchlist candidates get the auto ticker-analysis + reconcile pass.
+AUTO_ANALYZE_TOP_N = 3
+# Model for ticker-analysis (mirrors ui/server/src/config.ts ANALYZE_MODEL).
+TICKER_ANALYSIS_MODEL = "claude-opus-4-8"
+# Per-ticker timeout cap so one slow analysis doesn't block the whole slot.
+TICKER_ANALYSIS_TIMEOUT_S = 1100
 
 
 def _rel(p: Path) -> str:
@@ -1081,6 +1088,236 @@ def _sync_tv_alerts(wl: dict, args) -> str:
     return line
 
 
+def _resolve_mcp_config() -> str | None:
+    """Write a temp MCP-config JSON pointing at the vendored TradingView server.
+    Returns the file path, or None if the vendored server is absent."""
+    import tempfile
+    server_entry = PROJECT_ROOT / "vendor" / "tradingview-mcp" / "src" / "server.js"
+    if not server_entry.is_file():
+        return None
+    config = {"mcpServers": {"tradingview": {"command": "node", "args": [str(server_entry)]}}}
+    out = Path(tempfile.gettempdir()) / "trading-schedule-tradingview-mcp.json"
+    try:
+        out.write_text(json.dumps(config), encoding="utf-8")
+        return str(out)
+    except OSError:
+        return None
+
+
+def _parse_signals_md(ticker: str) -> dict | None:
+    """Parse the latest signal block for ticker from analysis/signals.md.
+
+    Returns dict with direction/trigger/stop/t1/t2/t3, or None if not found/invalid.
+    Mirrors parseSignalBlocks + parseSignalLevels from ui/server/src/lib/signals.ts.
+    """
+    signals_file = TRADING_DATA_DIR / "analysis" / "signals.md"
+    try:
+        text = signals_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    T = ticker.upper()
+    blocks: list[dict] = []
+    current: dict | None = None
+    for line in text.splitlines():
+        m = re.match(r"^##\s+([A-Z][A-Z0-9.\-]{0,9})\s+[—\-]\s+(\d{4}-\d{2}-\d{2})", line.strip())
+        if m:
+            if current:
+                blocks.append(current)
+            current = {"ticker": m.group(1), "date": m.group(2), "lines": []}
+        elif current is not None:
+            current["lines"].append(line)
+    if current:
+        blocks.append(current)
+
+    matches = [b for b in blocks if b["ticker"].upper() == T]
+    if not matches:
+        return None
+    body = "\n".join(matches[-1]["lines"])
+    date = matches[-1]["date"]
+
+    def _num(pattern: str) -> float | None:
+        m2 = re.search(pattern, body, re.IGNORECASE)
+        try:
+            return float(m2.group(1)) if m2 else None
+        except (ValueError, AttributeError):
+            return None
+
+    # Flexible: handles **Direction:** long, **Direction** : long, Direction: long.
+    dm = re.search(r"Direction[*:\s]+(long|short)", body, re.IGNORECASE)
+    direction = dm.group(1).lower() if dm else None
+    if direction not in ("long", "short"):
+        return None
+
+    trigger = _num(r"Trigger[*:\s]+([\d.]+)")
+    stop = _num(r"Stop[*:\s]+([\d.]+)")
+    t1 = _num(r"T1[*:\s]+([\d.]+)")
+    t2 = _num(r"T2[*:\s]+([\d.]+)")
+    t3 = _num(r"T3[*:\s]+([\d.]+)")
+    if None in (trigger, stop, t1):
+        return None
+    return {"ticker": T, "date": date, "direction": direction,
+            "trigger": trigger, "stop": stop, "t1": t1, "t2": t2, "t3": t3}
+
+
+def _run_ticker_analysis(ticker: str, args) -> bool:
+    """Run ticker-analysis skill via headless Claude + TradingView MCP.
+
+    Returns True if Claude exited 0. Writes output to trading-data/analysis/{ticker}/.
+    Capped at TICKER_ANALYSIS_TIMEOUT_S so one slow ticker doesn't block the slot.
+    """
+    claude_bin = resolve_claude_bin()
+    perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
+    prompt = (
+        f"Проанализируй тикер {ticker}: запусти скил ticker-analysis — полный комплексный анализ "
+        f"(новости, фундаментал, технический анализ через TradingView MCP). "
+        f"Сохрани четыре markdown-файла и daily/weekly скриншоты в "
+        f"trading-data/analysis/{ticker}/. Алерты в TradingView НЕ создавай."
+    )
+    cmd = [
+        claude_bin, "-p", prompt,
+        "--permission-mode", perm_mode,
+        "--model", TICKER_ANALYSIS_MODEL,
+        "--output-format", "text",
+    ]
+    mcp_config = _resolve_mcp_config()
+    if mcp_config:
+        cmd += ["--mcp-config", mcp_config, "--strict-mcp-config"]
+
+    timeout = min(args.timeout, TICKER_ANALYSIS_TIMEOUT_S)
+    label = f"ticker-analysis ({ticker})"
+    log(f"--- claude workflow START: {label} (timeout={timeout}s) ---")
+    if args.dry_run:
+        log(f"(dry-run) would run: {claude_bin} -p <{ticker} analysis prompt> [MCP={'yes' if mcp_config else 'no'}]")
+        return True
+
+    (TRADING_DATA_DIR / "analysis" / ticker).mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    try:
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"{label}: timed out after {timeout}s", logging.ERROR)
+        return False
+    except OSError as exc:
+        log(f"{label}: could not launch claude ({exc})", logging.ERROR)
+        return False
+
+    elapsed = time.monotonic() - started
+    if res.stdout:
+        log(f"{label} stdout (tail):\n" + res.stdout[-1000:])
+    if res.returncode != 0:
+        log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-500:]}", logging.ERROR)
+        return False
+    log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
+    return True
+
+
+def _invalidate_thesis(thesis_id: str, *, reason: str) -> None:
+    """Transition a thesis to INVALIDATED via trader-memory-cli (best-effort)."""
+    cmd = [sys.executable, str(TRADER_MEMORY_CLI), "transition", thesis_id, "INVALIDATED",
+           "--reason", reason]
+    try:
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30)
+        if res.returncode != 0:
+            log(f"thesis invalidate {thesis_id}: rc={res.returncode} {res.stderr.strip()}", logging.WARNING)
+        else:
+            log(f"thesis invalidated: {thesis_id} ({reason})")
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"thesis invalidate {thesis_id}: {exc}", logging.WARNING)
+
+
+def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dict:
+    """Run ticker-analysis for top AUTO_ANALYZE_TOP_N watchlist candidates, then reconcile.
+
+    - direction match  → update pivot/stop/target/shares from analysis signal
+    - direction-flip   → remove from candidates (→ rejected_by_validation), invalidate thesis
+    - no signal parsed → keep as-is (log warning)
+
+    Writes the updated watchlist in-place and returns the mutated wl dict.
+    """
+    candidates = list(wl.get("candidates") or [])
+    top_n = candidates[:AUTO_ANALYZE_TOP_N]
+    if not top_n:
+        return wl
+
+    log(f"auto-analyze: ticker-analysis for top {len(top_n)} candidates: "
+        + ", ".join(str(c.get("ticker", "?")) for c in top_n))
+
+    for cand in top_n:
+        ticker = str(cand.get("ticker", "")).upper()
+        if not ticker:
+            continue
+
+        ok = _run_ticker_analysis(ticker, args)
+        if not ok and not args.dry_run:
+            log(f"auto-analyze: {ticker} analysis failed — keeping watchlist unchanged")
+            continue
+
+        signal = _parse_signals_md(ticker)
+        if signal is None:
+            log(f"auto-analyze: {ticker} — no signal parsed from signals.md, keeping as-is")
+            continue
+
+        sig_dir = signal["direction"]
+        cand_side = str(cand.get("side", "")).lower()
+
+        if sig_dir != cand_side:
+            log(f"auto-analyze: {ticker} direction-flip ({cand_side} → {sig_dir}) — excluding")
+            excluded = dict(cand)
+            excluded["validation_note"] = (
+                f"Excluded by auto-analysis: signal={sig_dir}, screener={cand_side} ({signal['date']})"
+            )
+            excluded["source"] = "analysis-excluded"
+            excluded["validated"] = False
+            candidates = [c for c in candidates if str(c.get("ticker", "")).upper() != ticker]
+            rejected = [c for c in (wl.get("rejected_by_validation") or [])
+                        if str(c.get("ticker", "")).upper() != ticker]
+            wl["rejected_by_validation"] = rejected + [excluded]
+            wl["candidates"] = candidates
+            tid = cand.get("thesis_id")
+            if tid and not args.dry_run:
+                _invalidate_thesis(tid, reason=f"analysis direction-flip: signal={sig_dir}")
+        else:
+            log(f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
+                f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}")
+            risk_dollars = cand.get("risk_dollars")
+            dist = abs(signal["trigger"] - signal["stop"])
+            shares = (round(risk_dollars / dist) if risk_dollars and dist > 0
+                      else cand.get("shares"))
+            screener_origin = cand.get("screener_origin") or {
+                "side": cand.get("side"),
+                "pivot": cand.get("pivot"),
+                "stop": cand.get("stop"),
+                "target": cand.get("target"),
+                "shares": cand.get("shares"),
+                "score": cand.get("score"),
+                "source_plan": wl.get("source_plan"),
+            }
+            updated = {
+                **cand,
+                "pivot": signal["trigger"],
+                "worst_entry": signal["trigger"],
+                "stop": signal["stop"],
+                "target": signal["t1"],
+                "t1": signal["t1"],
+                "t2": signal["t2"],
+                "t3": signal["t3"],
+                "shares": shares,
+                "validation_note": f"From ticker-analysis (signals.md {signal['date']})",
+                "validated": True,
+                "source": "analysis",
+                "screener_origin": screener_origin,
+            }
+            candidates = [updated if str(c.get("ticker", "")).upper() == ticker else c
+                          for c in candidates]
+            wl["candidates"] = candidates
+
+    if not args.dry_run:
+        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+        log(f"auto-analyze: watchlist saved → {_rel(wl_path)}")
+    return wl
+
+
 def _run_chart_validation(date_str: str, candidates: list, args) -> dict | None:
     """Hybrid step: claude + technical-analyst verdicts for the top candidates.
     None (no filtering) when there is nothing to validate or claude failed."""
@@ -1198,6 +1435,7 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
                     cand["thesis_id"] = tid
             wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
             log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
+    wl = _auto_analyze_reconcile(wl, wl_path, date_str, args)
     return wl_path, wl, _validation_note(wl, validation)
 
 
