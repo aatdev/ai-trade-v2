@@ -113,6 +113,8 @@ function ReconcileSection({
         <button className="primary" disabled={busy} onClick={() => void apply()}>
           {busy ? 'Applying…' : 'Apply to watchlist'}
         </button>
+      ) : !applied && reconcile.change === 'unchanged' ? (
+        <div className="muted">Analysis matches the current watchlist candidate — nothing to apply.</div>
       ) : null}
     </div>
   );
@@ -142,6 +144,14 @@ export default function AnalyzeButton({ ticker, date }: { ticker: string; date: 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [lines]);
+
+  // Pull the latest analysis signal (from signals.md) and compare to the watchlist.
+  // Works any time the signal exists — independent of a run this session.
+  function loadReconcile() {
+    fetchReconcile(ticker, date)
+      .then(setReconcile)
+      .catch(() => setReconcile(null));
+  }
 
   async function start() {
     setState('running');
@@ -173,12 +183,9 @@ export default function AnalyzeButton({ ticker, date }: { ticker: string; date: 
         esRef.current = null;
         void qc.invalidateQueries({ queryKey: ['analysisIndex'] });
         void qc.invalidateQueries({ queryKey: ['tickerDates', ticker] });
-        if (d.status === 'done') {
-          // Pull the fresh analysis signal and compare it to the watchlist.
-          fetchReconcile(ticker, date)
-            .then(setReconcile)
-            .catch(() => undefined);
-        }
+        // Attempt reconcile on any terminal status — claude can write signals.md
+        // even when it exits non-zero, so don't gate on 'done' only.
+        if (d.status !== 'busy') loadReconcile();
       });
       es.onerror = () => es.close();
     } catch (e) {
@@ -273,6 +280,9 @@ export default function AnalyzeButton({ ticker, date }: { ticker: string; date: 
             <div className="btn-row" style={{ marginBottom: 12 }}>
               <button className="primary" disabled={running} onClick={() => void start()}>
                 {state === 'idle' ? '▶ Run analysis' : running ? 'Running…' : '↻ Re-run'}
+              </button>
+              <button disabled={running} onClick={loadReconcile} title="Compare the latest signals.md signal for this ticker to the watchlist">
+                ⟳ Check watchlist update
               </button>
               {running ? (
                 <button className="danger" onClick={() => void cancel()}>

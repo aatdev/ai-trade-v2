@@ -1,13 +1,13 @@
 ---
 name: market-news-analyst
-description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill collects news using WebSearch/WebFetch and, when TradingView Desktop is running, also reads the live TradingView News Flow tab via the TradingView MCP — both headlines and full story bodies — applying instrument/country news filters as needed, then produces impact-ranked analysis reports. All analysis thinking and output are conducted in English.
+description: This skill should be used when analyzing recent market-moving news events and their impact on equity markets and commodities. Use this skill when the user requests analysis of major financial news from the past 10 days, wants to understand market reactions to monetary policy decisions (FOMC, ECB, BOJ), needs assessment of geopolitical events' impact on commodities, or requires comprehensive review of earnings announcements from mega-cap stocks. The skill collects news using WebSearch/WebFetch and, when TradingView Desktop is running, also reads the live TradingView News Flow tab via the TradingView MCP — both headlines and full story bodies — applying instrument/country news filters as needed, then produces impact-ranked analysis reports. The final report and conversational output are written in Russian (sources are read in their original language).
 ---
 
 # Market News Analyst
 
 ## Overview
 
-This skill enables comprehensive analysis of market-moving news events from the past 10 days, focusing on their impact on US equity markets and commodities. The skill automatically collects news from trusted sources using WebSearch and WebFetch tools, evaluates market impact magnitude, analyzes actual market reactions, and produces structured English reports ranked by market impact significance.
+This skill enables comprehensive analysis of market-moving news events from the past 10 days, focusing on their impact on US equity markets and commodities. The skill automatically collects news from trusted sources using WebSearch and WebFetch tools, evaluates market impact magnitude, analyzes actual market reactions, and produces structured Russian-language reports ranked by market impact significance.
 
 ## Prerequisites
 
@@ -174,7 +174,7 @@ Execute parallel WebSearch queries covering different news categories:
 - Use News Flow for *what crossed the wire and when* (timestamps, breaking-first ordering, provider attribution); use WebSearch/WebFetch for *market-reaction context* (price moves, follow-through, analyst framing) that the raw headline feed lacks.
 - When the two disagree on facts, prefer the higher-credibility source per `references/trusted_news_sources.md` and note the discrepancy.
 
-Think in English throughout collection process. Document each significant news item with:
+Collect and read sources in their original language (mostly English); produce all analysis and the final report in **Russian**. Document each significant news item with:
 - Date and time
 - Event type (monetary policy, earnings, geopolitical, etc.)
 - Source reliability tier
@@ -498,7 +498,9 @@ Trace how news impacts flowed through markets:
 
 ### Step 6: Report Generation
 
-**Objective:** Create structured English Markdown report ranked by market impact.
+**Objective:** Create a structured **Russian-language** Markdown report ranked by market impact.
+
+**Язык отчёта:** отчёт пишется ПОЛНОСТЬЮ на русском языке. Шаблон ниже задаёт только СТРУКТУРУ (порядок разделов, поля, таблицы) — переведи все заголовки, подписи полей и содержимое на русский; англоязычные ярлыки в шаблоне даны лишь как ориентир. Русские названия основных разделов: «Анализ рыночных новостей», «Краткое резюме», «Рейтинг по рыночному влиянию», «Детальный разбор событий», «Тематический синтез», «Обзор сырьевых рынков», «Выводы и перспективы», «Источники и методология». Тикеры, числа и проценты оставляй как есть.
 
 **Report Structure:**
 
@@ -690,9 +692,8 @@ Trace how news impacts flowed through markets:
 
 ---
 
-*Analysis Date: [Date report generated]*
-*Language: English*
-*Analysis Thinking: English*
+*Дата анализа: [дата формирования отчёта]*
+*Язык: русский*
 
 ```
 
@@ -708,7 +709,7 @@ Example: `market_news_analysis_2024-10-25_to_2024-11-03.md`
 - Distinguish between correlation and causation
 - Acknowledge uncertainty when attributing market moves to specific news
 - Use proper financial terminology
-- Maintain consistent English throughout
+- Write the entire report in Russian (consistent, professional financial Russian)
 
 ## Key Analysis Principles
 
@@ -723,7 +724,7 @@ When conducting market news analysis:
 7. **Quantification:** Use specific numbers (%, bps) rather than vague terms ("significant," "large")
 8. **Source Credibility:** Weight official sources and Tier 1 news over rumors and unverified reports
 9. **Breadth Analysis:** Individual stock moves only significant if mega-cap or systemic signal
-10. **English Consistency:** All thinking, analysis, and output in English for consistency
+10. **Язык вывода:** итоговый отчёт и ответы в чате — на русском; источники читаются в оригинале (обычно на английском)
 
 ## Common Pitfalls to Avoid
 
@@ -809,8 +810,8 @@ When conducting market news analysis:
 
 ## Important Notes
 
-- All analysis thinking must be conducted in English
-- All output Markdown files must be in English
+- The final report and conversational output must be written in Russian
+- Sources are collected/read in their original language (mostly English); only the produced output is Russian
 - Use WebSearch and WebFetch tools to collect news automatically
 - When TradingView Desktop + MCP are available, read the live News Flow tab first (Source A) and merge it with WebSearch (Source B); fall back silently to WebSearch-only if not
 - Focus on trusted news sources as defined in references

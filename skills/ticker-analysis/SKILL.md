@@ -81,7 +81,7 @@ trading-data/analysis/TICKER/YYYY-MM-DD/
 
 Если новостной поток объёмный (мегакап на отчётах) — запусти подагент `general-purpose` или `Explore` для параллельного сбора через `WebSearch`. Иначе достаточно 3–5 прямых `WebSearch` вызовов.
 
-**Формат `news.md`** (английский — это норма market-news-analyst):
+**Формат `news.md`** (русский — методология market-news-analyst):
 
 ```markdown
 # TICKER News Analysis — START_DATE to END_DATE
@@ -531,7 +531,7 @@ node .claude/skills/signals-alerts/scripts/create_alerts.mjs \
 5. **Не вызывай `pine_get_source`** — этот тул может вернуть 200KB+ Pine-кода; для одной аналитики он не нужен.
 6. **`chart_get_state` — один раз в начале** каждого таймфрейма. Сохрани entity ID индикаторов и используй их в последующих `indicator_set_inputs` / `data_get_study_values`.
 7. **Полные имена индикаторов** при добавлении через `chart_manage_indicator`: `"Relative Strength Index"`, `"Moving Average Exponential"`, `"MACD"`, `"Stochastic"`, `"Volume"` — короткие имена («RSI», «EMA») молча не сработают.
-8. **Язык** — итоговый чат-summary и `report.md`/`fundamental.md`/`technical.md` строго на русском (правило `.claude/rules/language.md`). `news.md` оставляем на английском (методология `market-news-analyst`).
+8. **Язык** — итоговый чат-summary и `report.md`/`fundamental.md`/`technical.md`/`news.md` строго на русском (правило `.claude/rules/language.md`; методология `market-news-analyst` теперь тоже выдаёт результат на русском).
 
 ## Обработка ошибок
 
@@ -556,7 +556,7 @@ node .claude/skills/signals-alerts/scripts/create_alerts.mjs \
 - Каталог результатов: `./trading-data/analysis/TICKER/DATE/`.
 - Тикер в имени файла — верхний регистр без префикса биржи: `BSX_daily.png`, не `NYSE_BSX_daily.png`.
 - Язык:
-  - `news.md` — английский (методология market-news-analyst)
+  - `news.md` — русский (методология market-news-analyst)
   - `fundamental.md`, `technical.md`, `report.md` — русский (правило репо `.claude/rules/language.md`)
 - Скриншоты — PNG, region `chart`. Не сохраняй full-window — там лишний UI.
 

@@ -33,6 +33,52 @@ export function decisionColor(d?: string | null): string {
   }
 }
 
+/** Russian label + plain-language hint for the exposure gate decision. */
+export function decisionLabel(d?: string | null): { label: string; hint: string } {
+  switch ((d || '').toLowerCase()) {
+    case 'allow':
+      return { label: 'Разрешено', hint: 'Можно открывать новые позиции — рынок благоприятен' };
+    case 'restrict':
+      return {
+        label: 'Ограничено',
+        hint: 'Новые входы ограничены: только лучшие сетапы и уменьшенный размер',
+      };
+    case 'cash-priority':
+      return {
+        label: 'Приоритет кэша',
+        hint: 'Новые длинные входы не рекомендуются — защита капитала',
+      };
+    default:
+      return { label: d || '—', hint: '' };
+  }
+}
+
+/** Russian rendering of the exposure-posture enum values. */
+const TERMS: Record<string, string> = {
+  // recommendation
+  NEW_ENTRY_ALLOWED: 'новые входы разрешены',
+  REDUCE_ONLY: 'только сокращение',
+  CASH_PRIORITY: 'приоритет кэша',
+  HOLD: 'удерживать',
+  // bias
+  GROWTH: 'рост (growth)',
+  VALUE: 'стоимость (value)',
+  NEUTRAL: 'нейтральная',
+  // participation
+  BROAD: 'широкое',
+  NARROW: 'узкое',
+  MIXED: 'смешанное',
+  // confidence
+  HIGH: 'высокая',
+  MEDIUM: 'средняя',
+  LOW: 'низкая',
+};
+
+export function term(v?: string | null): string {
+  if (!v) return '—';
+  return TERMS[v.toUpperCase()] ?? v;
+}
+
 export function gradeColor(g?: string | null): string {
   switch ((g || '').toUpperCase()) {
     case 'A':

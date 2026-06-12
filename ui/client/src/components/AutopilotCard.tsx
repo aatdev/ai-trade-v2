@@ -1,5 +1,5 @@
 import { useAutopilot, type Refetch } from '../api';
-import { decisionColor } from '../lib/zones';
+import { decisionColor, decisionLabel } from '../lib/zones';
 import { Card, Collapsible, ErrorNote, Loading } from './ui';
 
 export default function AutopilotCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
@@ -26,7 +26,7 @@ export default function AutopilotCard({ date, refetch }: { date: string | null; 
         <div className="stat">
           <div className="k">Last Gate Decision</div>
           <div className="v" style={{ color: decisionColor(state?.last_gate_decision) }}>
-            {state?.last_gate_decision ?? '—'}
+            {state?.last_gate_decision ? decisionLabel(state.last_gate_decision).label : '—'}
           </div>
         </div>
         <div className="stat">

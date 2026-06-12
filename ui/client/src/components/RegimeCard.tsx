@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { RegimeComposite, Sourced } from '@shared/types';
 import { useMarket, type Refetch } from '../api';
 import { fmtScore } from '../lib/format';
-import { scoreColor } from '../lib/zones';
+import { scoreColor, term } from '../lib/zones';
 import { Card, Empty, ErrorNote, Gauge, Loading, ScoreBar, Stat, ZoneBadge } from './ui';
 
 const PANELS: { key: 'breadth' | 'uptrend' | 'top' | 'macro'; label: string }[] = [
@@ -61,13 +61,13 @@ export default function RegimeCard({ date, refetch }: { date: string | null; ref
     <Card title="Market Regime">
       {posture ? (
         <div className="stats" style={{ marginBottom: 14 }}>
-          <Stat k="Posture" v={posture.recommendation ?? '—'} />
+          <Stat k="Posture" v={term(posture.recommendation)} />
           <Stat
             k="Composite"
             v={fmtScore(posture.composite_score)}
             color={scoreColor(posture.composite_score)}
           />
-          <Stat k="Participation" v={posture.participation ?? '—'} />
+          <Stat k="Participation" v={term(posture.participation)} />
         </div>
       ) : null}
 
