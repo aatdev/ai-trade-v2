@@ -6,6 +6,7 @@ _index.json summary.  All writes use tempfile + os.replace for safety.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
@@ -14,6 +15,7 @@ import re
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -446,6 +448,32 @@ def _update_index_entry(index: dict, thesis: dict) -> None:
     index["theses"][tid] = _project_index_fields(thesis)
 
 
+@contextmanager
+def _index_lock(state_dir: Path):
+    """Inter-process lock for _index.json read-modify-write cycles.
+
+    The scheduler, the UI server and manual CLI calls can run concurrently;
+    per-file thesis writes are atomic, but an unguarded load->mutate->save of
+    the shared index silently drops whichever update lands first.
+    """
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with open(state_dir / "_index.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _index_upsert(state_dir: Path, thesis: dict) -> None:
+    """Locked read-modify-write of the index for one thesis."""
+    with _index_lock(state_dir):
+        index = _load_index(state_dir)
+        _update_index_entry(index, thesis)
+        _save_index(state_dir, index)
+
+
 # -- Public API ---------------------------------------------------------------
 
 
@@ -565,9 +593,7 @@ def register(state_dir: Path, thesis_data: dict) -> str:
     # Persist
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Registered thesis %s for %s", thesis_id, thesis["ticker"])
     return thesis_id
@@ -660,9 +686,7 @@ def update(state_dir: Path, thesis_id: str, fields: dict) -> dict:
     thesis["updated_at"] = now
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     return thesis
 
@@ -728,9 +752,7 @@ def transition(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Transitioned %s: %s → %s (%s)", thesis_id, current, new_status, reason)
     return thesis
@@ -829,9 +851,7 @@ def attach_position(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Attached position to %s: %s shares", thesis_id, thesis["position"]["shares"])
     return thesis
@@ -845,9 +865,7 @@ def link_report(state_dir: Path, thesis_id: str, skill: str, file: str, date: st
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     return thesis
 
@@ -855,6 +873,14 @@ def link_report(state_dir: Path, thesis_id: str, skill: str, file: str, date: st
 def _sum_realized(history: list[dict]) -> float:
     """Σ realized_pnl over status_history ledger entries (trims + final leg)."""
     return sum(e["realized_pnl"] for e in history if "realized_pnl" in e)
+
+
+def _pnl_per_share(thesis: dict, exit_price: float, entry_price: float) -> float:
+    """Per-share P&L respecting trade direction: a short profits when the exit
+    is BELOW the entry; the old long-only (exit − entry) sign-flipped it."""
+    if str(thesis.get("side") or "long").lower() == "short":
+        return entry_price - exit_price
+    return exit_price - entry_price
 
 
 def _finalize_outcome(
@@ -893,7 +919,7 @@ def _finalize_outcome(
                 "shares_sold": remaining,
                 "price": exit_price,
                 "proceeds": round(exit_price * remaining, 2),
-                "realized_pnl": round((exit_price - entry_price) * remaining, 2),
+                "realized_pnl": round(_pnl_per_share(thesis, exit_price, entry_price) * remaining, 2),
             }
         )
 
@@ -979,8 +1005,8 @@ def close(
         )
     else:
         # Legacy no-position path — pre-PR-80B behaviour, byte-identical.
-        pnl_dollars = actual_price - entry_price
-        pnl_pct = ((actual_price - entry_price) / entry_price) * 100 if entry_price else None
+        pnl_dollars = _pnl_per_share(thesis, actual_price, entry_price)
+        pnl_pct = (pnl_dollars / entry_price) * 100 if entry_price else None
         holding_days = None
         if entry_date:
             try:
@@ -1001,9 +1027,7 @@ def close(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info(
         "Closed %s: %s, P&L=%.2f%%",
@@ -1064,7 +1088,7 @@ def trim(
             f"shares_sold ({shares_sold}) must be > 0 and <= shares_remaining ({remaining})"
         )
 
-    realized = round((price - entry_price) * shares_sold, 2)
+    realized = round(_pnl_per_share(thesis, price, entry_price) * shares_sold, 2)
     proceeds = round(price * shares_sold, 2)
     # Round to kill float-subtraction noise (7.86 - 4.00 == 3.86000…3),
     # then epsilon-snap a ~0 remainder to an exact 0.0 (→ full close-out).
@@ -1114,9 +1138,7 @@ def trim(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info(
         "Trimmed %s: sold %s @ %.4f → %s remaining, status %s",
@@ -1183,9 +1205,7 @@ def open_position(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Opened position %s at %.2f", thesis_id, actual_price)
     return thesis
@@ -1265,8 +1285,8 @@ def terminate(
         # Pre-PR-80B partial-outcome path — verbatim (covers no-price
         # terminate INVALIDATED, incl. position-attached but no exit price).
         if entry_price and actual_price:
-            pnl_pct = ((actual_price - entry_price) / entry_price) * 100
-            pnl_dollars = actual_price - entry_price
+            pnl_dollars = _pnl_per_share(thesis, actual_price, entry_price)
+            pnl_pct = (pnl_dollars / entry_price) * 100
             if thesis.get("position") and thesis["position"].get("shares"):
                 pnl_dollars *= thesis["position"]["shares"]
             thesis["outcome"]["pnl_pct"] = round(pnl_pct, 2)
@@ -1293,9 +1313,7 @@ def terminate(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Terminated %s → INVALIDATED: %s", thesis_id, exit_reason)
     return thesis
@@ -1348,9 +1366,7 @@ def mark_reviewed(
 
     _save_thesis(state_dir, thesis)
 
-    index = _load_index(state_dir)
-    _update_index_entry(index, thesis)
-    _save_index(state_dir, index)
+    _index_upsert(state_dir, thesis)
 
     logger.info("Reviewed %s: %s → next %s", thesis_id, outcome, next_review)
     return thesis
@@ -1377,10 +1393,11 @@ def delete(state_dir: Path, thesis_id: str) -> bool:
         path.unlink()
         removed_file = True
 
-    index = _load_index(state_dir)
-    removed_index = index.get("theses", {}).pop(thesis_id, None) is not None
-    if removed_index:
-        _save_index(state_dir, index)
+    with _index_lock(state_dir):
+        index = _load_index(state_dir)
+        removed_index = index.get("theses", {}).pop(thesis_id, None) is not None
+        if removed_index:
+            _save_index(state_dir, index)
 
     if removed_file or removed_index:
         logger.info("Deleted %s (file=%s, index=%s)", thesis_id, removed_file, removed_index)

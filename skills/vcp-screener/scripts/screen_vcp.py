@@ -714,7 +714,7 @@ def main():
                 execution_state=r.get("execution_state"),
                 pattern_type=r.get("pattern_type"),
                 wide_and_loose=r.get("wide_and_loose", False),
-                sma200_extension_pct=r.get("sma200_extension_pct"),
+                sma200_extension_pct=r.get("sma200_distance_pct"),
             )
             r["composite_score"] = composite["composite_score"]
             r["quality_rating"] = composite.get("quality_rating", composite["rating"])
@@ -738,8 +738,14 @@ def main():
             require_valid_vcp=require_vcp,
         )
 
-    # Sort by composite score
-    results.sort(key=lambda x: x["composite_score"], reverse=True)
+    # Sort buyable ratings ahead of capped ones, then by composite score:
+    # state caps live only in the rating string, so a capped 75-score name
+    # would otherwise displace a buyable 72-score name out of the --top slice
+    # the breakout planner consumes.
+    _buyable = {"Textbook VCP", "Strong VCP", "Good VCP"}
+    results.sort(
+        key=lambda x: (x.get("rating") in _buyable, x["composite_score"]), reverse=True
+    )
 
     # Apply prebreakout filter if requested
     if args.mode == "prebreakout":

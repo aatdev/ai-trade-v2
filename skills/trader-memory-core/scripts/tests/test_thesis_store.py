@@ -1117,6 +1117,29 @@ def test_cli_main_lifecycle_full_sequence(tmp_path: Path, capsys):
     assert t["outcome"]["pnl_dollars"] == round((165.0 - 150.0) * 7.86, 2)
 
 
+def test_short_close_pnl_positive_when_exit_below_entry(tmp_path: Path):
+    """Side-aware P&L: a short closed below entry is a PROFIT (the old
+    long-only (exit − entry) sign-flipped every short outcome)."""
+    tid, _ = _register_and_get(tmp_path, side="short")
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "trigger")
+    thesis_store.open_position(tmp_path, tid, 100.0, "2026-06-01T00:00:00+00:00", shares=10)
+    t = thesis_store.close(tmp_path, tid, "target_hit", 90.0, "2026-06-10T00:00:00+00:00")
+    assert t["outcome"]["pnl_dollars"] == 100.0  # (100 − 90) × 10
+    assert t["outcome"]["pnl_pct"] == pytest.approx(10.0)
+
+
+def test_short_trim_realized_pnl_sign(tmp_path: Path):
+    tid, _ = _register_and_get(tmp_path, side="short")
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "trigger")
+    thesis_store.open_position(tmp_path, tid, 50.0, "2026-06-01T00:00:00+00:00", shares=100)
+    from datetime import datetime, timedelta, timezone
+
+    trim_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    t = thesis_store.trim(tmp_path, tid, 50, 47.0, trim_at)
+    leg = [e for e in t["status_history"] if "realized_pnl" in e][-1]
+    assert leg["realized_pnl"] == 150.0  # (50 − 47) × 50 covered
+
+
 def test_cli_update_stop_trails_the_stop(tmp_path: Path):
     """`update-stop` trails exit.stop_loss without hand-editing YAML — the heat
     ledger reads that field, so a stale stop means stale portfolio risk."""

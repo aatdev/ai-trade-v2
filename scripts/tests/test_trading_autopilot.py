@@ -11,6 +11,12 @@ _spec = importlib.util.spec_from_file_location("run_trading_autopilot", _MODULE_
 ap = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ap)
 
+# All window fixtures below are CET wall-clock; pin the conversion zone so the
+# suite is deterministic on non-CET machines too.
+from zoneinfo import ZoneInfo  # noqa: E402
+
+ap.schedule.LOCAL_TZ = ZoneInfo("Europe/Zurich")
+
 
 def _state(**overrides):
     state = ap.default_state("2026-06-09")
@@ -111,6 +117,27 @@ class TestDecideAction:
         action, _ = ap.decide_action(_at("16:00"), state)
         assert action == "intraday"
 
+    def test_dst_mismatch_intraday_starts_at_1430_cet(self):
+        # 2026-03-16: the US is already on DST, the EU is not → the open
+        # (9:30 ET) is 14:30 CET. The old fixed 15:30 constant missed the
+        # first hour of the session.
+        state = _slot_state("premarket", "done", 1)
+        action, _ = ap.decide_action(_at("14:35", "2026-03-16"), state)
+        assert action == "intraday"
+
+    def test_dst_mismatch_evening_at_2115_cet(self):
+        action, _ = ap.decide_action(_at("21:20", "2026-03-16"), _state())
+        assert action == "evening-prep"
+
+    def test_half_day_early_close_shifts_windows(self):
+        # 2026-11-27 (day after Thanksgiving) closes 13:00 ET = 19:00 CET;
+        # evening prep starts 19:15 CET instead of 22:15.
+        state = _slot_state("premarket", "done", 1)
+        action, _ = ap.decide_action(_at("18:30", "2026-11-27"), state)
+        assert action == "intraday"
+        action2, _ = ap.decide_action(_at("19:30", "2026-11-27"), state)
+        assert action2 == "evening-prep"
+
     def test_saturday_before_noon_is_noop(self):
         action, reason = ap.decide_action(_at("11:00", "2026-06-13"), _state())
         assert action == "none"
@@ -196,6 +223,19 @@ class TestState:
         rolled = ap.rollover_state(state, dt.date(2026, 6, 10))
         assert rolled["weekly"]["2026-06-06"]["status"] == "done"
         assert rolled["intraday"] == {}
+
+    def test_rollover_prunes_weekly_and_monthly_history(self):
+        state = _state()
+        state["weekly"] = {f"2026-{(i // 28) + 1:02d}-{(i % 28) + 1:02d}": {"status": "done"}
+                           for i in range(12)}
+        state["monthly"] = {f"2025-{m:02d}": {"status": "done"} for m in range(1, 13)}
+        state["monthly"]["2026-01"] = {"status": "done"}
+        state["monthly"]["2026-02"] = {"status": "done"}
+        rolled = ap.rollover_state(state, dt.date(2026, 6, 10))
+        assert len(rolled["weekly"]) == 8
+        assert len(rolled["monthly"]) == 12
+        assert "2026-02" in rolled["monthly"]  # newest kept
+        assert "2025-01" not in rolled["monthly"]  # oldest pruned
 
     def test_rollover_same_day_is_identity(self):
         state = _slot_state("premarket", "done", 1)
@@ -397,6 +437,23 @@ class TestMain:
         assert any("restrict" in t and "allow" in t for t in calls["telegrams"])
         state = json.loads((tmp_path / "state.json").read_text())
         assert state["last_gate_decision"] == "allow"
+
+    def test_degraded_gate_does_not_fake_a_flip(self, tmp_path, monkeypatch):
+        """A missing/unreadable gate fail-safes to restrict — that must not be
+        reported as a real allow→restrict flip, nor overwrite the last known
+        good decision."""
+        calls = self._wire(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            ap, "read_gate_decision",
+            lambda date_str: {"decision": "restrict", "degraded": True},
+        )
+        (tmp_path / "state.json").write_text(
+            json.dumps(ap.default_state(TUE) | {"last_gate_decision": "allow"})
+        )
+        ap.main(["--now", f"{TUE}T15:05:00"])
+        assert not any("Гейт экспозиции изменился" in t for t in calls["telegrams"])
+        state = json.loads((tmp_path / "state.json").read_text())
+        assert state["last_gate_decision"] == "allow"  # last known good kept
 
     def test_force_slot_bypasses_windows(self, tmp_path, monkeypatch):
         calls = self._wire(tmp_path, monkeypatch, gate_decision="restrict")

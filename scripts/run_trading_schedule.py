@@ -61,8 +61,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -70,6 +72,17 @@ WORKFLOWS_DIR = PROJECT_ROOT / "workflows"
 TELEGRAM_SCRIPT = PROJECT_ROOT / "skills" / "send-telegram" / "scripts" / "send_telegram.py"
 
 VALID_DECISIONS = ("allow", "restrict", "cash-priority")
+
+# Early-close sessions (13:00 ET): day after Thanksgiving, Christmas Eve when
+# it falls on a weekday, July 3 when July 4 is a weekday-observed holiday.
+US_MARKET_HALF_DAYS = {
+    "2025-07-03",
+    "2025-11-28",
+    "2025-12-24",
+    "2026-11-27",
+    "2026-12-24",
+    "2027-11-26",
+}
 
 # NYSE/NASDAQ full-day closures. Extend yearly. Used only to skip non-trading
 # days; an out-of-date list at worst runs a workflow on a holiday (harmless --
@@ -221,9 +234,9 @@ IBD_SCRIPT = SKILLS_DIR / "ibd-distribution-day-monitor" / "scripts" / "ibd_moni
 MACRO_SCRIPT = SKILLS_DIR / "macro-regime-detector" / "scripts" / "macro_regime_detector.py"
 FTD_SCRIPT = SKILLS_DIR / "ftd-detector" / "scripts" / "ftd_detector.py"
 
-# Intraday monitoring window (CET wall clock; US session 15:30-22:00).
-INTRADAY_START = dt.time(15, 30)
-INTRADAY_END = dt.time(22, 0)
+# Intraday monitoring window: derived per date from US Eastern (see
+# intraday_window_local below) — fixed CET constants drift during the
+# US/EU DST-mismatch weeks and ignore half days.
 # How many top candidates get the claude chart-validation pass (hybrid mode).
 VALIDATION_TOP_N = 3
 # Short branch market-pressure gates (trading plan step 6): top-risk score OR
@@ -284,6 +297,38 @@ def is_us_trading_day(d: dt.date) -> bool:
 def is_first_sunday(d: dt.date) -> bool:
     """True only on the first Sunday of the month (day 1-7, weekday Sunday)."""
     return d.weekday() == 6 and d.day <= 7
+
+
+# --------------------------------------------------------------------------- #
+# US-session windows (anchored to US Eastern, converted to local wall time)
+#
+# The trader's machine runs CET, but fixed CET constants drift an hour during
+# the 2-3 DST-mismatch weeks each year (the US switches before the EU): the
+# session actually starts at 14:30 CET, the old 15:30 window missed the first
+# hour. Windows are therefore defined in ET and converted per date.
+# --------------------------------------------------------------------------- #
+US_EASTERN = ZoneInfo("America/New_York")
+# Test override for deterministic conversions; None -> system local zone.
+LOCAL_TZ: ZoneInfo | None = None
+
+INTRADAY_START_ET = dt.time(9, 30)
+SESSION_CLOSE_ET = dt.time(16, 0)
+HALF_DAY_CLOSE_ET = dt.time(13, 0)
+
+
+def us_session_close_et(d: dt.date) -> dt.time:
+    """Session close in ET for the date (13:00 on early-close half days)."""
+    return HALF_DAY_CLOSE_ET if d.isoformat() in US_MARKET_HALF_DAYS else SESSION_CLOSE_ET
+
+
+def et_to_local(d: dt.date, t: dt.time) -> dt.time:
+    """Local wall-clock time of an ET hh:mm on date ``d``."""
+    return dt.datetime.combine(d, t, tzinfo=US_EASTERN).astimezone(LOCAL_TZ).time()
+
+
+def intraday_window_local(d: dt.date) -> tuple[dt.time, dt.time]:
+    """(start, end) of the US session in local wall time for the date."""
+    return et_to_local(d, INTRADAY_START_ET), et_to_local(d, us_session_close_et(d))
 
 
 # --------------------------------------------------------------------------- #
@@ -640,35 +685,6 @@ EXECUTION RULES (unattended headless run -- you must finish autonomously):
 - After writing it, Read it back to confirm it parses as valid JSON, then give a
   1-2 line summary. "Be fast" / short narration means terse prose, NOT skipping
   steps or the gate file."""
-
-
-def opportunity_prompt(date_str: str, gate_path: Path, watchlist_path: Path) -> str:
-    return f"""Run the scheduled `swing-opportunity-daily` workflow for {date_str} (CET schedule, US equities).
-
-The market-regime-daily gate at {gate_path} is `allow`, so new swing risk is
-permitted. Read the manifest at workflows/swing-opportunity-daily.yaml and
-execute its steps: run the screeners (vcp-screener, optionally canslim-screener
-/ theme-detector), validate setups with technical-analyst, size with
-position-sizer, and register each surviving idea as an IDEA thesis via
-trader-memory-core. Save artifacts into the trading data layout:
-screener output under {_rel(SCREENERS_DIR)}/, position sizing under {_rel(PLANS_DIR)}/,
-thesis state dir {_rel(JOURNAL_DIR)}/theses.
-
-Also write a concise watchlist gate file to EXACTLY this path:
-  {watchlist_path}
-as JSON:
-{{
-  "workflow": "swing-opportunity-daily",
-  "date": "{date_str}",
-  "exposure_decision": "allow",
-  "candidates": [
-    {{"ticker": "XXX", "setup": "VCP/...", "pivot": <num>, "stop": <num>,
-      "target": <num>, "shares": <num>, "risk_R_pct": <num>}}
-  ],
-  "notes": "<= 2 sentences"
-}}
-If no candidates pass the gates, write an empty `candidates` list and say so.
-This is PLANNING only -- do NOT place any orders. Keep narration short."""
 
 
 def monthly_prompt(date_str: str, summary_path: Path) -> str:
@@ -1171,12 +1187,12 @@ def slot_premarket(date_str: str, args) -> int:
             f"⚠️ Watchlist устарел ({wl_data.get('date')}) — вечерний прогон не отработал; "
             "OPEN-сигналы сегодня НЕ придут, ордера по нему не ставить.\n\n" + msg
         )
-    # Surface a missing TradingView Desktop IMMEDIATELY: without it the heat
-    # refresh above and tonight's screen/alert sync will not work.
+    # Surface a missing TradingView Desktop IMMEDIATELY: tonight's screen and
+    # alert sync need it (the heat refresh above reads only local YAML).
     if not args.dry_run and not tv_available():
         msg = (
             _tv_down_text(
-                "Premarket: heat-обновление и вечерний скрин/алерты без TradingView не сработают."
+                "Premarket: вечерний скрин и алерты без TradingView не сработают."
             )
             + "\n\n"
             + msg
@@ -1518,7 +1534,7 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
             wl["candidates"] = candidates
 
     if not args.dry_run:
-        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(wl_path, wl)
         log(f"auto-analyze: watchlist saved → {_rel(wl_path)}")
     return wl
 
@@ -1567,11 +1583,29 @@ def _validation_note(wl: dict, validation: dict | None) -> str:
     return note
 
 
+def _atomic_write_json(path: Path, data: dict) -> None:
+    """Crash/torn-read-safe JSON write (tmp + rename): the intraday monitor
+    and the UI read these files while the evening pipeline rewrites them."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _write_watchlist(wl: dict, date_str: str, args) -> Path:
     wl_path = SCHEDULE_DIR / f"watchlist_{date_str}.json"
     if not args.dry_run:
         SCHEDULE_DIR.mkdir(parents=True, exist_ok=True)
-        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(wl_path, wl)
     return wl_path
 
 
@@ -1603,7 +1637,7 @@ def _ingest_theses(
             tid = ticker_to_tid.get(str(cand.get("ticker", "")).upper())
             if tid:
                 cand["thesis_id"] = tid
-        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(wl_path, wl)
         log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
 
 
@@ -1726,17 +1760,37 @@ def _dd_count_from_ibd(path: Path | None) -> float | None:
     return max(counts) if counts else None
 
 
+def _report_age_seconds(path: Path, data: dict) -> float:
+    """Report age from its own metadata.generated_at when present — mtimes lie
+    after cp/archive restores; file mtime is only the fallback."""
+    raw = str(((data or {}).get("metadata") or {}).get("generated_at") or "")
+    try:
+        generated = dt.datetime.fromisoformat(raw.replace(" ", "T"))
+        return max(0.0, (dt.datetime.now() - generated).total_seconds())
+    except ValueError:
+        return time.time() - path.stat().st_mtime
+
+
 def _short_conditions() -> tuple[bool, str]:
     """Plan step 6: shorts only under market pressure and with no fresh FTD.
-    Missing/stale evidence -> no shorts (fail-safe)."""
+    Missing/stale/low-quality evidence -> no shorts (fail-safe)."""
     path = _latest(MARKET_DIR, "market_top_*.json")
     max_age = MARKET_REPORT_MAX_AGE_DAYS * 86400
-    if not path or time.time() - path.stat().st_mtime > max_age:
+    data = (_read_json(path) or {}) if path else {}
+    if not path or _report_age_seconds(path, data) > max_age:
         return (
             False,
             "нет свежего market_top отчёта (суббота, шаг 8) — шорт-скрин пропущен (fail-safe)",
         )
-    data = _read_json(path) or {}
+    # Don't arm shorts off a half-built report (e.g. WebSearch inputs missing).
+    dq = (data.get("composite") or {}).get("data_quality") or {}
+    avail, total = dq.get("available_count"), dq.get("total_components")
+    if avail is not None and total and avail < total / 2:
+        return (
+            False,
+            f"market_top собран лишь на {avail}/{total} компонентах — "
+            "шорт-скрин пропущен (fail-safe)",
+        )
     score = (data.get("composite") or {}).get("composite_score") or 0
 
     # DD count: prefer the IBD monitor (correct rally-invalidation rules);
@@ -1765,6 +1819,90 @@ def _short_conditions() -> tuple[bool, str]:
     if ftd:
         return False, f"свежий FTD — шортить запрещено (правило 6.4): {ftd_note}"
     return True, f"top-risk {score} / DD {dd_count} [{dd_source}], свежего FTD нет"
+
+
+# Plan rule 6.4: shorts work on a faster clock than the long 15-t.d. time stop.
+SHORT_TIME_STOP_TRADING_DAYS = 10
+# Start warning this many trading days before the time stop fires.
+TIME_STOP_WARN_AHEAD_DAYS = 2
+# "Over 4 weeks in trade" threshold for the SMA50 trail rule (plan step 3).
+SMA50_TRAIL_AFTER_TRADING_DAYS = 20
+
+
+def _position_care_warnings(args) -> list[str]:
+    """Plan rules the automation previously left to the human (step 3 table):
+    time stops (15 t.d. long / 10 t.d. short), daily close below EMA20(≈21),
+    SMA50 trail after ~4 weeks in trade. Advisory lines for the evening digest;
+    nothing is executed automatically."""
+    if args.dry_run:
+        return []
+    heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
+    heat = _read_json(heat_path) if heat_path else None
+    positions = (heat or {}).get("positions") or []
+    if not positions:
+        return []
+    profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    long_ts = int(profile.get("time_stop_trading_days") or 15)
+    tickers = sorted({str(p.get("ticker", "")).upper() for p in positions} - {""})
+    try:
+        indicators = tsig.fetch_indicators(tickers)
+    except tsig.QuotesError as exc:
+        log(f"position care: индикаторы недоступны: {exc}", logging.WARNING)
+        indicators = {}
+
+    warnings: list[str] = []
+    for p in positions:
+        ticker = str(p.get("ticker", "")).upper()
+        if not ticker:
+            continue
+        side = str(p.get("side") or "long").lower()
+        limit = SHORT_TIME_STOP_TRADING_DAYS if side == "short" else long_ts
+        days = None
+        entry_date = str(p.get("entry_date") or "")[:10]
+        if entry_date:
+            days = _weekdays_since(entry_date)
+        if days is not None:
+            if days >= limit:
+                warnings.append(
+                    f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
+                    "НАСТУПИЛ: закрыть, если нет +1R"
+                )
+            elif days >= limit - TIME_STOP_WARN_AHEAD_DAYS:
+                warnings.append(
+                    f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
+                    f"через {limit - days} т.д."
+                )
+        ind = indicators.get(ticker) or {}
+        close, ema20, sma50 = ind.get("close"), ind.get("ema20"), ind.get("sma50")
+        if close and ema20:
+            if side == "long" and close < ema20:
+                warnings.append(
+                    f"📉 {ticker}: закрытие {close:g} ниже EMA20(≈21) {ema20:g} — "
+                    "по плану выйти из остатка"
+                )
+            elif side == "short" and close > ema20:
+                warnings.append(
+                    f"📈 {ticker}: закрытие {close:g} выше EMA20(≈21) {ema20:g} — "
+                    "слабость шорта, рассмотреть выход"
+                )
+        if (
+            side == "long"
+            and days is not None
+            and days >= SMA50_TRAIL_AFTER_TRADING_DAYS
+            and close
+            and sma50
+            and close < sma50
+        ):
+            warnings.append(
+                f"📉 {ticker}: >4 недель в позиции и закрытие {close:g} ниже "
+                f"SMA50 {sma50:g} — трейл-выход"
+            )
+    return warnings
+
+
+def _care_block(args) -> str:
+    care = _position_care_warnings(args)
+    return ("\n\n🛎 ОТКРЫТЫЕ ПОЗИЦИИ\n" + "\n".join(care)) if care else ""
 
 
 def _filter_shorts_on_earnings(shorts: list, args) -> tuple[list, str]:
@@ -1810,11 +1948,9 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
     rc = 0 if regime_ok or args.dry_run else 1
     active, reason = _short_conditions()
     if not active:
-        notify(
-            build_evening_closed_msg(date_str, dec, extra=f"Шорт-ветка: {reason}."),
-            dry_run=args.dry_run,
-            no_telegram=args.no_telegram,
-        )
+        msg = build_evening_closed_msg(date_str, dec, extra=f"Шорт-ветка: {reason}.")
+        msg += _care_block(args)
+        notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
         return rc
 
     # The short screen reads LIVE chart data (cache off) and the alerts go
@@ -1880,6 +2016,7 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
     val_note = _validation_note(wl, validation)
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"
+    msg += _care_block(args)
     alert_line = _sync_tv_alerts(wl, args)
     if alert_line:
         msg += f"\n\n{alert_line}"
@@ -1925,6 +2062,7 @@ def slot_evening_prep(date_str: str, args) -> int:
     msg = build_evening_allow_msg(date_str, dec, wl_rel, candidates)
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"
+    msg += _care_block(args)
     alert_line = _sync_tv_alerts(wl, args)
     if alert_line:
         msg += f"\n\n{alert_line}"
@@ -1941,11 +2079,16 @@ def slot_intraday(date_str: str, args) -> int:
     """Cheap quote check (no claude): OPEN triggers from the watchlist and
     manage-signals (stop / near-stop / +2R) for open positions, via Telegram."""
     if not args.force:
+        try:
+            _wd = dt.date.fromisoformat(date_str)
+        except ValueError:
+            _wd = dt.date.today()
+        start_t, end_t = intraday_window_local(_wd)
         now_t = _now_time()
-        if not (INTRADAY_START <= now_t < INTRADAY_END):
+        if not (start_t <= now_t < end_t):
             log(
                 f"intraday: {now_t:%H:%M} вне окна "
-                f"{INTRADAY_START:%H:%M}–{INTRADAY_END:%H:%M} CET — пропуск"
+                f"{start_t:%H:%M}–{end_t:%H:%M} (US-сессия, локальное время) — пропуск"
             )
             return 0
 

@@ -194,6 +194,7 @@ def _extract_position(thesis: dict, warnings: list[dict]) -> dict | None:
         "ticker": ticker,
         "side": side,
         "status": thesis["status"],
+        "entry_date": (thesis.get("entry") or {}).get("actual_date"),
         "shares": shares,
         "entry_price": entry_price,
         "stop_loss": stop,

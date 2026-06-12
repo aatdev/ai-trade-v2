@@ -251,7 +251,7 @@ def run_live(args) -> tuple[list[dict], dict]:
         "universe_size": len(universe),
         "spy_return": spy_return,
         "rs_lookback": args.rs_lookback,
-        "source": "fmp",
+        "source": "tradingview",
         "api_calls_made": client.api_calls_made,
     }
     return results, meta

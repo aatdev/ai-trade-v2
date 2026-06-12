@@ -89,12 +89,17 @@ def compute_mae_mfe(thesis: dict, price_adapter: Any | None = None) -> dict[str,
     if not prices:
         return result
 
-    closes = [p["close"] for p in prices]
-    min_close = min(closes)
-    max_close = max(closes)
-
-    mae_pct = ((min_close - entry_price) / entry_price) * 100
-    mfe_pct = ((max_close - entry_price) / entry_price) * 100
+    # Intraday extremes (fallback to closes for adapters without high/low);
+    # side-aware: a short's adverse excursion is the highest HIGH (squeeze up),
+    # its favorable one the lowest LOW. mae <= 0 and mfe >= 0 on both sides.
+    lows = [p.get("low", p["close"]) for p in prices]
+    highs = [p.get("high", p["close"]) for p in prices]
+    if str(thesis.get("side") or "long").lower() == "short":
+        mae_pct = ((entry_price - max(highs)) / entry_price) * 100
+        mfe_pct = ((entry_price - min(lows)) / entry_price) * 100
+    else:
+        mae_pct = ((min(lows) - entry_price) / entry_price) * 100
+        mfe_pct = ((max(highs) - entry_price) / entry_price) * 100
 
     result["mae_pct"] = round(mae_pct, 2)
     result["mfe_pct"] = round(mfe_pct, 2)

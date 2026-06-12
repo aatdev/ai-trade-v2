@@ -36,16 +36,16 @@ class TestGetDailyCloses:
         adapter = TVPriceAdapter(client=client)
         rows = adapter.get_daily_closes("AAPL", "2026-06-03", "2026-06-05")
         assert rows == [
-            {"date": "2026-06-03", "close": 102.0},
-            {"date": "2026-06-04", "close": 103.0},
-            {"date": "2026-06-05", "close": 104.0},
+            {"date": "2026-06-03", "close": 102.0, "high": 102.0, "low": 102.0},
+            {"date": "2026-06-04", "close": 103.0, "high": 103.0, "low": 103.0},
+            {"date": "2026-06-05", "close": 104.0, "high": 104.0, "low": 104.0},
         ]
 
     def test_prefers_adj_close(self):
         client = _FakeClient([_bar("2026-06-03", 100.0, adj=99.5)])
         adapter = TVPriceAdapter(client=client)
         rows = adapter.get_daily_closes("AAPL", "2026-06-01", "2026-06-08")
-        assert rows == [{"date": "2026-06-03", "close": 99.5}]
+        assert rows == [{"date": "2026-06-03", "close": 99.5, "high": 99.5, "low": 99.5}]
 
     def test_datetime_style_range_bounds_are_normalized(self):
         client = _FakeClient([_bar("2026-06-03", 100.0)])
@@ -87,7 +87,7 @@ class TestGetDailyCloses:
         )
         adapter = TVPriceAdapter(client=client)
         rows = adapter.get_daily_closes("AAPL", "2026-06-01", "2026-06-08")
-        assert rows == [{"date": "2026-06-04", "close": 103.0}]
+        assert rows == [{"date": "2026-06-04", "close": 103.0, "high": 103.0, "low": 103.0}]
 
 
 def test_mae_mfe_pipeline_with_tv_adapter():

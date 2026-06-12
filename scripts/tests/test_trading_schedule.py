@@ -12,6 +12,11 @@ _spec = importlib.util.spec_from_file_location("run_trading_schedule", _MODULE_P
 ts = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ts)
 
+# Window fixtures are CET wall-clock; pin the conversion zone for determinism.
+from zoneinfo import ZoneInfo  # noqa: E402
+
+ts.LOCAL_TZ = ZoneInfo("Europe/Zurich")
+
 
 # --------------------------------------------------------------------------- #
 # Calendar gates
@@ -87,15 +92,6 @@ def test_regime_prompt_contains_gate_path_and_decision_enum():
     assert str(gate) in prompt
     assert "allow" in prompt and "restrict" in prompt and "cash-priority" in prompt
     assert "market-regime-daily" in prompt
-
-
-def test_opportunity_prompt_references_allow_gate_and_watchlist():
-    gate = Path("/tmp/g.json")
-    wl = Path("/tmp/watchlist_2026-06-02.json")
-    prompt = ts.opportunity_prompt("2026-06-02", gate, wl)
-    assert str(wl) in prompt
-    assert "swing-opportunity-daily" in prompt
-    assert "do NOT place any orders" in prompt
 
 
 def test_regime_prompt_mandates_finishing_and_gate_write():
@@ -839,6 +835,75 @@ class TestEveningHybrid:
 
 
 # --------------------------------------------------------------------------- #
+# Position care (time stops + EMA/SMA trail rules from the plan, step 3)
+# --------------------------------------------------------------------------- #
+class TestPositionCareWarnings:
+    def _setup(self, monkeypatch, tmp_path, positions, indicators=None):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "trading_profile.json",
+            {"account_size": 150000, "risk_pct": 1, "time_stop_trading_days": 15},
+        )
+        _heat_file(tmp_path, positions=positions)
+        monkeypatch.setattr(ts.tsig, "fetch_indicators", lambda tickers, **k: indicators or {})
+        return types.SimpleNamespace(dry_run=False, timeout=60)
+
+    def test_time_stop_reached_and_approaching(self, monkeypatch, tmp_path):
+        positions = [
+            {"ticker": "OLD", "side": "long", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 95.0, "entry_date": _weekdays_ago(16)},
+            {"ticker": "MID", "side": "long", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 95.0, "entry_date": _weekdays_ago(13)},
+            {"ticker": "NEW", "side": "long", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 95.0, "entry_date": _weekdays_ago(3)},
+        ]
+        args = self._setup(monkeypatch, tmp_path, positions)
+        lines = "\n".join(ts._position_care_warnings(args))
+        assert "OLD" in lines and "НАСТУПИЛ" in lines
+        assert "MID" in lines and "через 2 т.д." in lines
+        assert "NEW" not in lines
+
+    def test_short_uses_10_day_time_stop(self, monkeypatch, tmp_path):
+        positions = [
+            {"ticker": "SHRT", "side": "short", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 105.0, "entry_date": _weekdays_ago(11)},
+        ]
+        args = self._setup(monkeypatch, tmp_path, positions)
+        lines = "\n".join(ts._position_care_warnings(args))
+        assert "SHRT" in lines and "тайм-стоп 10 т.д. НАСТУПИЛ" in lines
+
+    def test_ema_break_and_sma50_trail(self, monkeypatch, tmp_path):
+        positions = [
+            {"ticker": "AAPL", "side": "long", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 95.0, "entry_date": _weekdays_ago(21)},
+        ]
+        indicators = {"AAPL": {"close": 96.0, "ema20": 98.0, "sma50": 97.0}}
+        args = self._setup(monkeypatch, tmp_path, positions, indicators)
+        lines = "\n".join(ts._position_care_warnings(args))
+        assert "ниже EMA20" in lines
+        assert "SMA50" in lines and "трейл-выход" in lines
+
+    def test_short_ema_break_mirrored(self, monkeypatch, tmp_path):
+        positions = [
+            {"ticker": "NFLX", "side": "short", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 105.0, "entry_date": _weekdays_ago(2)},
+        ]
+        indicators = {"NFLX": {"close": 103.0, "ema20": 101.0, "sma50": 110.0}}
+        args = self._setup(monkeypatch, tmp_path, positions, indicators)
+        lines = "\n".join(ts._position_care_warnings(args))
+        assert "выше EMA20" in lines and "слабость шорта" in lines
+
+    def test_quiet_positions_produce_no_warnings(self, monkeypatch, tmp_path):
+        positions = [
+            {"ticker": "OK", "side": "long", "entry_price": 100.0, "shares": 10,
+             "stop_loss": 95.0, "entry_date": _weekdays_ago(3)},
+        ]
+        indicators = {"OK": {"close": 105.0, "ema20": 102.0, "sma50": 100.0}}
+        args = self._setup(monkeypatch, tmp_path, positions, indicators)
+        assert ts._position_care_warnings(args) == []
+
+
+# --------------------------------------------------------------------------- #
 # Watchlist freshness (stale lists must not arm OPEN signals)
 # --------------------------------------------------------------------------- #
 class TestWatchlistFreshness:
@@ -1028,6 +1093,25 @@ class TestShortConditions:
         active, reason = ts._short_conditions()
         assert active is True
         assert "market_top" in reason
+
+    def test_stale_generated_at_beats_fresh_mtime(self, monkeypatch, tmp_path):
+        """An archive-restored report has a fresh mtime but an old
+        metadata.generated_at — it must not arm the short branch."""
+        top = self._pressure_top()
+        old = (dt.datetime.now() - dt.timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+        top["metadata"] = {"generated_at": old}
+        self._setup(monkeypatch, tmp_path, market_top=top)
+        active, reason = ts._short_conditions()
+        assert active is False
+        assert "нет свежего" in reason
+
+    def test_low_data_quality_fails_safe(self, monkeypatch, tmp_path):
+        top = self._pressure_top()
+        top["composite"]["data_quality"] = {"available_count": 2, "total_components": 6}
+        self._setup(monkeypatch, tmp_path, market_top=top)
+        active, reason = ts._short_conditions()
+        assert active is False
+        assert "2/6" in reason
 
     def test_ibd_dd_count_preferred_over_market_top(self, monkeypatch, tmp_path):
         # market_top overstates DD (no rally invalidation); IBD says only 1.

@@ -68,7 +68,15 @@ class TVPriceAdapter:
             if not bar_date or close is None:
                 continue
             if start <= bar_date <= end:
-                rows.append({"date": bar_date, "close": float(close)})
+                rows.append(
+                    {
+                        "date": bar_date,
+                        "close": float(close),
+                        # Intraday extremes for MAE/MFE; closes understate both.
+                        "high": float(bar.get("high") or close),
+                        "low": float(bar.get("low") or close),
+                    }
+                )
 
         rows.sort(key=lambda r: r["date"])  # TV layer returns newest first
         if not rows:

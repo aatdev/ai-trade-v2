@@ -159,6 +159,40 @@ def fetch_quotes(
     return quotes
 
 
+def fetch_indicators(tickers: list[str], *, timeout: int = 30) -> dict[str, dict]:
+    """Daily close + EMA20 + SMA50 per ticker (one scanner POST, no retries).
+
+    Powers the evening position-care checks (plan rule: «дневное закрытие ниже
+    EMA21» — EMA20 is the closest scanner field; the difference is noise at a
+    swing horizon). Unknown tickers are absent; unknown fields are None.
+    """
+    wanted = sorted({t.strip().upper() for t in tickers if t and t.strip()})
+    if not wanted:
+        return {}
+    payload = {
+        "filter": [
+            {"left": "name", "operation": "in_range", "right": wanted},
+            {"left": "exchange", "operation": "in_range", "right": US_EXCHANGES},
+        ],
+        "columns": ["name", "close", "EMA20", "SMA50"],
+        "range": [0, max(50, 4 * len(wanted))],
+    }
+    response = _http_post_json(SCAN_URL, payload, timeout)
+    out: dict[str, dict] = {}
+    for row in response.get("data") or []:
+        values = row.get("d") or []
+        if len(values) < 2 or values[0] not in set(wanted) or values[0] in out:
+            continue
+        if values[1] is None:
+            continue
+        out[values[0]] = {
+            "close": float(values[1]),
+            "ema20": float(values[2]) if len(values) > 2 and values[2] is not None else None,
+            "sma50": float(values[3]) if len(values) > 3 and values[3] is not None else None,
+        }
+    return out
+
+
 def _earnings_date_from_ts(ts) -> str | None:
     """Scanner earnings timestamp -> 'YYYY-MM-DD' (US-Eastern), None if unset."""
     if not ts:

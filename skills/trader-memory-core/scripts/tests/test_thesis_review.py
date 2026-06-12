@@ -97,6 +97,43 @@ def test_compute_mae_mfe_with_mock_adapter(tmp_path: Path):
     assert result["mae_mfe_source"] == "fmp_eod"
 
 
+def test_compute_mae_mfe_uses_intraday_extremes(tmp_path: Path):
+    """High/low rows widen the excursions vs close-only data."""
+    state_dir = tmp_path / "theses"
+    tid = _create_closed_thesis(state_dir, entry_price=100.0, exit_price=110.0)
+    thesis = thesis_store.get(state_dir, tid)
+
+    adapter = MockPriceAdapter(
+        [
+            {"date": "2026-03-01", "close": 100.0, "high": 101.0, "low": 99.0},
+            {"date": "2026-03-05", "close": 96.0, "high": 97.0, "low": 92.0},  # low wick
+            {"date": "2026-03-15", "close": 112.0, "high": 118.0, "low": 110.0},  # high wick
+        ]
+    )
+    result = thesis_review.compute_mae_mfe(thesis, adapter)
+    assert result["mae_pct"] == pytest.approx(-8.0)  # low 92, not close 96
+    assert result["mfe_pct"] == pytest.approx(18.0)  # high 118, not close 112
+
+
+def test_compute_mae_mfe_short_side_swaps_excursions(tmp_path: Path):
+    """For a SHORT the adverse excursion is the squeeze UP (highest high)."""
+    state_dir = tmp_path / "theses"
+    tid = _create_active_thesis(state_dir, 100.0)
+    thesis_store.update(state_dir, tid, {"side": "short"})
+    thesis_store.close(state_dir, tid, "target_hit", 90.0, "2026-04-01T10:00:00+00:00")
+    thesis = thesis_store.get(state_dir, tid)
+
+    adapter = MockPriceAdapter(
+        [
+            {"date": "2026-03-01", "close": 100.0, "high": 106.0, "low": 99.0},
+            {"date": "2026-03-15", "close": 91.0, "high": 93.0, "low": 88.0},
+        ]
+    )
+    result = thesis_review.compute_mae_mfe(thesis, adapter)
+    assert result["mae_pct"] == pytest.approx(-6.0)  # squeeze to 106
+    assert result["mfe_pct"] == pytest.approx(12.0)  # low 88
+
+
 def test_compute_mae_mfe_no_adapter_returns_nulls(tmp_path: Path):
     """compute_mae_mfe: adapter=None → null values, no error."""
     state_dir = tmp_path / "theses"

@@ -62,13 +62,31 @@ TELEGRAM_SCRIPT = PROJECT_ROOT / "skills" / "send-telegram" / "scripts" / "send_
 # Resolved below, after the schedule module (single source of truth for the
 # $TRADING_DATE_DIR layout) is imported.
 
-PREMARKET_START = dt.time(15, 0)
-PREMARKET_END = dt.time(21, 0)
-INTRADAY_START = dt.time(15, 30)
-INTRADAY_END = dt.time(22, 0)
-EVENING_START = dt.time(22, 15)
+# US-session windows in US-Eastern wall time, converted to local per date (see
+# _windows_local) — fixed CET constants drifted an hour during the 2-3 weeks a
+# year when the US is already on DST and the EU is not, and ignored half days.
+PREMARKET_START_ET = dt.time(9, 0)
+PREMARKET_END_ET = dt.time(15, 0)
+INTRADAY_START_ET = dt.time(9, 30)
+EVENING_DELAY_MIN = 15  # evening prep starts this many minutes after the close
+# Weekend blocks follow the trader's local clock, not the US session.
 MONTHLY_START = dt.time(11, 0)
 WEEKLY_START = dt.time(12, 0)
+
+
+def _windows_local(d: dt.date) -> dict:
+    """Per-date local wall-clock window boundaries for the US session."""
+    close_et = schedule.us_session_close_et(d)
+    evening_et = (
+        dt.datetime.combine(d, close_et) + dt.timedelta(minutes=EVENING_DELAY_MIN)
+    ).time()
+    return {
+        "premarket_start": schedule.et_to_local(d, PREMARKET_START_ET),
+        "premarket_end": schedule.et_to_local(d, PREMARKET_END_ET),
+        "intraday_start": schedule.et_to_local(d, INTRADAY_START_ET),
+        "intraday_end": schedule.et_to_local(d, close_et),
+        "evening_start": schedule.et_to_local(d, evening_et),
+    }
 
 MAX_ATTEMPTS = 2
 # The intraday monitor is repeatable: re-run no sooner than this many minutes
@@ -166,14 +184,20 @@ def save_state(path: Path, state: dict) -> None:
         raise
 
 
+def _prune_history(records: dict, keep: int) -> dict:
+    """Keep only the newest ``keep`` keys (ISO keys sort chronologically)."""
+    return {k: records[k] for k in sorted(records)[-keep:]}
+
+
 def rollover_state(state: dict, today: dt.date) -> dict:
     """New day -> reset per-day slot/intraday records; keep monthly, weekly
-    (keyed by date) and the last gate decision."""
+    (keyed by date, pruned so the state file does not grow forever) and the
+    last gate decision."""
     if state.get("date") == today.isoformat():
         return state
     fresh = default_state(today.isoformat())
-    fresh["monthly"] = state.get("monthly", {})
-    fresh["weekly"] = state.get("weekly", {})
+    fresh["monthly"] = _prune_history(state.get("monthly", {}), 12)
+    fresh["weekly"] = _prune_history(state.get("weekly", {}), 8)
     fresh["last_gate_decision"] = state.get("last_gate_decision")
     return fresh
 
@@ -224,8 +248,10 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
     if not schedule.is_us_trading_day(d):
         return "none", "не торговый день в США (выходной/праздник) — шагов нет"
 
-    # Evening prep: 22:15 — end of day.
-    if t >= EVENING_START:
+    w = _windows_local(d)
+
+    # Evening prep: from EVENING_DELAY_MIN after the session close (half-day aware).
+    if t >= w["evening_start"]:
         record = _slot_record(state, "evening-prep")
         if _is_done(record):
             return "none", "вечерний прогон (evening-prep) уже выполнен сегодня"
@@ -233,15 +259,15 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
             return "none", "evening-prep: попытки исчерпаны — нужен ручной разбор"
         return "evening-prep", "после закрытия США: полный режим + скрин на завтра"
 
-    # Premarket: 15:00 — 21:00; has priority while it is still pending.
-    if PREMARKET_START <= t < PREMARKET_END:
+    # Premarket: 09:00 — 15:00 ET; has priority while it is still pending.
+    if w["premarket_start"] <= t < w["premarket_end"]:
         record = _slot_record(state, "premarket")
         if not _is_done(record) and not _is_exhausted(record):
             return "premarket", "премаркет США: быстрая проверка режима + напоминание про ордера"
 
-    # Intraday signal monitor: 15:30 — 22:00, repeatable every
+    # Intraday signal monitor: the US session, repeatable every
     # INTRADAY_INTERVAL_MIN minutes (premarket already handled above).
-    if INTRADAY_START <= t < INTRADAY_END:
+    if w["intraday_start"] <= t < w["intraday_end"]:
         last = (state.get("intraday") or {}).get("last_at")
         if last:
             try:
@@ -253,11 +279,11 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
                 return "none", f"intraday: следующий чек через ~{wait} мин"
         return "intraday", "сессия США: мониторинг сигналов (watchlist + открытые позиции)"
 
-    if t < PREMARKET_START:
-        return "none", f"до премаркета шагов нет (следующий шаг в {PREMARKET_START:%H:%M} CET)"
-    if t < INTRADAY_START:
-        return "none", f"premarket обработан; мониторинг сессии начнётся в {INTRADAY_START:%H:%M}"
-    return "none", f"интрадей-окно закрыто (вечерний прогон в {EVENING_START:%H:%M} CET)"
+    if t < w["premarket_start"]:
+        return "none", f"до премаркета шагов нет (следующий шаг в {w['premarket_start']:%H:%M})"
+    if t < w["intraday_start"]:
+        return "none", f"premarket обработан; мониторинг сессии начнётся в {w['intraday_start']:%H:%M}"
+    return "none", f"интрадей-окно закрыто (вечерний прогон в {w['evening_start']:%H:%M})"
 
 
 def detect_gate_change(state: dict, decision: str) -> tuple[str, str] | None:
@@ -533,16 +559,22 @@ def main(argv: list[str] | None = None) -> int:
             save_state(STATE_FILE, state)
 
             if action in ("premarket", "evening-prep"):
-                decision = str(read_gate_decision(date_str).get("decision", "restrict"))
-                change = detect_gate_change(state, decision)
-                state["last_gate_decision"] = decision
-                save_state(STATE_FILE, state)
-                if change:
-                    tg(
-                        f"⚠️ Autopilot · {date_str}\n"
-                        f"Гейт экспозиции изменился: {change[0]} → {change[1]}.\n"
-                        f"Проверь открытые позиции и план на сессию."
-                    )
+                gate_info = read_gate_decision(date_str)
+                if gate_info.get("degraded"):
+                    # A missing/unreadable gate fail-safes to restrict — that is
+                    # noise, not a real flip; keep the last KNOWN decision.
+                    run_log.write("gate degraded/fail-safe — flip detection skipped")
+                else:
+                    decision = str(gate_info.get("decision", "restrict"))
+                    change = detect_gate_change(state, decision)
+                    state["last_gate_decision"] = decision
+                    save_state(STATE_FILE, state)
+                    if change:
+                        tg(
+                            f"⚠️ Autopilot · {date_str}\n"
+                            f"Гейт экспозиции изменился: {change[0]} → {change[1]}.\n"
+                            f"Проверь открытые позиции и план на сессию."
+                        )
 
             if rc != 0:
                 exhausted = record.get("attempts", 0) >= MAX_ATTEMPTS

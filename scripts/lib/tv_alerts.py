@@ -236,24 +236,27 @@ def sync_watchlist_alerts(
         tmp_dir.mkdir(parents=True, exist_ok=True)
         plan_path = tmp_dir / f"watchlist_alert_plan_{int(time.time())}.json"
         plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
-        _accumulate(
-            summary,
-            _run_node(
-                "delete_alerts.mjs",
-                ["--keep-from-plan", "--message-contains", WL_TAG, "--file", str(plan_path)],
-                project_root=project_root,
-                timeout=timeout,
-            ),
-        )
-        _accumulate(
-            summary,
-            _run_node(
-                "create_alerts.mjs",
-                ["--file", str(plan_path)],
-                project_root=project_root,
-                timeout=timeout,
-            ),
-        )
+        try:
+            _accumulate(
+                summary,
+                _run_node(
+                    "delete_alerts.mjs",
+                    ["--keep-from-plan", "--message-contains", WL_TAG, "--file", str(plan_path)],
+                    project_root=project_root,
+                    timeout=timeout,
+                ),
+            )
+            _accumulate(
+                summary,
+                _run_node(
+                    "create_alerts.mjs",
+                    ["--file", str(plan_path)],
+                    project_root=project_root,
+                    timeout=timeout,
+                ),
+            )
+        finally:
+            plan_path.unlink(missing_ok=True)  # tmp/ plans must not accumulate
 
     if summary["errors"]:
         # A failed delete must be retried on the next sync, not forgotten:
