@@ -87,6 +87,19 @@
 
 ---
 
+## Premarket Context (live data only — omit in image-only analysis)
+
+*Include this section only when premarket / extended-hours data was read from a live TradingView chart. If unavailable, omit or note "premarket data not available."*
+
+- **Premarket last:** $XX.XX  |  **Prior regular close:** $XX.XX  |  **Gap:** [+/-X.X%]
+- **Premarket high / low:** $XX.XX / $XX.XX
+- **Premarket volume:** [thin / normal / unusually high]
+- **Level interaction:** [prior close / MA / swing / base pivot being tested]
+- **Gap classification:** [small / moderate / large]
+- **Near-term read:** [gap-and-go continuation vs gap-fill reversion, with the premarket high/low as the trigger/invalidation reference]
+
+---
+
 ## 7. Current Market Assessment
 
 ### Overall Structure

@@ -280,3 +280,31 @@ For each chart, systematically evaluate:
 - **Disregarding Timeframe**: Weekly chart may differ from daily
 - **Neglecting Context**: Each chart in isolation, but overall market matters
 - **Being Too Certain**: Markets are probabilistic, not deterministic
+
+## 8. Premarket / Extended-Hours Analysis (live data only)
+
+Applies only when analyzing a **live TradingView chart** (e.g. via `ticker-analysis`) for a US equity during the premarket window. Premarket bars are visible only when the chart's extended-hours session is enabled and the timeframe is intraday; otherwise this section is skipped and the report notes that premarket data was unavailable.
+
+### When and How
+- Relevant before the US cash open (premarket 04:00–09:30 ET); most informative 08:00–09:30 ET.
+- Obtain by switching to an intraday timeframe (15m, fallback 5m) and reading OHLCV/quote; the premarket session is shaded on the chart. Restore the prior timeframe afterwards.
+
+### What to Read
+- **Opening gap** = premarket last vs the prior regular-session close (express as %).
+- **Premarket high / low** — the session's intraday S/R and the first levels price reacts to at the open.
+- **Premarket volume** — thin is normal; unusually high premarket volume signals conviction (often news-driven) and raises gap-and-go odds.
+- **Level interaction** — is price gapping through/into a prior close, moving average, swing high/low, or base pivot?
+
+### Gap Classification (US equities, rough buckets)
+- **Small gap (<1%)**: usually noise; weekly structure dominates.
+- **Moderate gap (1–3%)**: meaningful for timing; watch the premarket high/low for direction at the open.
+- **Large gap (>3–4%)**: regime/event move (often news); expect elevated volatility and widen the stop.
+
+### Gap-and-Go vs Gap-Fill
+- **Gap-and-go (continuation)** is favored when the gap aligns with the weekly trend, premarket holds above (long) / below (short) the prior close on rising premarket volume, and price clears the premarket high/low.
+- **Gap-fill (reversion)** is favored when the gap is counter-trend or into strong resistance/support, premarket volume is thin, and price stalls at the premarket extreme.
+
+### Weighting Discipline
+- Premarket **does not override** the weekly structure — it refines the **near-term** scenario, entry trigger, and invalidation only.
+- Premarket liquidity is thin; prints and levels can reverse sharply at the 09:30 ET cash open. Treat premarket levels as **provisional** and confirm in the first 15–30 minutes of regular trading.
+- For 24h instruments (crypto/forex) there is no distinct premarket session — use the standard intraday read instead.

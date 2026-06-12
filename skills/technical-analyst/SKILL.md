@@ -1,6 +1,6 @@
 ---
 name: technical-analyst
-description: This skill should be used when analyzing weekly price charts for stocks, stock indices, cryptocurrencies, or forex pairs. Use this skill when the user provides chart images and requests technical analysis, trend identification, support/resistance levels, scenario planning, or probability assessments based purely on chart data without consideration of news or fundamental factors.
+description: This skill should be used when analyzing weekly price charts for stocks, stock indices, cryptocurrencies, or forex pairs. Use this skill when the user provides chart images and requests technical analysis, trend identification, support/resistance levels, scenario planning, or probability assessments based purely on chart data without consideration of news or fundamental factors. Works from user-provided chart images, or from a live TradingView chart when invoked with the TradingView MCP — in the live case it also reads premarket / extended-hours data when available and folds the opening gap into the near-term scenario.
 ---
 
 # Technical Analyst
@@ -19,8 +19,9 @@ This skill enables comprehensive technical analysis of weekly price charts. Anal
 
 ## Prerequisites
 
-- **Chart Images**: User must provide weekly timeframe chart images for analysis
-- **No API Keys Required**: This skill analyzes user-provided images; no external data fetches
+- **Chart Images** (image mode): User provides weekly timeframe chart images for analysis
+- **Live TradingView chart** (optional): when run via `ticker-analysis` with the TradingView MCP (`mcp__tradingview__*`, TradingView Desktop on CDP `:9222`), the skill reads the live chart directly and, **when available, premarket / extended-hours data** (see Step 3.0)
+- **No API Keys Required**: image mode analyzes user-provided images; live mode uses the local TradingView Desktop session — no external paid data fetches
 
 ## Output
 
@@ -68,6 +69,23 @@ This reference contains detailed guidance on:
 
 For each chart image, conduct a systematic analysis following this sequence:
 
+#### 3.0 Premarket / Extended-Hours Context (live TradingView chart only — skip in image mode)
+
+When a live TradingView chart is reachable via the TradingView MCP (`mcp__tradingview__*` — e.g. running under `ticker-analysis`, or invoked directly with TradingView Desktop on CDP `:9222`) and the instrument is a US equity, check for premarket / extended-hours data **before** finalizing the near-term view. Premarket bars exist only when the chart's extended-hours session is enabled and the timeframe is intraday.
+
+1. Read `chart_get_state` and note the current timeframe (to restore it afterwards).
+2. Switch to an intraday timeframe to surface the premarket session: `chart_set_timeframe` → `"15"` (fallback `"5"`).
+3. Read the recent intraday series: `data_get_ohlcv` (`count: 48`, full bars) and `quote_get` (latest price; the chart header `header_price` reflects the live premarket print). Optionally `capture_screenshot` (`region: "chart"`) — TradingView shades the premarket session, so the screenshot confirms it visually.
+4. **Detect availability.** Premarket data is available only if the latest bars carry timestamps **after** the prior regular-session close but **before** today's regular open (09:30 ET for US equities) — i.e. extended-hours bars are present. If the series jumps straight from the prior close to the regular open (extended hours off), or it is not a US-equity premarket window, **premarket data is not available** — record that and continue with the standard analysis.
+5. When available, extract:
+   - **Premarket last** and **gap %** vs the prior regular-session close: `gap% = (premarket last − prior close) / prior close`.
+   - **Premarket high / low** — the session's intraday support/resistance.
+   - **Premarket volume** — thin (normal) vs unusually active (conviction / news-driven).
+   - **Level interaction** — which daily/weekly level price is testing (prior close, MA, swing high/low, base pivot).
+6. **Restore** the original timeframe (`chart_set_timeframe` back to `"W"`/`"D"`) before generating the report.
+
+Apply the read per the framework's **Premarket / Extended-Hours Analysis** section. The weekly structure and thesis take precedence — premarket only sharpens the near-term scenario, the entry trigger, and the invalidation. Treat premarket levels as provisional (low liquidity; they can reverse at the cash open).
+
 #### 3.1 Trend Analysis
 - Identify trend direction (uptrend, downtrend, sideways)
 - Assess trend strength (strong, moderate, weak)
@@ -105,10 +123,13 @@ For each chart image, conduct a systematic analysis following this sequence:
 - Identify the most significant factors influencing the chart
 - Note any conflicting signals or ambiguity
 - Establish key levels that will determine future direction
+- If premarket data was read (3.0), fold the opening gap and premarket high/low into the **near-term** picture (gap-and-go vs gap-fill) without overriding the weekly structure
 
 ### Step 4: Develop Probabilistic Scenarios
 
 For each analyzed chart, create 2-4 distinct scenarios for future price movement:
+
+When premarket data is available (Step 3.0), bias the **near-term** scenario toward the premarket signal — a strong premarket gap holding its direction on rising volume favors gap-and-go continuation; a thin, counter-trend gap into resistance/support favors gap-fill reversion — and set the immediate entry trigger / invalidation relative to the premarket high/low. Premarket does not change the weekly-structure scenarios, only their short-term timing and trigger levels.
 
 #### Scenario Structure
 
