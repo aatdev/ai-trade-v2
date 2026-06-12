@@ -20,13 +20,30 @@ function AnalysisFlag({ ticker, entry }: { ticker: string; entry?: AnalysisIndex
   );
 }
 
+function SourcePill({ c }: { c: WatchlistCandidate }) {
+  const src = c.source ?? 'screener';
+  const isAnalysis = src === 'analysis';
+  const o = c.screener_origin;
+  const title =
+    isAnalysis && o
+      ? `from analysis — screener was ${o.side} (pivot ${o.pivot ?? '—'} / stop ${o.stop ?? '—'} / target ${o.target ?? '—'})`
+      : `source: ${src}`;
+  return (
+    <span className="pill" style={isAnalysis ? { color: 'var(--accent)' } : undefined} title={title}>
+      {src}
+    </span>
+  );
+}
+
 function CandidateTable({
   rows,
   index,
+  date,
   withAnalyze,
 }: {
   rows: WatchlistCandidate[];
   index: Index;
+  date: string | null;
   withAnalyze: boolean;
 }) {
   return (
@@ -59,7 +76,7 @@ function CandidateTable({
                 <SideBadge side={c.side} />
               </td>
               <td style={{ textAlign: 'left' }} className="muted">
-                {c.setup ?? '—'}
+                {c.setup ?? '—'} <SourcePill c={c} />
               </td>
               <td>{fmtNum(c.pivot)}</td>
               <td>{fmtNum(c.worst_entry)}</td>
@@ -79,7 +96,7 @@ function CandidateTable({
               </td>
               {withAnalyze ? (
                 <td style={{ textAlign: 'left' }}>
-                  <AnalyzeButton ticker={c.ticker.toUpperCase()} />
+                  <AnalyzeButton ticker={c.ticker.toUpperCase()} date={date} />
                 </td>
               ) : null}
             </tr>
@@ -125,11 +142,11 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
       {wl.candidates.length === 0 ? (
         <Empty>No candidates.</Empty>
       ) : (
-        <CandidateTable rows={wl.candidates} index={index} withAnalyze />
+        <CandidateTable rows={wl.candidates} index={index} date={date} withAnalyze />
       )}
       {wl.rejected_by_validation.length > 0 ? (
         <Collapsible label="Rejected by chart validation" count={wl.rejected_by_validation.length}>
-          <CandidateTable rows={wl.rejected_by_validation} index={index} withAnalyze={false} />
+          <CandidateTable rows={wl.rejected_by_validation} index={index} date={date} withAnalyze={false} />
         </Collapsible>
       ) : null}
     </Card>

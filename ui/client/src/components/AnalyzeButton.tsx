@@ -1,12 +1,124 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { JobLogLine, JobStatus } from '@shared/types';
-import { analyzeTicker, cancelJob } from '../api';
+import type { JobLogLine, JobStatus, ReconcileChange, ReconcileResult } from '@shared/types';
+import { analyzeTicker, applyReconcile, cancelJob, fetchReconcile } from '../api';
 import { summarizeClaudeEvent } from '../lib/claudeEvents';
+import { fmtNum } from '../lib/format';
 
 type RunState = 'idle' | 'running' | JobStatus;
 
-export default function AnalyzeButton({ ticker }: { ticker: string }) {
+function changeInfo(change: ReconcileChange): { label: string; color: string } {
+  switch (change) {
+    case 'direction-flip':
+      return { label: 'Direction flip', color: 'var(--red)' };
+    case 'levels-updated':
+      return { label: 'Levels updated', color: 'var(--yellow)' };
+    case 'new':
+      return { label: 'New candidate', color: 'var(--accent)' };
+    case 'unchanged':
+      return { label: 'No change', color: 'var(--muted)' };
+    default:
+      return { label: 'No analysis signal found', color: 'var(--muted)' };
+  }
+}
+
+function ReconcileSection({
+  ticker,
+  date,
+  reconcile,
+  onApplied,
+}: {
+  ticker: string;
+  date: string | null;
+  reconcile: ReconcileResult;
+  onApplied: () => void;
+}) {
+  const [applied, setApplied] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const info = changeInfo(reconcile.change);
+  const cur = reconcile.current;
+  const prop = reconcile.proposed;
+  const canApply =
+    !applied && ['direction-flip', 'levels-updated', 'new'].includes(reconcile.change);
+
+  async function apply() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await applyReconcile(ticker, date);
+      if (res.applied) {
+        setApplied(true);
+        onApplied();
+      } else {
+        setError('Nothing to apply.');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field">
+      <strong>
+        Watchlist update <span className="badge" style={{ color: info.color }}>{info.label}</span>
+        {applied ? <span style={{ color: 'var(--green)' }}> ✓ applied</span> : null}
+      </strong>
+
+      {prop ? (
+        <table style={{ margin: '8px 0' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left' }}>Source</th>
+              <th style={{ textAlign: 'left' }}>Side</th>
+              <th>Entry/Pivot</th>
+              <th>Stop</th>
+              <th>Target</th>
+              <th>Shares</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cur ? (
+              <tr>
+                <td style={{ textAlign: 'left' }} className="muted">
+                  screener
+                </td>
+                <td style={{ textAlign: 'left' }}>{cur.side}</td>
+                <td>{fmtNum(cur.pivot)}</td>
+                <td>{fmtNum(cur.stop)}</td>
+                <td>{fmtNum(cur.target)}</td>
+                <td>{cur.shares ?? '—'}</td>
+              </tr>
+            ) : null}
+            <tr>
+              <td style={{ textAlign: 'left', color: 'var(--accent)' }}>analysis</td>
+              <td style={{ textAlign: 'left' }}>{prop.side}</td>
+              <td>{fmtNum(prop.pivot)}</td>
+              <td>{fmtNum(prop.stop)}</td>
+              <td>{fmtNum(prop.target)}</td>
+              <td>{prop.shares ?? '—'}</td>
+            </tr>
+          </tbody>
+        </table>
+      ) : (
+        <div className="muted" style={{ margin: '8px 0' }}>
+          No priority signal parsed from signals.md for {ticker}.
+        </div>
+      )}
+
+      {error ? <div className="err" style={{ marginBottom: 6 }}>{error}</div> : null}
+      {canApply ? (
+        <button className="primary" disabled={busy} onClick={() => void apply()}>
+          {busy ? 'Applying…' : 'Apply to watchlist'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export default function AnalyzeButton({ ticker, date }: { ticker: string; date: string | null }) {
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [createAlerts, setCreateAlerts] = useState(false);
@@ -17,6 +129,7 @@ export default function AnalyzeButton({ ticker }: { ticker: string }) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [reconcile, setReconcile] = useState<ReconcileResult | null>(null);
   const esRef = useRef<EventSource | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -34,6 +147,7 @@ export default function AnalyzeButton({ ticker }: { ticker: string }) {
     setState('running');
     setLines([]);
     setError(null);
+    setReconcile(null);
     setStartedAt(Date.now());
     setNow(Date.now());
     try {
@@ -59,6 +173,12 @@ export default function AnalyzeButton({ ticker }: { ticker: string }) {
         esRef.current = null;
         void qc.invalidateQueries({ queryKey: ['analysisIndex'] });
         void qc.invalidateQueries({ queryKey: ['tickerDates', ticker] });
+        if (d.status === 'done') {
+          // Pull the fresh analysis signal and compare it to the watchlist.
+          fetchReconcile(ticker, date)
+            .then(setReconcile)
+            .catch(() => undefined);
+        }
       });
       es.onerror = () => es.close();
     } catch (e) {
@@ -166,6 +286,18 @@ export default function AnalyzeButton({ ticker }: { ticker: string }) {
               <pre className="joblog" ref={logRef}>
                 {lines.length ? lines.join('\n') : '(no output yet)'}
               </pre>
+            ) : null}
+
+            {reconcile ? (
+              <ReconcileSection
+                ticker={ticker}
+                date={date}
+                reconcile={reconcile}
+                onApplied={() => {
+                  void qc.invalidateQueries({ queryKey: ['watchlist'] });
+                  void qc.invalidateQueries({ queryKey: ['analysisIndex'] });
+                }}
+              />
             ) : null}
 
             <div className="btn-row" style={{ justifyContent: 'flex-end' }}>

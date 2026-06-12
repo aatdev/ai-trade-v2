@@ -56,6 +56,19 @@ export interface ExposureResponse {
 
 /* ---------------- Watchlist ---------------- */
 
+export type CandidateSource = 'screener' | 'analysis' | string;
+
+/** Snapshot of the original screener-derived values, kept after a reconcile. */
+export interface ScreenerOrigin {
+  side: Side;
+  pivot: number | null;
+  stop: number | null;
+  target: number | null;
+  shares: number | null;
+  score: number | null;
+  source_plan: string | null;
+}
+
 export interface WatchlistCandidate {
   ticker: string;
   side: Side;
@@ -70,6 +83,12 @@ export interface WatchlistCandidate {
   plan_type: string | null;
   validation_note: string | null;
   validated: boolean | null;
+  /** Where the current levels came from. Absent ⇒ treat as 'screener'. */
+  source?: CandidateSource;
+  t1?: number | null;
+  t2?: number | null;
+  t3?: number | null;
+  screener_origin?: ScreenerOrigin | null;
 }
 
 export interface Watchlist {
@@ -80,6 +99,42 @@ export interface Watchlist {
   rejected_by_validation: WatchlistCandidate[];
   notes: string | null;
   source_plan: string | null;
+}
+
+/** A trade signal parsed from an analysis block in signals.md. */
+export interface AnalysisSignal {
+  ticker: string;
+  date: string;
+  direction: 'long' | 'short';
+  trigger: number;
+  stop: number;
+  t1: number;
+  t2: number | null;
+  t3: number | null;
+  entryLow: number | null;
+  entryHigh: number | null;
+}
+
+export type ReconcileChange =
+  | 'no-analysis'
+  | 'new'
+  | 'unchanged'
+  | 'levels-updated'
+  | 'direction-flip';
+
+/** Comparison of the screener watchlist candidate vs the analysis signal. */
+export interface ReconcileResult {
+  ticker: string;
+  change: ReconcileChange;
+  analysis: AnalysisSignal | null;
+  current: WatchlistCandidate | null;
+  proposed: WatchlistCandidate | null;
+}
+
+export interface ApplyReconcileResponse {
+  result: ReconcileResult;
+  applied: boolean;
+  watchlist: Watchlist | null;
 }
 
 /* ---------------- Portfolio heat / open positions ---------------- */

@@ -55,6 +55,10 @@ Read (each accepts `?date=YYYY-MM-DD`, defaults to the latest available):
 `/api/autopilot`, `/api/analysis/tickers` (which tickers already have saved
 analysis), `/api/ticker/:symbol[/:date[/chart/:tf]]`.
 
+Watchlist reconcile: `GET /api/watchlist/reconcile/:ticker` previews how the
+analysis signal would change the candidate; `POST` applies it to the watchlist
+file in place.
+
 Mutation: `DELETE /api/signals/:ticker/:date` removes one signal block from
 `analysis/signals.md` in place (same split/rejoin semantics as
 `skills/signals-alerts/scripts/prune_signals.mjs`; the preamble and other blocks
@@ -82,7 +86,19 @@ modal with two options before running:
 
 Progress then streams live (each tool/skill step is summarized from the claude
 stream-json events) inline in the row and in the modal; a running analysis can
-be cancelled. On completion the analysis
+be cancelled.
+
+**Reconcile with the watchlist.** When the analysis finishes, the modal compares
+the fresh analysis signal (parsed from the priority scenario in `signals.md`)
+against the screener-derived watchlist candidate and classifies the change:
+`direction-flip` (e.g. short → long), `levels-updated`, `new`, or `unchanged`.
+**Apply to watchlist** writes the merged candidate in place. Decision rule: the
+analysis signal is authoritative — `side` ← direction, `pivot` ← Trigger,
+`stop` ← Stop, `target` ← T1 — shares are re-derived as
+`risk_dollars / |pivot − stop|` to keep the same dollar-risk, the original
+screener values are preserved under `screener_origin`, and the candidate is
+tagged `source: "analysis"`. The watchlist table shows a `screener`/`analysis`
+source pill per candidate. On completion the analysis
 flag and the ticker page refresh automatically. Output lands in
 `trading-data/analysis/<TICKER>/<date>/` (four markdown docs + daily/weekly
 screenshots); no TradingView alerts are created.

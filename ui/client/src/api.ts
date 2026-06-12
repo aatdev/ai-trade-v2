@@ -1,9 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import type {
   AnalysisIndexResponse,
+  ApplyReconcileResponse,
   AutopilotResponse,
   DatesResponse,
   DeleteSignalResponse,
+  ReconcileResult,
   ExposureResponse,
   JobDetail,
   JobSummary,
@@ -146,6 +148,15 @@ export const analyzeTicker = (
 
 export const cancelJob = (id: string) =>
   postJSON<{ ok: boolean }>(`/api/actions/jobs/${id}/cancel`, {});
+
+export const fetchReconcile = (ticker: string, date: string | null) =>
+  getJSON<ReconcileResult>(`/api/watchlist/reconcile/${encodeURIComponent(ticker)}${dq(date)}`);
+
+export const applyReconcile = (ticker: string, date: string | null) =>
+  postJSON<ApplyReconcileResponse>(
+    `/api/watchlist/reconcile/${encodeURIComponent(ticker)}${dq(date)}`,
+    {},
+  );
 
 export const deleteAlerts = (tickers: string[]) =>
   postJSON<StartJobResponse>('/api/actions/delete-alerts', { tickers });

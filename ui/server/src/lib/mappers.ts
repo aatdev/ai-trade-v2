@@ -99,7 +99,7 @@ export function getPosture(dataDir: string, date: string | null): Sourced<Exposu
 /* ---------------- watchlist ---------------- */
 
 function mapWatchlistCandidate(c: Record<string, unknown>): WatchlistCandidate {
-  return {
+  const out: WatchlistCandidate = {
     ticker: String(c.ticker ?? ''),
     side: strOrNull(c.side) ?? 'long',
     setup: strOrNull(c.setup),
@@ -114,6 +114,15 @@ function mapWatchlistCandidate(c: Record<string, unknown>): WatchlistCandidate {
     validation_note: strOrNull(c.validation_note),
     validated: typeof c.validated === 'boolean' ? c.validated : null,
   };
+  // Preserve reconcile-added fields when present (keeps screener candidates clean).
+  if (typeof c.source === 'string') out.source = c.source;
+  if (c.t1 !== undefined) out.t1 = numOrNull(c.t1);
+  if (c.t2 !== undefined) out.t2 = numOrNull(c.t2);
+  if (c.t3 !== undefined) out.t3 = numOrNull(c.t3);
+  if (c.screener_origin && typeof c.screener_origin === 'object' && !Array.isArray(c.screener_origin)) {
+    out.screener_origin = c.screener_origin as WatchlistCandidate['screener_origin'];
+  }
+  return out;
 }
 
 export function getWatchlist(dataDir: string, date: string | null): Sourced<Watchlist> {
@@ -155,6 +164,15 @@ export function getWatchlist(dataDir: string, date: string | null): Sourced<Watc
     source_plan: strOrNull(raw.source_plan),
   };
   return sourced(file, watchlist, date);
+}
+
+/** Read account sizing from trading_profile.json (repo root or data dir). */
+export function readProfile(dataDir: string): { account_size: number; risk_pct: number } | null {
+  const raw =
+    asRecord(readJson(path.join(dataDir, '..', 'trading_profile.json'))) ??
+    asRecord(readJson(path.join(dataDir, 'trading_profile.json')));
+  if (Object.keys(raw).length === 0) return null;
+  return { account_size: numOrNull(raw.account_size) ?? 0, risk_pct: numOrNull(raw.risk_pct) ?? 0 };
 }
 
 /* ---------------- portfolio heat ---------------- */

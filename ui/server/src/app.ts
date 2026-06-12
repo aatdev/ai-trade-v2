@@ -5,6 +5,7 @@ import { JobManager } from './lib/jobs';
 import { actionsRouter } from './routes/actions';
 import { stateRouter } from './routes/state';
 import { tickerRouter } from './routes/ticker';
+import { watchlistRouter } from './routes/watchlist';
 
 export interface AppOptions {
   dataDir: string;
@@ -24,6 +25,7 @@ export function createApp(opts: AppOptions): Express {
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
   app.use('/api', stateRouter(opts.dataDir));
   app.use('/api', tickerRouter(opts.dataDir));
+  app.use('/api', watchlistRouter(opts.dataDir));
   app.use('/api', actionsRouter(opts.projectRoot, jobs));
 
   // Production: serve the built SPA and fall back to index.html for routes.
