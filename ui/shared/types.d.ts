@@ -342,6 +342,7 @@ export interface TickerAnalysisResponse {
 export interface AnalysisIndexEntry {
   latest: string | null;
   count: number;
+  dates: string[]; // all analysis dates, ascending (YYYY-MM-DD)
 }
 
 export interface AnalysisIndexResponse {

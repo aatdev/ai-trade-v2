@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router-dom';
 import type { SignalBlock } from '@shared/types';
 import { deleteSignal, useSignals, type Refetch } from '../api';
-import { Card, Empty, ErrorNote, Loading } from './ui';
+import { Card, Empty, ErrorNote, Loading, Modal } from './ui';
 
 const REPORT_LINK_RE = /\.?\/?([A-Za-z0-9.\-]+)\/(\d{4}-\d{2}-\d{2})\//;
 
@@ -148,21 +148,24 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
       </div>
 
       {active ? (
-        <div className="modal-backdrop" onClick={() => setActive(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="md">
-              <Markdown remarkPlugins={[remarkGfm]} components={{ a: MdLink }}>
-                {active.markdown}
-              </Markdown>
-            </div>
-            <div className="btn-row" style={{ justifyContent: 'flex-end' }}>
+        <Modal
+          title={`${active.ticker} — ${active.date}`}
+          onClose={() => setActive(null)}
+          footer={
+            <>
               <button className="danger" disabled={busy} onClick={() => void onDelete(active)}>
                 🗑 Delete signal
               </button>
               <button onClick={() => setActive(null)}>Close</button>
-            </div>
+            </>
+          }
+        >
+          <div className="md">
+            <Markdown remarkPlugins={[remarkGfm]} components={{ a: MdLink }}>
+              {active.markdown}
+            </Markdown>
           </div>
-        </div>
+        </Modal>
       ) : null}
     </Card>
   );

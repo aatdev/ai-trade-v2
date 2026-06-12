@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { chartUrl, useTickerAnalysis, useTickerDates } from '../api';
+import ThemeToggle from '../components/ThemeToggle';
 import { Card, Empty, Loading } from '../components/ui';
 
 export default function TickerDetail() {
@@ -23,6 +24,7 @@ export default function TickerDetail() {
         <h1>{symbol}</h1>
         <span className="meta">{date ?? '—'}</span>
         <span style={{ flex: 1 }} />
+        <ThemeToggle />
         <Link className="back-link" to="/">
           ← Dashboard
         </Link>

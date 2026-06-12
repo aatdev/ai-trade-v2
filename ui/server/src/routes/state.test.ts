@@ -84,7 +84,11 @@ describe('GET /api/analysis/tickers', () => {
   it('lists tickers that have saved analysis with their latest date', async () => {
     const res = await request(app).get('/api/analysis/tickers');
     expect(res.status).toBe(200);
-    expect(res.body.tickers.AAPL).toEqual({ latest: '2026-06-11', count: 1 });
+    expect(res.body.tickers.AAPL).toEqual({
+      latest: '2026-06-11',
+      count: 1,
+      dates: ['2026-06-11'],
+    });
     // signals.md is a file, not a ticker dir — must not appear
     expect(Object.keys(res.body.tickers)).not.toContain('signals');
   });

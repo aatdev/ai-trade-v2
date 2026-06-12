@@ -1,6 +1,48 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { gradeColor, scoreColor, sideColor, zoneColor } from '../lib/zones';
 import { fmtScore } from '../lib/format';
+
+/** Modal dialog. Closes on Escape and on backdrop click. */
+export function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+}: {
+  title?: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        {title != null ? (
+          <div className="modal-head">
+            <h3>{title}</h3>
+            <button className="modal-x" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          </div>
+        ) : null}
+        {children}
+        {footer != null ? (
+          <div className="btn-row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 export function Card({
   title,

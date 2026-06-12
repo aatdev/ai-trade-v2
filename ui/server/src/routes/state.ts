@@ -115,7 +115,7 @@ export function stateRouter(dataDir: string): Router {
 
   r.get('/analysis/tickers', (_req, res) => {
     const dir = path.join(dataDir, 'analysis');
-    const tickers: Record<string, { latest: string | null; count: number }> = {};
+    const tickers: Record<string, { latest: string | null; count: number; dates: string[] }> = {};
     for (const name of listDir(dir)) {
       if (!TICKER_RE.test(name)) continue;
       const sub = path.join(dir, name);
@@ -128,7 +128,11 @@ export function stateRouter(dataDir: string): Router {
       }
       if (dates.length > 0) {
         dates.sort();
-        tickers[name.toUpperCase()] = { latest: dates[dates.length - 1], count: dates.length };
+        tickers[name.toUpperCase()] = {
+          latest: dates[dates.length - 1],
+          count: dates.length,
+          dates,
+        };
       }
     }
     res.json({ tickers });
