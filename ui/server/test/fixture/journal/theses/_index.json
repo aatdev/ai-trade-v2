@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "theses": {
+    "th_aapl_pvt_20260602_2c8b": {
+      "ticker": "AAPL",
+      "status": "IDEA",
+      "thesis_type": "pivot_breakout",
+      "created_at": "2026-06-02",
+      "updated_at": "2026-06-02",
+      "next_review_date": "2020-01-01",
+      "review_status": "OK"
+    },
+    "th_googl_pvt_20260602_8f12": {
+      "ticker": "GOOGL",
+      "status": "OPEN",
+      "thesis_type": "pivot_breakout",
+      "created_at": "2026-06-02",
+      "updated_at": "2026-06-02",
+      "next_review_date": "2999-01-01",
+      "review_status": "OK"
+    }
+  }
+}

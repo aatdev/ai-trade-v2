@@ -1,0 +1,13 @@
+{
+  "metadata": { "generated_at": "2026-06-11 13:30:00" },
+  "composite": {
+    "composite_score": 46.2,
+    "zone": "Neutral",
+    "zone_color": "yellow",
+    "exposure_guidance": "60-75%",
+    "component_scores": {
+      "breadth_level_trend": { "score": 57, "weight": 0.25, "label": "Current Breadth Level & Trend" },
+      "ma_crossover": { "score": 45, "weight": 0.2, "label": "8MA vs 200MA Crossover" }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+thesis_id: th_aapl_pvt_20260602_2c8b
+ticker: AAPL
+thesis_type: pivot_breakout
+setup_type: vcp_pivot_breakout
+status: IDEA
+thesis_statement: 'VCP/Minervini watchlist. Price below pivot 315.00.'
+entry:
+  target_price: 315.0
+exit:
+  stop_loss: 305.0
+monitoring:
+  next_review_date: '2026-07-02'
+  review_status: OK
+origin:
+  skill: manual
+outcome:
+  pnl_dollars: null

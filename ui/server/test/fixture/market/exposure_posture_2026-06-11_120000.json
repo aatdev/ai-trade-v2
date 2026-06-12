@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-11T20:19:33.586452+00:00",
+  "exposure_ceiling_pct": 59,
+  "bias": "NEUTRAL",
+  "participation": "NARROW",
+  "recommendation": "NEW_ENTRY_ALLOWED",
+  "confidence": "MEDIUM",
+  "composite_score": 57.0,
+  "component_scores": { "breadth_score": 46, "uptrend_score": 43, "regime_score": 80, "top_risk_score": 47 },
+  "inputs_provided": ["regime", "top_risk", "breadth", "uptrend"],
+  "inputs_missing": ["institutional", "sector", "theme", "ftd"],
+  "rationale": "Narrow participation suggests fragile market structure."
+}

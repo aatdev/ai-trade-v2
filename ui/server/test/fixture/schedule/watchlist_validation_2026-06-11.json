@@ -1,0 +1,7 @@
+{
+  "date": "2026-06-11",
+  "verdicts": [
+    { "ticker": "AOS", "verdict": "pass", "note": "Clean continuation" },
+    { "ticker": "ADSK", "verdict": "reject", "note": "Climax flush" }
+  ]
+}

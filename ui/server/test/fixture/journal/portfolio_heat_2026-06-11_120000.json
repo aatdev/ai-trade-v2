@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-11T12:00:00",
+  "account_size": 150000.0,
+  "open_risk_pct": 0.0,
+  "positions_count": 0,
+  "max_positions": 6,
+  "remaining_position_slots": 6,
+  "max_portfolio_heat_pct": 6.0,
+  "remaining_heat_pct": 6.0,
+  "remaining_heat_dollars": 9000.0,
+  "sector_exposure": {},
+  "positions": [],
+  "warnings": []
+}

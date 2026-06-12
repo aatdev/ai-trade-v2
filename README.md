@@ -73,6 +73,17 @@ This path lets you review market conditions, size trades, journal decisions, and
 - `docs/` – Documentation site content, generated skill pages, and `docs/dev/metadata-and-workflow-schema.md` (schema spec).
 - `scripts/` – Repository-level automation, including the schema validator and one-shot bootstrap helper.
 - `skillsets/` – Purpose-specific install bundles defining required / recommended / optional skills for major goals (4 core skillsets shipped: market-regime, core-portfolio, swing-opportunity, trade-memory; consumed by the Navigator).
+- `ui/` – Optional local **web dashboard** (React + TypeScript + Express) that visualizes the trading-scheduler state under `trading-data/` (exposure gate, watchlist, open positions, screeners, market regime, theses, signals) and can trigger scheduler slots / TradingView alert sync. See [`ui/README.md`](ui/README.md).
+
+## Web Dashboard (optional)
+
+If you run the trading scheduler (`scripts/run_trading_schedule.py`), the `ui/` app gives you a live, at-a-glance view of its state instead of grepping JSON:
+
+```bash
+cd ui && npm install && npm run dev   # → http://localhost:5173
+```
+
+Read-mostly and loopback-only; full details (config, API, production build) in [`ui/README.md`](ui/README.md).
 
 ## Getting Started
 ### Use with Claude Web App

@@ -222,6 +222,19 @@ Two launchd-scheduled pipelines maintain skill quality. Full architecture, desig
 
 State and logs live under `logs/` (PID lock files, state JSON/YAML, rotated logs) and `reports/skill-{improvement,generation}-log/`.
 
+### Running the Web UI (State Dashboard)
+
+`ui/` is a self-contained **React + TypeScript (Vite) + Express (TypeScript)** app — an npm-workspaces monorepo (`ui/client`, `ui/server`, type-only contract in `ui/shared/types.d.ts`) — that visualizes the state the scheduler produces under `trading-data/` (exposure gate, watchlist, open positions/heat, screeners, market regime, theses, signals feed, autopilot status) and exposes buttons to run scheduler slots and sync TradingView alerts. Full reference: [`ui/README.md`](ui/README.md).
+
+```bash
+cd ui && npm install
+npm run dev            # server :4000 + client :5173 (proxies /api); open http://localhost:5173
+npm test               # vitest (server file-resolution, route mapping, action guards)
+npm run build && npm start   # single-port prod on http://127.0.0.1:4000
+```
+
+Key conventions: the server binds to `127.0.0.1` only and resolves the data dir like the scheduler (`TRADING_DATE_DIR`, else `trading-data/`); actions are a strict whitelist (`run-slot` shells out to `scripts/run_trading_schedule.sh`, defaulting to `--dry-run`, and respects the scheduler's single-run lock — exit 75 = busy) streamed to the UI over SSE. `ui/**/dist` and `ui/.env` are gitignored; `ui/` source is committed.
+
 ## Skill Interaction Patterns
 
 - **Chart analysis skills** (sector-analyst, breadth-chart-analyst, technical-analyst): user provides chart screenshots → skill applies a framework from `references/` → structured markdown report with scenario probabilities, saved to `reports/`.

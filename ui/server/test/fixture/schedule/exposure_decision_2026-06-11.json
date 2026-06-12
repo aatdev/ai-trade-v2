@@ -1,0 +1,11 @@
+{
+  "workflow": "market-regime-daily",
+  "date": "2026-06-11",
+  "decision": "restrict",
+  "net_exposure_ceiling_pct": 59,
+  "rationale": "Breadth signals converge at Neutral with critical distribution days.",
+  "key_signals": [
+    "Market breadth 46.2/100 — Neutral",
+    "Distribution Day Count CRITICAL (score 100)"
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "workflow": "swing-opportunity-daily",
+  "date": "2026-06-11",
+  "exposure_decision": "restrict",
+  "candidates": [
+    {
+      "ticker": "ALLE",
+      "side": "short",
+      "setup": "Stage 4 (grade A)",
+      "pivot": 133.71,
+      "worst_entry": 131.04,
+      "stop": 134.3,
+      "target": 132.53,
+      "shares": 280,
+      "risk_dollars": 165.2,
+      "score": 84.2,
+      "plan_type": "stage4_breakdown",
+      "validation_note": "Intact downtrend",
+      "validated": true
+    },
+    {
+      "ticker": "AOS",
+      "side": "short",
+      "setup": "Stage 4 (grade A)",
+      "pivot": 58.66,
+      "worst_entry": 57.49,
+      "stop": 59.47,
+      "target": 57.04,
+      "shares": 639,
+      "risk_dollars": 517.59,
+      "score": 80.3,
+      "plan_type": "stage4_breakdown",
+      "validated": null
+    }
+  ],
+  "rejected_by_validation": [
+    {
+      "ticker": "ADSK",
+      "side": "short",
+      "setup": "Stage 4 (grade A)",
+      "pivot": 205.57,
+      "worst_entry": 201.46,
+      "stop": 251.16,
+      "target": 114.39,
+      "shares": 32,
+      "risk_dollars": 1458.88,
+      "score": 84.5,
+      "plan_type": "stage4_breakdown",
+      "validation_note": "Climax flush",
+      "validated": false
+    }
+  ],
+  "notes": "top-risk 52.2 / DD 6.0",
+  "source_plan": "trading-data/screeners/swing_short_screener_2026-06-11_222616.json"
+}

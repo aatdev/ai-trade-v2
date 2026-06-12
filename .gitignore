@@ -15,8 +15,14 @@ __pycache__/
 venv/
 env/
 
-# Node dependencies (vendored TradingView bridge under vendor/tradingview-mcp/)
+# Node dependencies (vendored TradingView bridge under vendor/tradingview-mcp/,
+# and the ui/ dashboard workspaces)
 node_modules/
+
+# Web UI build artifacts (source under ui/ is committed; builds are not)
+ui/client/dist/
+ui/server/dist/
+ui/.env
 
 # Tool configurations
 .idea/

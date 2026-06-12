@@ -1,0 +1,16 @@
+{
+  "meta": { "universe_size": 100, "source": "fmp", "as_of": "2026-06-11_222616" },
+  "candidates": [
+    {
+      "symbol": "ADSK",
+      "name": "Autodesk",
+      "sector": "Information Technology",
+      "composite_score": 84.5,
+      "grade": "A",
+      "components": { "trend_structure": 100.0, "relative_strength": 100.0, "liquidity": 100.0 },
+      "strongest_signal": "trend_structure",
+      "trade_levels": { "entry": 205.57, "stop": 251.16, "target_2r": 114.39 },
+      "metrics": { "price": 205.57, "ma50": 236.6, "rsi14": 29.85, "death_cross": true }
+    }
+  ]
+}

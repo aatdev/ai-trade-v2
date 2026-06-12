@@ -1,0 +1,11 @@
+{
+  "metadata": { "generated_at": "2026-06-11 12:00:00" },
+  "composite": {
+    "composite_score": 40.0,
+    "zone": "Bearish",
+    "zone_color": "orange",
+    "component_scores": {
+      "ma_crossover": { "score": 30, "weight": 0.2, "label": "8MA vs 200MA Crossover" }
+    }
+  }
+}
