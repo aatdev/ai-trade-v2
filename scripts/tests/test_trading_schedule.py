@@ -4,6 +4,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import types
 from pathlib import Path
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "run_trading_schedule.py"
@@ -95,6 +96,86 @@ def test_opportunity_prompt_references_allow_gate_and_watchlist():
     assert str(wl) in prompt
     assert "swing-opportunity-daily" in prompt
     assert "do NOT place any orders" in prompt
+
+
+def test_regime_prompt_mandates_finishing_and_gate_write():
+    gate = Path("/tmp/exposure_decision_2026-06-12.json")
+    prompt = ts.regime_prompt("2026-06-12", gate, quick=True)
+    # The hardened prompt must forbid stopping on a narration and require the file.
+    assert "MANDATORY" in prompt and "FINAL action" in prompt
+    assert "no tool call" in prompt.lower() or "tool calls" in prompt.lower()
+
+
+def test_regime_finish_prompt_targets_gate():
+    gate = Path("/tmp/exposure_decision_2026-06-12.json")
+    prompt = ts.regime_finish_prompt("2026-06-12", gate)
+    assert str(gate) in prompt
+    assert "allow" in prompt and "restrict" in prompt and "cash-priority" in prompt
+
+
+# --------------------------------------------------------------------------- #
+# Regime gate retry (headless claude can end before writing the gate)
+# --------------------------------------------------------------------------- #
+def test_run_regime_gate_retries_when_gate_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    gate = ts.decision_path("2026-06-12")
+    calls = []
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout):
+        calls.append(label)
+        # Emulate: first pass narrates and exits without the gate; retry writes it.
+        if "[gate retry]" in label:
+            gate.parent.mkdir(parents=True, exist_ok=True)
+            gate.write_text(json.dumps({"decision": "allow", "rationale": "ok"}))
+        return True
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    args = types.SimpleNamespace(dry_run=False, timeout=60)
+    ok, dec = ts.run_regime_gate(
+        "2026-06-12", gate, quick=True, label="market-regime-daily (premarket re-check)", args=args
+    )
+    assert len(calls) == 2 and "[gate retry]" in calls[1]
+    assert dec["decision"] == "allow"
+    assert not dec.get("degraded")
+
+
+def test_run_regime_gate_no_retry_when_first_pass_writes(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    gate = ts.decision_path("2026-06-12")
+    calls = []
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout):
+        calls.append(label)
+        gate.parent.mkdir(parents=True, exist_ok=True)
+        gate.write_text(json.dumps({"decision": "restrict", "rationale": "ok"}))
+        return True
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    args = types.SimpleNamespace(dry_run=False, timeout=60)
+    ok, dec = ts.run_regime_gate(
+        "2026-06-12", gate, quick=False, label="market-regime-daily (evening EOD)", args=args
+    )
+    assert len(calls) == 1
+    assert dec["decision"] == "restrict"
+
+
+def test_run_regime_gate_dry_run_single_call(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    gate = ts.decision_path("2026-06-12")
+    calls = []
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout):
+        calls.append(label)
+        return True
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    args = types.SimpleNamespace(dry_run=True, timeout=60)
+    ok, dec = ts.run_regime_gate(
+        "2026-06-12", gate, quick=True, label="market-regime-daily (premarket re-check)", args=args
+    )
+    # Dry-run never retries (no gate write expected); fail-safe restrict from read_decision.
+    assert len(calls) == 1
+    assert dec["decision"] == "restrict"
 
 
 # --------------------------------------------------------------------------- #

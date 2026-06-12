@@ -544,7 +544,17 @@ as a single JSON object:
 }}
 `decision` MUST be exactly one of allow / restrict / cash-priority -- the
 exposure-coach posture. Write the file even on partial data; choose the most
-defensive posture the evidence supports. Do NOT place any trades. Keep narration short."""
+defensive posture the evidence supports. Do NOT place any trades.
+
+EXECUTION RULES (unattended headless run -- you must finish autonomously):
+- Perform EVERY step with tool calls. Never end your reply with prose that only
+  announces the next step (e.g. "running uptrend-analyzer next") -- run it
+  immediately instead. A message with no tool call ENDS the session.
+- Writing the gate file at {gate_path} is MANDATORY and must be your FINAL action.
+  Do not stop, summarise, or hand back control until that file exists on disk.
+- After writing it, Read it back to confirm it parses as valid JSON, then give a
+  1-2 line summary. "Be fast" / short narration means terse prose, NOT skipping
+  steps or the gate file."""
 
 
 def opportunity_prompt(date_str: str, gate_path: Path, watchlist_path: Path) -> str:
@@ -925,6 +935,71 @@ def build_monthly_msg(date_str: str, data: dict | None) -> str:
     )
 
 
+def regime_finish_prompt(date_str: str, gate_path: Path) -> str:
+    return f"""Recovery run: a previous `market-regime-daily` attempt for {date_str} ended
+WITHOUT writing the gate file. Your ONLY required deliverable now is that file.
+
+Write the machine-readable gate to EXACTLY this path:
+  {gate_path}
+as a single JSON object:
+{{
+  "workflow": "market-regime-daily",
+  "date": "{date_str}",
+  "decision": "allow" | "restrict" | "cash-priority",
+  "net_exposure_ceiling_pct": <number or null>,
+  "rationale": "<= 2 sentences",
+  "key_signals": ["short bullet", "..."]
+}}
+Reuse any regime artifacts already saved under {_rel(MARKET_DIR)}/ (market_breadth,
+uptrend, market_top, exposure_posture). If a needed input is missing, run that one
+skill quickly (market-breadth-analyzer / uptrend-analyzer / exposure-coach) with
+--output-dir {_rel(MARKET_DIR)}/. `decision` MUST be exactly allow / restrict /
+cash-priority; choose the most defensive posture the evidence supports.
+
+Perform every step with TOOL CALLS -- never end with prose that only announces a
+step. Writing the file is MANDATORY and must be your FINAL action; after writing,
+Read it back to confirm it parses. Do NOT place any trades."""
+
+
+def run_regime_gate(
+    date_str: str, gate: Path, *, quick: bool, label: str, args
+) -> tuple[bool, dict]:
+    """Run the regime workflow and guarantee a gate-file write is attempted.
+
+    Headless ``claude -p`` occasionally ends a turn on a narration line before
+    completing the workflow (e.g. "running uptrend-analyzer next") and never
+    writes the gate, which then fail-safes to ``restrict``. When the process
+    exits cleanly but the gate is missing, retry once with a focused
+    finish-and-write prompt before falling back to the safe default.
+    """
+    ok = run_claude(
+        regime_prompt(date_str, gate, quick=quick),
+        label=label,
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+    )
+    if not args.dry_run and not gate.exists():
+        log(
+            f"{label}: gate file not written on first pass -- retrying once (finish-and-write).",
+            logging.WARNING,
+        )
+        ok2 = run_claude(
+            regime_finish_prompt(date_str, gate),
+            label=f"{label} [gate retry]",
+            dry_run=False,
+            timeout=args.timeout,
+        )
+        ok = ok or ok2
+
+    if args.dry_run or ok:
+        return ok, read_decision(gate)
+    return ok, {
+        "decision": "restrict",
+        "rationale": "regime workflow did not complete; fail-safe.",
+        "degraded": True,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Slot handlers
 # --------------------------------------------------------------------------- #
@@ -939,20 +1014,8 @@ def slot_premarket(date_str: str, args) -> int:
         output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
     )
     gate = decision_path(date_str)
-    ok = run_claude(
-        regime_prompt(date_str, gate, quick=True),
-        label="market-regime-daily (premarket re-check)",
-        dry_run=args.dry_run,
-        timeout=args.timeout,
-    )
-    dec = (
-        {
-            "decision": "restrict",
-            "rationale": "regime workflow did not complete; fail-safe.",
-            "degraded": True,
-        }
-        if not ok and not args.dry_run
-        else read_decision(gate)
+    ok, dec = run_regime_gate(
+        date_str, gate, quick=True, label="market-regime-daily (premarket re-check)", args=args
     )
     log(
         f"exposure decision: {dec['decision'].upper()}"
@@ -1218,20 +1281,8 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
 
 def slot_evening_prep(date_str: str, args) -> int:
     gate = decision_path(date_str)
-    ok = run_claude(
-        regime_prompt(date_str, gate, quick=False),
-        label="market-regime-daily (evening EOD)",
-        dry_run=args.dry_run,
-        timeout=args.timeout,
-    )
-    dec = (
-        read_decision(gate)
-        if (ok or args.dry_run)
-        else {
-            "decision": "restrict",
-            "rationale": "regime workflow did not complete; fail-safe.",
-            "degraded": True,
-        }
+    ok, dec = run_regime_gate(
+        date_str, gate, quick=False, label="market-regime-daily (evening EOD)", args=args
     )
     log(
         f"exposure decision: {dec['decision'].upper()}"
