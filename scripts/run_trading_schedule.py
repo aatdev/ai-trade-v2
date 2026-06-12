@@ -262,12 +262,13 @@ def _rel(p: Path) -> str:
     except ValueError:
         return str(p)
 
+CBIN="claude-pee"
 
 # Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
 CLAUDE_FALLBACK_PATHS = [
-    Path.home() / ".local" / "bin" / "claude",
-    Path("/opt/homebrew/bin/claude"),
-    Path("/usr/local/bin/claude"),
+    Path.home() / ".local" / "bin" / CBIN,
+    Path(f"/opt/homebrew/bin/{CBIN}"),
+    Path(f"/usr/local/bin/{CBIN}"),
 ]
 
 
@@ -276,12 +277,12 @@ def resolve_claude_bin() -> str:
     override = os.environ.get("CLAUDE_BIN")
     if override:
         return override
-    if shutil.which("claude"):
-        return "claude"
+    if shutil.which(CBIN):
+        return CBIN
     for candidate in CLAUDE_FALLBACK_PATHS:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
-    return "claude"  # let run_claude surface the launch error
+    return CBIN  # let run_claude surface the launch error
 
 
 # --------------------------------------------------------------------------- #
@@ -438,7 +439,7 @@ def _run_claude_kill_ppid(
 
     log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}, mode=kill-ppid) ---")
     log(f"command: {claude_bin} --permission-mode {perm_mode} <wrapped prompt {len(wrapped)} chars>",
-        logging.DEBUG)
+        logging.INFO)
     if dry_run:
         log(f"(dry-run) kill-ppid prompt:\n{wrapped}")
         output_path.unlink(missing_ok=True)
@@ -496,11 +497,11 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
             claude_bin=claude_bin, perm_mode=perm_mode, extra=extra,
         )
 
-    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt]
+    cmd = [claude_bin, "-p", "--permission-mode", perm_mode, *extra, prompt]
 
     log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
-    log(f"command: {claude_bin} --permission-mode {perm_mode} <prompt {len(prompt)} chars> {' '.join(extra)}",
-        logging.DEBUG)
+    log(f"command: {claude_bin} -p --permission-mode {perm_mode} <prompt {len(prompt)} chars> {' '.join(extra)}",
+        logging.INFO)
     if dry_run:
         log("(dry-run) prompt that would be sent to claude:\n" + prompt)
         return True

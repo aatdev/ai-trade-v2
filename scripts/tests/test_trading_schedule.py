@@ -110,6 +110,41 @@ def test_regime_finish_prompt_targets_gate():
 
 
 # --------------------------------------------------------------------------- #
+# Headless claude command construction
+# --------------------------------------------------------------------------- #
+def test_run_claude_uses_print_flag(monkeypatch):
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=10) is True
+    cmd = captured["cmd"]
+    assert "-p" in cmd
+    # -p must come before the prompt so the prompt is its positional argument
+    assert cmd.index("-p") < cmd.index("do the thing")
+
+
+def test_run_claude_kill_ppid_mode_does_not_use_print_flag(monkeypatch):
+    # kill-ppid is the fallback for environments where -p is unreliable.
+    monkeypatch.setenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "kill-ppid")
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    ts.run_claude("do the thing", label="t", dry_run=False, timeout=10)
+    assert "-p" not in captured["cmd"]
+
+
+# --------------------------------------------------------------------------- #
 # Regime gate retry (headless claude can end before writing the gate)
 # --------------------------------------------------------------------------- #
 def test_run_regime_gate_retries_when_gate_missing(monkeypatch, tmp_path):
