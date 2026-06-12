@@ -139,21 +139,15 @@ claude "Открой skill portfolio-manager (Alpaca paper). Поставь brac
 | Позиция > 4 недель и тренд цел | Перейти на трейлинг по SMA50 |
 | 15 торговых дней без +1R (шорт: 10) | Закрыть (тайм-стоп) |
 
-Записать исполненный вход в журнал (два шага):
+Записать исполненный вход в журнал — **команды придут прямо в Telegram** в сообщении ОТКРОЙ ЛОНГ, скопируй и выполни:
 
 ```bash
-# 1. Найти thesis_id по тикеру среди IDEA
-python3 skills/trader-memory-core/scripts/trader_memory_cli.py store list --status IDEA
-
-# 2. Перевести тезис в ENTRY_READY (без этого шага open-position упадёт)
-python3 skills/trader-memory-core/scripts/trader_memory_cli.py transition <thesis_id> ENTRY_READY \
-  --reason "watchlist trigger сработал, уровни из breakout-planner"
-
-# 3. Записать вход
-python3 skills/trader-memory-core/scripts/trader_memory_cli.py store \
-  open-position <thesis_id> \
-  --actual-price <цена> --actual-date $(date +%F)T15:30:00+02:00 --shares <N>
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py transition <thesis_id> ENTRY_READY --reason trigger
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py store open-position <thesis_id> \
+  --actual-price <ЦЕНА> --actual-date $(date +%FT%T%:z) --shares <N>
 ```
+
+> Если `thesis_id` отсутствует в сигнале (нестандартный вход не из watchlist): найди вручную `store list --status IDEA | grep TICKER`, затем выполни те же две команды.
 
 ---
 
@@ -191,7 +185,7 @@ claude -p "Выполни workflow market-regime-daily за сегодня: за
 > - **5.2** — автоматика делает структурную проверку топ-3 через `technical-analyst` (pass/reject: база цела, не перетянута). Ручной запуск `ticker-analysis` нужен для глубины: новости, фундаментал, точные уровни.
 > - **5.3** — явного распечатки чек-листа нет, но все 7 условий механически применяются: VCP-скринер фильтрует по SMA50/200/RS/ликвидности, breakout-trade-planner блокирует по earnings-гейту, heat-check блокирует по позициям. Ручная проверка — перестраховка или нестандартный кандидат.
 > - **5.4** — breakout-trade-planner запускается полностью (вход/стоп/цель/количество, earnings-gate).
-> - **5.5** — thesis-ingest + алерты TV ставятся сами.
+> - **5.5** — thesis-ingest запускается только для тикеров, прошедших chart-validation (не для всех ~10 VCP-кандидатов); уровни из breakout-trade-planner (pivot/stop/цель/количество) автоматически записываются в тезис; `thesis_id` инжектируется в watchlist и придёт в Telegram при ОТКРОЙ-сигнале. Алерты TV ставятся сами.
 >
 > Этот раздел — для расширения вселенной (5.1), глубокого ручного разбора (5.2) или нестандартного кандидата не из VCP (5.4 вручную через position-sizer).
 

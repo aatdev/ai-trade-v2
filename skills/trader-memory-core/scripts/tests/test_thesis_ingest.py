@@ -417,6 +417,215 @@ def test_ingest_manual_source_date_normalized(tmp_path: Path, entry_date: str):
     assert "_20260502_" in ids[0]
 
 
+# -- Tests: plan enrichment (--plan-input) ------------------------------------
+
+
+def test_plan_enrichment_populates_entry_exit(tmp_path: Path):
+    """--plan-input enriches entry.target_price / exit.stop_loss / exit.take_profit."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path,
+        {"results": [{"symbol": "PLTR", "distance_from_pivot_pct": 1.5, "composite_score": 80.0}]},
+        "vcp.json",
+    )
+    plan_file = _write_json(
+        tmp_path,
+        {
+            "actionable_orders": [
+                {
+                    "symbol": "PLTR",
+                    "composite_score": 80.0,
+                    "trade_plan": {
+                        "signal_entry": 25.50,
+                        "stop_loss_price": 23.00,
+                        "target_price": 30.00,
+                        "shares": 200,
+                        "risk_dollars": 500.0,
+                    },
+                }
+            ]
+        },
+        "plan.json",
+    )
+
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), plan_input=plan_file)
+    assert len(ids) == 1
+    thesis = thesis_store.get(state_dir, ids[0])
+    assert thesis["entry"]["target_price"] == 25.50
+    assert thesis["exit"]["stop_loss"] == 23.00
+    assert thesis["exit"]["take_profit"] == 30.00
+    assert thesis["origin"]["raw_provenance"]["plan_shares"] == 200
+    assert thesis["origin"]["raw_provenance"]["plan_risk_dollars"] == 500.0
+
+
+def test_plan_enrichment_no_match_leaves_entry_exit_empty(tmp_path: Path):
+    """If plan has no matching ticker, entry/exit stay empty (no error)."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path,
+        {"results": [{"symbol": "PLTR", "composite_score": 80.0}]},
+        "vcp.json",
+    )
+    plan_file = _write_json(tmp_path, {"actionable_orders": []}, "empty_plan.json")
+
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), plan_input=plan_file)
+    thesis = thesis_store.get(state_dir, ids[0])
+    # register() normalises entry/exit with null defaults; check no plan values injected
+    assert thesis["entry"].get("target_price") is None
+    assert thesis["exit"].get("stop_loss") is None
+    assert thesis["exit"].get("take_profit") is None
+
+
+# -- Tests: watchlist filter (--watchlist-filter) ------------------------------
+
+
+def test_watchlist_filter_excludes_non_candidates(tmp_path: Path):
+    """Only tickers in watchlist.candidates[] are registered."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path,
+        {
+            "results": [
+                {"symbol": "PLTR", "composite_score": 80.0},
+                {"symbol": "NVDA", "composite_score": 75.0},
+                {"symbol": "AAPL", "composite_score": 70.0},  # not in watchlist
+            ]
+        },
+        "vcp.json",
+    )
+    wl_file = _write_json(
+        tmp_path,
+        {"candidates": [{"ticker": "PLTR"}, {"ticker": "NVDA"}]},
+        "watchlist.json",
+    )
+
+    ids = thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
+    )
+    assert len(ids) == 2
+    tickers = {thesis_store.get(state_dir, i)["ticker"] for i in ids}
+    assert tickers == {"PLTR", "NVDA"}
+
+
+def test_watchlist_filter_case_insensitive(tmp_path: Path):
+    """Ticker matching is case-insensitive."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path, {"results": [{"symbol": "PLTR", "composite_score": 80.0}]}, "vcp.json"
+    )
+    wl_file = _write_json(tmp_path, {"candidates": [{"ticker": "pltr"}]}, "wl.json")
+
+    ids = thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
+    )
+    assert len(ids) == 1
+
+
+def test_watchlist_filter_empty_candidates_registers_nothing(tmp_path: Path):
+    """Empty candidates list → no theses registered."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path, {"results": [{"symbol": "PLTR", "composite_score": 80.0}]}, "vcp.json"
+    )
+    wl_file = _write_json(tmp_path, {"candidates": []}, "wl.json")
+
+    ids = thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
+    )
+    assert ids == []
+
+
+# -- Tests: ids_output (--ids-output) -----------------------------------------
+
+
+def test_ids_output_writes_ticker_to_thesis_id_map(tmp_path: Path):
+    """--ids-output writes {TICKER: thesis_id} JSON file."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path, {"results": [{"symbol": "PLTR", "composite_score": 80.0}]}, "vcp.json"
+    )
+    ids_path = str(tmp_path / "thesis_ids.json")
+
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), ids_output=ids_path)
+    assert len(ids) == 1
+
+    mapping = json.loads(Path(ids_path).read_text())
+    assert "PLTR" in mapping
+    assert mapping["PLTR"] == ids[0]
+
+
+def test_ids_output_not_written_when_nothing_registered(tmp_path: Path):
+    """ids_output file is not created when no theses are registered."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path, {"results": [{"symbol": "PLTR", "composite_score": 80.0}]}, "vcp.json"
+    )
+    wl_file = _write_json(tmp_path, {"candidates": []}, "wl.json")
+    ids_path = str(tmp_path / "thesis_ids.json")
+
+    thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file, ids_output=ids_path
+    )
+    assert not Path(ids_path).exists()
+
+
+# -- Tests: all three args combined -------------------------------------------
+
+
+def test_all_new_args_combined(tmp_path: Path):
+    """plan_input + watchlist_filter + ids_output all work together correctly."""
+    state_dir = tmp_path / "theses"
+    vcp_file = _write_json(
+        tmp_path,
+        {
+            "results": [
+                {"symbol": "PLTR", "composite_score": 80.0},
+                {"symbol": "TSLA", "composite_score": 60.0},  # filtered out
+            ]
+        },
+        "vcp.json",
+    )
+    plan_file = _write_json(
+        tmp_path,
+        {
+            "actionable_orders": [
+                {
+                    "symbol": "PLTR",
+                    "trade_plan": {
+                        "signal_entry": 25.50,
+                        "stop_loss_price": 23.00,
+                        "target_price": 30.00,
+                    },
+                }
+            ]
+        },
+        "plan.json",
+    )
+    wl_file = _write_json(tmp_path, {"candidates": [{"ticker": "PLTR"}]}, "wl.json")
+    ids_path = str(tmp_path / "ids.json")
+
+    ids = thesis_ingest.ingest(
+        "vcp-screener",
+        vcp_file,
+        str(state_dir),
+        plan_input=plan_file,
+        watchlist_filter=wl_file,
+        ids_output=ids_path,
+    )
+    assert len(ids) == 1
+    thesis = thesis_store.get(state_dir, ids[0])
+    assert thesis["ticker"] == "PLTR"
+    assert thesis["entry"]["target_price"] == 25.50
+    assert thesis["exit"]["stop_loss"] == 23.00
+
+    mapping = json.loads(Path(ids_path).read_text())
+    assert list(mapping.keys()) == ["PLTR"]
+    assert mapping["PLTR"] == ids[0]
+
+
+# -- Tests: manual backdated lifecycle ----------------------------------------
+
+
 def test_manual_backdated_lifecycle_monotonic_e2e(tmp_path: Path):
     """The issue's repro: a pre-existing fractional broker position reaches
     ACTIVE via manual ingest → transition --event-date → open-position

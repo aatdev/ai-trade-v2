@@ -813,11 +813,21 @@ def _intraday_signal_lines(s: dict) -> str:
         is_long = sig_type == tsig.OPEN_LONG
         qty = f"{c['shares']} акц" if c.get("shares") else "размер: position-sizer"
         risk = f" · риск {_usd(c.get('risk_dollars'))}" if c.get("risk_dollars") else ""
-        tail = (
-            "   Bracket-ордер (вход + стоп + тейк); после исполнения записать вход в журнал (шаг 3)."
-            if is_long
-            else "   Sell-short bracket; правила: риск 1%, тайм-стоп 10 т.д., не держать через отчёт."
-        )
+        if is_long:
+            tid = c.get("thesis_id")
+            _cli = "python3 skills/trader-memory-core/scripts/trader_memory_cli.py"
+            if tid:
+                shares_str = str(c["shares"]) if c.get("shares") else "<N>"
+                tail = (
+                    f"   Bracket-ордер (вход + стоп + тейк). Записать вход:\n"
+                    f"   {_cli} transition {tid} ENTRY_READY --reason trigger\n"
+                    f"   {_cli} store open-position {tid}"
+                    f" --actual-price <ЦЕНА> --actual-date $(date +%FT%T%:z) --shares {shares_str}"
+                )
+            else:
+                tail = "   Bracket-ордер (вход + стоп + тейк); после исполнения записать вход в журнал (шаг 3)."
+        else:
+            tail = "   Sell-short bracket; правила: риск 1%, тайм-стоп 10 т.д., не держать через отчёт."
         return (
             f"{'🟢' if is_long else '🔻'} ОТКРОЙ {'ЛОНГ' if is_long else 'ШОРТ'} {ticker} "
             f"@ {_usd(price)} — триггер {_usd(c.get('pivot'))} сработал\n"
@@ -1164,12 +1174,30 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
     )
     wl_path = _write_watchlist(wl, date_str, args)
     if vcp and not args.dry_run:
+        ids_output_path = SCHEDULE_DIR / f"thesis_ids_{date_str}.json"
+        ingest_cmd = [
+            TRADER_MEMORY_CLI, "ingest",
+            "--source", "vcp-screener",
+            "--input", str(vcp),
+            "--watchlist-filter", str(wl_path),
+            "--ids-output", str(ids_output_path),
+        ]
+        if plan_path:
+            ingest_cmd += ["--plan-input", str(plan_path)]
         run_skill_script(
-            [TRADER_MEMORY_CLI, "ingest", "--source", "vcp-screener", "--input", vcp],
+            ingest_cmd,
             label="thesis-ingest (trader-memory-core)",
             dry_run=args.dry_run,
             timeout=args.timeout,
         )
+        ticker_to_tid = _read_json(ids_output_path) if ids_output_path.exists() else {}
+        if ticker_to_tid:
+            for cand in wl.get("candidates") or []:
+                tid = ticker_to_tid.get(str(cand.get("ticker", "")).upper())
+                if tid:
+                    cand["thesis_id"] = tid
+            wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+            log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
     return wl_path, wl, _validation_note(wl, validation)
 
 

@@ -408,6 +408,53 @@ def ingest_edge(record: dict, input_file: str) -> dict | None:
     return thesis_data
 
 
+# -- Plan enrichment helpers --------------------------------------------------
+
+
+def _build_plan_index(plan_file: str) -> dict[str, dict]:
+    """Return {TICKER: trade_plan_dict} from breakout_trade_plan JSON."""
+    data = json.loads(Path(plan_file).read_text(encoding="utf-8"))
+    result = {}
+    for order in (data or {}).get("actionable_orders") or []:
+        symbol = str(order.get("symbol", "")).upper()
+        tp = order.get("trade_plan") or {}
+        if symbol and tp:
+            result[symbol] = tp
+    return result
+
+
+def _watchlist_tickers(wl_file: str) -> set[str]:
+    """Return set of uppercase tickers from watchlist.candidates[]."""
+    data = json.loads(Path(wl_file).read_text(encoding="utf-8"))
+    return {
+        str(c.get("ticker", "")).upper()
+        for c in (data.get("candidates") or [])
+        if c.get("ticker")
+    }
+
+
+def _enrich_from_plan(thesis_data: dict, plan_index: dict[str, dict]) -> None:
+    """Mutate thesis_data in-place with breakout-planner levels.
+
+    Maps signal_entry → entry.target_price, stop_loss_price → exit.stop_loss,
+    target_price → exit.take_profit; stores shares/risk_dollars in raw_provenance.
+    """
+    ticker = str(thesis_data.get("ticker", "")).upper()
+    tp = plan_index.get(ticker)
+    if not tp:
+        return
+    if tp.get("signal_entry") is not None:
+        thesis_data.setdefault("entry", {})["target_price"] = tp["signal_entry"]
+    if tp.get("stop_loss_price") is not None:
+        thesis_data.setdefault("exit", {})["stop_loss"] = tp["stop_loss_price"]
+    if tp.get("target_price") is not None:
+        thesis_data.setdefault("exit", {})["take_profit"] = tp["target_price"]
+    prov = thesis_data.setdefault("origin", {}).setdefault("raw_provenance", {})
+    for key, val in [("plan_shares", tp.get("shares")), ("plan_risk_dollars", tp.get("risk_dollars"))]:
+        if val is not None:
+            prov[key] = val
+
+
 # -- Public API ---------------------------------------------------------------
 
 
@@ -415,6 +462,10 @@ def ingest(
     source: str,
     input_file: str,
     state_dir: str = "state/theses",
+    *,
+    plan_input: str | None = None,
+    watchlist_filter: str | None = None,
+    ids_output: str | None = None,
 ) -> list[str]:
     """Ingest skill output and register theses.
 
@@ -422,6 +473,11 @@ def ingest(
         source: Source skill name (e.g., "kanchi-dividend-sop").
         input_file: Path to JSON file with skill output.
         state_dir: Path to thesis state directory.
+        plan_input: Optional path to breakout_trade_plan_*.json; enriches
+            entry.target_price / exit.stop_loss / exit.take_profit from planner.
+        watchlist_filter: Optional path to watchlist_*.json; only registers
+            tickers present in candidates[] (rejects orphan screener entries).
+        ids_output: Optional path to write {TICKER: thesis_id} JSON mapping.
 
     Returns:
         List of registered thesis IDs.
@@ -443,13 +499,17 @@ def ingest(
     adapter = _ADAPTERS[source]
     state_path = Path(state_dir)
 
+    plan_index = _build_plan_index(plan_input) if plan_input else {}
+    allowed_tickers = _watchlist_tickers(watchlist_filter) if watchlist_filter else None
+
     # Extract source date from top-level metadata (as_of, generated_at, etc.)
     source_date = _extract_source_date(data)
 
     # Handle both single-record and multi-record (results array) formats
     records = _extract_records(data, source)
 
-    thesis_ids = []
+    thesis_ids: list[str] = []
+    ticker_id_map: dict[str, str] = {}
     for record in records:
         try:
             thesis_data = adapter(record, input_file)
@@ -458,14 +518,29 @@ def ingest(
             continue
         if thesis_data is None:
             continue  # skipped (e.g., edge research_only)
+        # Filter to watchlist-only tickers when requested
+        if allowed_tickers is not None:
+            ticker = str(thesis_data.get("ticker", "")).upper()
+            if ticker not in allowed_tickers:
+                logger.debug("Skipping %s: not in watchlist filter", ticker)
+                continue
+        # Enrich with exact plan levels when available
+        if plan_index:
+            _enrich_from_plan(thesis_data, plan_index)
         # Inject source date so thesis_id and created_at reflect the report date
         if source_date and "_source_date" not in thesis_data:
             thesis_data["_source_date"] = source_date
         try:
             tid = thesis_store.register(state_path, thesis_data)
             thesis_ids.append(tid)
+            ticker_id_map[str(thesis_data.get("ticker", "")).upper()] = tid
         except ValueError as e:
             logger.error("Failed to register from %s: %s", source, e)
+
+    if ids_output and ticker_id_map:
+        Path(ids_output).write_text(
+            json.dumps(ticker_id_map, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     return thesis_ids
 
@@ -530,9 +605,31 @@ if __name__ == "__main__":
         default=_default_output_dir("journal/theses", "state/theses"),
         help="Thesis state directory (default: $TRADING_DATE_DIR/journal/theses)",
     )
+    parser.add_argument(
+        "--plan-input",
+        default=None,
+        help="Path to breakout_trade_plan_*.json for enriching entry/exit levels",
+    )
+    parser.add_argument(
+        "--watchlist-filter",
+        default=None,
+        help="Path to watchlist_*.json; only register tickers in candidates[]",
+    )
+    parser.add_argument(
+        "--ids-output",
+        default=None,
+        help="Path to write {TICKER: thesis_id} JSON mapping after registration",
+    )
     args = parser.parse_args()
 
-    ids = ingest(args.source, args.input, args.state_dir)
+    ids = ingest(
+        args.source,
+        args.input,
+        args.state_dir,
+        plan_input=args.plan_input,
+        watchlist_filter=args.watchlist_filter,
+        ids_output=args.ids_output,
+    )
     if ids:
         print(f"Registered {len(ids)} thesis(es): {', '.join(ids)}")
     else:
