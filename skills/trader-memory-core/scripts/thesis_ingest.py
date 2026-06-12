@@ -530,6 +530,23 @@ def ingest(
         # Inject source date so thesis_id and created_at reflect the report date
         if source_date and "_source_date" not in thesis_data:
             thesis_data["_source_date"] = source_date
+        # Skip if a non-terminal thesis already exists for this ticker — avoids
+        # duplicate IDEA theses when the same ticker reappears in the watchlist
+        # on consecutive days.
+        t_ticker = str(thesis_data.get("ticker", "")).upper()
+        existing_active = [
+            e for e in thesis_store.query(state_path, ticker=t_ticker)
+            if e.get("status") not in ("CLOSED", "INVALIDATED")
+        ]
+        if existing_active:
+            tid = existing_active[-1]["thesis_id"]
+            logger.info(
+                "Reusing thesis %s for %s (status=%s, non-terminal)",
+                tid, t_ticker, existing_active[-1].get("status"),
+            )
+            thesis_ids.append(tid)
+            ticker_id_map[t_ticker] = tid
+            continue
         try:
             tid = thesis_store.register(state_path, thesis_data)
             thesis_ids.append(tid)

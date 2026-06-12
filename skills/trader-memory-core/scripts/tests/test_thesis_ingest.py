@@ -688,3 +688,58 @@ def test_manual_backdated_lifecycle_monotonic_e2e(tmp_path: Path):
     assert t["position"]["shares"] == 7.86
     ats = [h["at"] for h in t["status_history"]]
     assert ats == ["2026-05-02T00:00:00+00:00"] * 3
+
+
+# -- Tests: repeat-ticker deduplication ----------------------------------------
+
+
+def _vcp_record(symbol: str, source_date: str) -> dict:
+    return {
+        "results": [
+            {
+                "symbol": symbol,
+                "score": 85.0,
+                "vcp_stage": "Stage 2",
+                "contraction_count": 3,
+                "as_of": source_date,
+            }
+        ],
+        "as_of": source_date,
+    }
+
+
+def test_repeat_ticker_reuses_existing_non_terminal_thesis(tmp_path: Path):
+    """Same ticker in VCP screener on day 1 and day 2 → only ONE thesis created;
+    day-2 ingest returns the existing thesis_id without creating a duplicate."""
+    state_dir = tmp_path / "theses"
+
+    file_day1 = _write_json(tmp_path, _vcp_record("NVDA", "2026-06-11"), "day1.json")
+    ids_day1 = thesis_ingest.ingest("vcp-screener", file_day1, str(state_dir))
+    assert len(ids_day1) == 1
+
+    file_day2 = _write_json(tmp_path, _vcp_record("NVDA", "2026-06-12"), "day2.json")
+    ids_day2 = thesis_ingest.ingest("vcp-screener", file_day2, str(state_dir))
+    assert len(ids_day2) == 1
+
+    # Same thesis_id returned — no duplicate created
+    assert ids_day1[0] == ids_day2[0]
+    # Only one thesis on disk
+    theses = thesis_store.query(state_dir, ticker="NVDA")
+    assert len(theses) == 1
+
+
+def test_repeat_ticker_creates_new_thesis_after_closed(tmp_path: Path):
+    """If the previous thesis is CLOSED, a new one should be created on
+    the next ingest — the trade cycle reset."""
+    state_dir = tmp_path / "theses"
+
+    file_day1 = _write_json(tmp_path, _vcp_record("AAPL", "2026-06-10"), "d1.json")
+    ids1 = thesis_ingest.ingest("vcp-screener", file_day1, str(state_dir))
+    # Invalidate the thesis (CLOSED requires actual_price; INVALIDATED does not)
+    thesis_store.terminate(state_dir, ids1[0], "INVALIDATED", exit_reason="stopped out")
+
+    file_day2 = _write_json(tmp_path, _vcp_record("AAPL", "2026-06-12"), "d2.json")
+    ids2 = thesis_ingest.ingest("vcp-screener", file_day2, str(state_dir))
+    assert len(ids2) == 1
+    # New thesis created because the previous cycle is CLOSED
+    assert ids1[0] != ids2[0]
