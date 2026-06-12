@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
 import { listDir, readText } from '../lib/files';
-import type { SkillDocResponse, SkillDocSection } from '@shared/types';
+import type { SkillDocResponse, SkillDocSection, TradingPlanResponse } from '@shared/types';
 
 // Skill names are directory-safe slugs (no slashes/dots) — blocks path traversal.
 const SKILL_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -14,6 +14,13 @@ const CONTENT_DIR = path.resolve(__dirname, '..', '..', 'content');
 export function docsRouter(projectRoot: string): Router {
   const r = Router();
   const skillsRoot = path.join(projectRoot, 'skills');
+
+  r.get('/trading-plan', (_req, res) => {
+    const content = readText(path.join(CONTENT_DIR, 'trading-plan.md'));
+    if (content == null) return res.status(404).json({ error: 'trading-plan.md not found' });
+    const body: TradingPlanResponse = { content };
+    return res.json(body);
+  });
 
   r.get('/skill-doc/:skill', (req, res) => {
     const skill = req.params.skill;

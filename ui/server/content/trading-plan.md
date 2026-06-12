@@ -1,0 +1,411 @@
+# Торговый план для новичка — чёткая система по шагам
+
+> Сохранено: 2026-06-09 · Обновлено: 2026-06-10 · Категория: Финансы / Трейдинг
+> Основа: [[2026-06-09_среднесрочный-торговый-workflow]] (полная версия v2). Здесь — упрощённая исполняемая инструкция: что, когда и какой командой.
+> Репозиторий: `/Users/alex/Projects/Repos/claude-trading-skills` (все команды запускать из этой папки).
+> Все артефакты системы лежат в одной папке `trading-data/` — см. раздел «Где лежат данные».
+
+---
+
+## Золотые правила (читать перед каждой сессией)
+
+1. **Гейт решает всё.** `allow` — можно покупать. `restrict` — новых сделок НЕТ, только ведение. `cash-priority` — сокращаем позиции.
+2. **Не уверен — сделки нет.** Пропущенная сделка ничего не стоит, плохая — стоит 1.5% депозита.
+3. **Риск зашит в профиль** (`trading-data/trading_profile.json`): 1.5% на сделку, heat ≤ 6%, ≤ 6 позиций. Не переопределяй флагами, пока не наберёшь 20+ сделок.
+4. **Стоп ставится вместе со входом** (bracket-ордер), а не «потом».
+5. **Каждая закрытая сделка — постмортем** (шаг 7). Без журнала система не учится.
+
+## Параметры системы
+
+| Параметр               | Значение                                                        |
+| ---------------------- | --------------------------------------------------------------- |
+| Капитал                | $150 000 (Alpaca paper)                                         |
+| Риск на сделку         | 1.5% = $2 250 (макс 2% только для A-сетапов)                    |
+| Совокупный риск (heat) | ≤ 6% = $9 000                                                   |
+| Позиций одновременно   | ≤ 6; одна ≤ 25% капитала; сектор ≤ 30%                          |
+| Горизонт               | 2 недели – 3 месяца                                             |
+| Время                  | Всё в CET. Биржа США: 15:30–22:00 CET                           |
+| Ключи                  | Не нужны: все данные через TradingView (скринеры, гейт, цены)   |
+| Данные                 | Все артефакты в `trading-data/` (`$TRADING_DATE_DIR` из `.env`) |
+
+## Где лежат данные
+
+Все скрипты по умолчанию пишут и читают `trading-data/` (настраивается переменной `TRADING_DATE_DIR` в `.env` репозитория — флаги `--output-dir` / `--state-dir` / `--profile` указывать больше не нужно):
+
+```
+trading-data/
+├── trading_profile.json   # риск-профиль (капитал, риск, лимиты)
+├── schedule/              # машиночитаемые гейты: exposure_decision_*.json, watchlist_*.json
+├── market/                # режим рынка: breadth, uptrend, exposure_posture, market_top, macro, FTD, DD
+├── screeners/             # кандидаты: vcp_screener_*, tradingview_screener_*, swing_short_*
+├── plans/                 # планы сделок: breakout-планы, position_sizer_*
+├── journal/               # память трейдера: theses/ (тезисы), postmortems/, portfolio_heat_*, monthly/
+├── analysis/              # разборы тикеров <TICKER>/<дата>/ + журнал сигналов signals.md
+├── logs/                  # trading_schedule.log, autopilot/, autopilot_state.json
+└── archive/               # старые прогоны (история до 2026-06-10)
+```
+
+---
+
+## РАСПИСАНИЕ ДНЯ
+
+| Время CET     | Шаг                                              | Кто                     | Результат                                                |
+| ------------- | ------------------------------------------------ | ----------------------- | -------------------------------------------------------- |
+| каждые 15 мин | Автопилот сам выбирает шаг                       | 🤖 авто                 | лог + Telegram                                           |
+| 15:00         | **Шаг 1.** Премаркет: проверка режима            | 🤖 авто                 | Telegram: ВЕРДИКТ                                        |
+| 15:00–15:25   | **Шаг 2.** Ордера по watchlist                   | 👤 ты (10–15 мин)       | bracket-ордера стоят                                     |
+| 15:30–22:00   | **Шаг 3.** Мониторинг сигналов (каждые 15 мин)   | 🤖 авто → 👤 исполняешь | Telegram: ОТКРОЙ / ЗАКРОЙ / +2R                          |
+| 22:15         | **Шаг 4.** Вечер: режим + скрин + планы + алерты | 🤖 авто                 | Telegram: гейт + watchlist (вход/стоп/размер) + алерты TV |
+| 22:30–23:00   | **Шаг 5/6.** Разбор: лонг или шорт (опционально) | 👤 ты (0–20 мин)        | автоматика уже всё построила; смотри глазами при желании |
+| по событию    | **Шаг 7.** Закрыл сделку → журнал                | 👤 ты (10 мин)          | постмортем                                               |
+| Сб ~12:00     | **Шаг 8.** Недельный блок                        | 🤖 авто                 | Telegram: top-risk/DD/macro на неделю                    |
+| 1-е вс 11:00  | **Шаг 9.** Месячный обзор                        | 🤖 авто                 | правки правил                                            |
+
+---
+
+## ШАГ 1 — Премаркет: какой сегодня режим? (15:00, авто)
+
+**Что происходит:** автоматика быстро перепроверяет рынок и присылает в Telegram вердикт: `ALLOW` / `RESTRICT` / `CASH-PRIORITY`.
+
+**Твоё действие:** прочитать Telegram. Если сообщения нет к 15:10 — запустить вручную:
+
+```bash
+cd /Users/alex/Projects/Repos/claude-trading-skills
+python3 scripts/run_trading_schedule.py --slot premarket
+```
+
+Посмотреть гейт глазами:
+
+```bash
+cat trading-data/schedule/exposure_decision_$(date +%F).json
+```
+
+**Решение (ветвление):**
+- `allow` → шаг 2 (ставим ордера).
+- `restrict` → ордеров НЕ ставим. Только шаг 3 (ведение открытых).
+- `cash-priority` → сокращаем позиции до потолка из гейта; вечером смотрим шорт-ветку (шаг 6).
+
+---
+
+## ШАГ 2 — Постановка ордеров (15:00–15:25, только при `allow`) — ЛОНГ
+
+**Что:** по вчерашнему watchlist выставить bracket-ордера (вход + стоп + цель одним ордером).
+
+**2.1. Открыть watchlist** (его собрал вчерашний вечерний прогон):
+
+```bash
+cat "$(ls -t trading-data/schedule/watchlist_*.json | head -1)"
+```
+
+**2.2. Проверить, сколько риска уже открыто** (heat). Если heat ≥ 6% или позиций уже 6 — новых ордеров не ставим:
+
+```bash
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py heat
+```
+
+(профиль и каталог тезисов скрипт берёт сам из `trading-data/`; отчёт ляжет в `trading-data/journal/`)
+
+**2.3. Поставить ордера** — интерактивно через Claude (НЕ через `-p`: ордера подтверждаем глазами):
+
+```bash
+claude "Открой skill portfolio-manager (Alpaca paper). Поставь bracket-ордер по плану: <ТИКЕР>, buy-stop $<вход>, стоп $<стоп>, тейк $<цель>, <N> акций. Покажи ордер до отправки и жди моего подтверждения."
+```
+
+**Правило:** ставим максимум 2–3 ордера из watchlist (лучшие по score). Перед каждым — мысленно: «если сработает стоп, я потеряю $2 250. Согласен?»
+
+---
+
+## ШАГ 3 — Сигналы в сессию (15:30–22:00, 🤖 каждые 15 мин → 👤 исполняешь)
+
+Сидеть у экрана не нужно — автопилот каждые 15 минут проверяет цены watchlist
+и открытых позиций (плюс остаются алерты TradingView) и присылает в Telegram
+конкретные действия. Каждый сигнал приходит один раз в день. Правила реакции:
+
+| Сигнал в Telegram | Действие |
+|---|---|
+| 🟢 **ОТКРОЙ ЛОНГ** (триггер пробит; в сообщении: кол-во, стоп, цель) | Поставить bracket-ордер как в шаге 2.3. Записать вход: см. ниже |
+| 🔻 **ОТКРОЙ ШОРТ** (только при гейте restrict/cash-priority) | Sell-short bracket; правила шорта из шага 6.4 |
+| 💰 **+2R** | Продать 50%, стоп остатка → безубыток |
+| ⚠️ **У СТОПА** (цена в 1% от стопа) | Ничего не двигать; просто будь рядом |
+| ⛔️ **СТОП задет** | Проверить, что стоп-ордер исполнился. Вечером — шаг 7 |
+| 🚫 **Не гнаться** (цена ушла выше worst-entry) | Пропуск; TV-алерты по тикеру снимаются автоматически |
+| ⏸ **Пропуск по лимитам** (heat/слоты заняты) | Ничего; лимиты работают |
+
+Правила, которые автоматика пока не проверяет (смотри сам):
+
+| Событие | Действие |
+|---|---|
+| Дневное закрытие **ниже EMA21** | Выйти из остатка |
+| Позиция > 4 недель и тренд цел | Перейти на трейлинг по SMA50 |
+| 15 торговых дней без +1R (шорт: 10) | Закрыть (тайм-стоп) |
+
+Записать исполненный вход в журнал (два шага):
+
+```bash
+# 1. Найти thesis_id по тикеру среди IDEA
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py store list --status IDEA
+
+# 2. Перевести тезис в ENTRY_READY (без этого шага open-position упадёт)
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py transition <thesis_id> ENTRY_READY \
+  --reason "watchlist trigger сработал, уровни из breakout-planner"
+
+# 3. Записать вход
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py store \
+  open-position <thesis_id> \
+  --actual-price <цена> --actual-date $(date +%F)T15:30:00+02:00 --shares <N>
+```
+
+---
+
+## ШАГ 4 — Вечерний прогон (22:15, авто)
+
+Автоматика делает полный анализ режима на свежих данных закрытия и дальше — по гейту:
+
+- **`allow` (лонг-ветка):** vcp-screener → heat → breakout-trade-planner (вход/стоп/цель/количество, earnings-гейт) → claude проверяет топ-3 по графикам (может отклонить) → watchlist на завтра + регистрация тезисов в журнале. Это автоматизированные шаги 5.1–5.5.
+- **`restrict`/`cash-priority` + рынок под давлением** (top-risk ≥ 41 или DD ≥ 3, нет свежего FTD): swing-short-screener → шорт-watchlist с размером (риск 1%). Это автоматизированный шаг 6.
+- Иначе — просто вердикт «гейт закрыт».
+- **Алерты TradingView ставятся сами:** на каждого кандидата — Trigger/Stop/T1 с тегом `[WL]`; устаревшие (выбывшие из watchlist, сменившиеся уровни) сами удаляются. Ручные алерты из `signals.md` не трогаются. Итог «+N / −M» приходит в том же Telegram.
+
+⚠️ **Вечером TradingView Desktop должен быть запущен:** скринеры читают живой график (кэш отключён), алерты ставятся через него. Если TV не запущен — Telegram сразу сообщит, автопилот повторит попытку.
+
+Придёт Telegram с кандидатами и конкретными уровнями; завтра в сессию по ним сработают сигналы ОТКРОЙ (шаг 3).
+
+Если не пришло к 22:45 — вручную:
+
+```bash
+python3 scripts/run_trading_schedule.py --slot evening-prep
+```
+
+Или то же самое через claude напрямую:
+
+```bash
+claude -p "Выполни workflow market-regime-daily за сегодня: запусти market-breadth-analyzer, uptrend-analyzer и exposure-coach, сохрани отчёты в trading-data/market/ и запиши гейт-файл trading-data/schedule/exposure_decision_$(date +%F).json с решением allow/restrict/cash-priority" --permission-mode bypassPermissions --output-format text
+```
+
+---
+
+## ШАГ 5 — Вечерний разбор: ЛОНГ-ветка (22:30, опционально — автоматика уже сделала это в шаге 4)
+
+> **Что делает автоматика (шаг 4):**
+> - **5.1** — vcp-screener --top 10 запускается сам; этот шаг нужен, если хочешь расширить вселенную (вся NASDAQ/NYSE).
+> - **5.2** — автоматика делает структурную проверку топ-3 через `technical-analyst` (pass/reject: база цела, не перетянута). Ручной запуск `ticker-analysis` нужен для глубины: новости, фундаментал, точные уровни.
+> - **5.3** — явного распечатки чек-листа нет, но все 7 условий механически применяются: VCP-скринер фильтрует по SMA50/200/RS/ликвидности, breakout-trade-planner блокирует по earnings-гейту, heat-check блокирует по позициям. Ручная проверка — перестраховка или нестандартный кандидат.
+> - **5.4** — breakout-trade-planner запускается полностью (вход/стоп/цель/количество, earnings-gate).
+> - **5.5** — thesis-ingest + алерты TV ставятся сами.
+>
+> Этот раздел — для расширения вселенной (5.1), глубокого ручного разбора (5.2) или нестандартного кандидата не из VCP (5.4 вручную через position-sizer).
+
+**5.1. Дополнительный скрин** (если watchlist пуст или хочется шире — вся NASDAQ/NYSE, без ключей):
+
+```bash
+python3 skills/tradingview-screener/scripts/run_tv_screener.py \
+  --filter-preset midterm-momentum --exchanges NASDAQ,NYSE \
+  --sort=-perf_3m --limit 60
+
+python3 skills/vcp-screener/scripts/screen_vcp.py --top 10
+```
+
+(результаты лягут в `trading-data/screeners/`)
+
+**5.2. Разобрать 1–3 лучших кандидата** (нужен запущенный TradingView Desktop):
+
+```bash
+claude -p "Проанализируй тикер <ТИКЕР> (skill ticker-analysis): недельный и дневной график TradingView, новости за 10 дней, ключевые уровни; сохрани отчёт и добавь сигнальный блок с уровнями Trigger/Stop/T1-T3 в trading-data/analysis/signals.md" --permission-mode bypassPermissions --output-format text
+```
+
+**5.3. Чек-лист «беру / не беру»** — все 7 пунктов = ДА, иначе пропуск:
+
+1. Гейт = `allow`
+2. Цена > SMA50 > SMA200 (дневной), недельный тренд вверх
+3. RS-перцентиль ≥ 70 (есть в выдаче vcp-скринера)
+4. Цена ≥ $15, оборот ≥ $25M/день
+5. Чёткая база: вход и стоп очевидны, стоп ≤ 8% от входа
+6. До отчёта (earnings) > 10 торговых дней — планировщик проверяет сам и блокирует
+7. После сделки: heat ≤ 6%, позиций ≤ 6
+
+**5.4. Построить план сделки** (вход/стоп/цель/количество — всё посчитает сам, заблокирует кандидатов перед отчётом; план ляжет в `trading-data/plans/`):
+
+```bash
+python3 skills/breakout-trade-planner/scripts/plan_breakout_trades.py \
+  --input "$(ls -t trading-data/screeners/vcp_screener_*.json | head -1)" \
+  --current-exposure-json "$(ls -t trading-data/journal/portfolio_heat_*.json | head -1)"
+```
+
+Если сделка не из VCP-скринера (уровни из разбора тикера):
+
+```bash
+python3 skills/position-sizer/scripts/position_sizer.py --entry <вход> --stop <стоп>
+```
+
+**5.5. Зарегистрировать идею в журнале и выставить алерты:**
+
+```bash
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py ingest \
+  --source vcp-screener --input "$(ls -t trading-data/screeners/vcp_screener_*.json | head -1)"
+
+claude -p "Запусти skill signals-alerts в режиме sync: синхронизируй алерты TradingView с журналом trading-data/analysis/signals.md" --permission-mode bypassPermissions --output-format text
+```
+
+Готово: завтра в 15:00 — шаг 2.
+
+---
+
+## ШАГ 6 — Вечерний разбор: ШОРТ-ветка (22:30, опционально — автоматика запускает её сама)
+
+> Вечерний прогон сам проверяет условия ниже и при их выполнении строит
+> шорт-watchlist с размером (риск 1%). Раздел оставлен для ручного разбора.
+
+**Когда включается (все три условия):**
+1. Гейт = `restrict` или `cash-priority`
+2. Рынок под давлением: market-top ≥ 41 (Orange) ИЛИ ≥ 3 distribution days за 25 сессий (из субботнего блока, шаг 8)
+3. Нет свежего подтверждённого FTD (разворота вверх)
+
+**6.1. Скрин слабости** (Stage 4, грейды A–D, без ключей; результат в `trading-data/screeners/`):
+
+```bash
+python3 skills/swing-short-screener/scripts/screen_short.py --min-grade B --top 10
+```
+
+**6.2. Разбор шорт-кандидата:**
+
+```bash
+claude -p "Проанализируй тикер <ТИКЕР> для ШОРТА (skill ticker-analysis): подтверди слабость Stage 4 на недельном и дневном графике TradingView, найди уровень входа в шорт (пробой поддержки или ретест), стоп над последним нижним максимумом, цель 2R; добавь SHORT-сигнальный блок в trading-data/analysis/signals.md" --permission-mode bypassPermissions --output-format text
+```
+
+**6.3. Размер шорта — вручную по формуле** (риск в шорте — половинный, 1% = $1 500):
+
+```
+Акций = $1 500 / (стоп − вход)
+Пример: вход $50, стоп $53 → 1500 / 3 = 500 акций (но не больше 25% капитала)
+```
+
+**6.4. Правила шорта (отличаются от лонга!):**
+- Риск 1% (не 1.5%), грейд скринера ≥ B
+- Стоп НАД последним нижним максимумом; вход/стоп/2R-цель уже есть в выдаче скринера
+- Тайм-стоп 10 торговых дней (шорты отрабатывают быстрее)
+- Крыть 50% на 2R, остаток — на паническом сливе или по стопу
+- **Запрещено:** шортить в день FTD; шортить при гейте `allow`; держать шорт через отчёт
+
+**6.5. Алерты и ордер** — как в шаге 5.5 и шаге 2.3 (signals-alerts понимает SHORT-блоки; в portfolio-manager сказать «sell-short bracket»).
+
+---
+
+## ШАГ 7 — Закрыл сделку → журнал (по событию, 10 мин)
+
+После ЛЮБОГО выхода (стоп/цель/тайм-стоп), в тот же вечер:
+
+```bash
+# 1) Закрыть тезис (MAE/MFE посчитаются сами через TradingView)
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py store \
+  close <thesis_id> \
+  --exit-reason stop_hit --actual-price <цена> --actual-date $(date +%F)T22:00:00+02:00
+
+# 2) Постмортем (ляжет в trading-data/journal/postmortems/)
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py review postmortem <thesis_id>
+```
+
+Или одной командой через Claude:
+
+```bash
+claude -p "Выполни trade-memory-loop: закрой тезис <thesis_id> в trader-memory-core (выход $<цена>, причина <stop_hit|target_hit|time_stop>), сгенерируй постмортем и сформулируй один урок" --permission-mode bypassPermissions --output-format text
+```
+
+---
+
+## ШАГ 8 — Суббота: недельный блок (~12:00, 🤖 авто)
+
+Автопилот в субботу с 12:00 сам запускает DD-монитор, макрорежим и FTD, а 2 цифры для market-top (50DMA breadth, put/call) находит через WebSearch — придёт Telegram-сводка. Свежие JSON всю неделю питают вечерние прогоны (гейт + условия шорт-ветки).
+
+Вручную (если Telegram не пришёл к 13:00): `python3 scripts/run_trading_schedule.py --slot weekly --force`. Команды ниже — для ручного запуска по частям.
+
+```bash
+# Distribution days по QQQ/SPY
+python3 skills/ibd-distribution-day-monitor/scripts/ibd_monitor.py --symbols QQQ,SPY
+
+# Макрорежим (раз в 2–4 недели достаточно)
+python3 skills/macro-regime-detector/scripts/macro_regime_detector.py
+
+# Риск вершины: подставь 2 цифры — % акций S&P выше 50MA (barchart.com)
+# и equity put/call (cboe.com)
+python3 skills/market-top-detector/scripts/market_top_detector.py \
+  --breadth-50dma <число> --put-call <число>
+
+# После коррекции ≥3%: проверка разворота (FTD)
+python3 skills/ftd-detector/scripts/ftd_detector.py
+
+# Календарь отчётов на 3 недели (через TradingView, нужен TV Desktop)
+node vendor/tradingview-mcp/scripts/tv_earnings_calendar.mjs --from $(date +%F) --to $(date -v+21d +%F)
+```
+
+Или весь блок одной командой:
+
+```bash
+claude -p "Субботний недельный обзор: запусти ibd-distribution-day-monitor (QQQ,SPY), macro-regime-detector и market-top-detector (данные 50DMA breadth и put/call найди через WebSearch), сведи картину недели через exposure-coach; сохрани отчёты в trading-data/market/ и дай резюме в 5 строк: top-risk, DD-счёт, режим, что это значит для лонг/шорт веток" --permission-mode bypassPermissions --output-format text
+```
+
+Свежие JSON top-risk и regime будут автоматически подхватываться вечерними прогонами всю неделю.
+
+---
+
+## ШАГ 9 — Месячный обзор (1-е воскресенье, 11:00, авто)
+
+Автоматика агрегирует сделки месяца, считает win-rate и avg R, предлагает правки правил — придёт в Telegram. Твоё дело: прочитать и перенести правки в `trading-data/journal/monthly/<YYYY-MM>.md`.
+
+Вручную: `python3 scripts/run_trading_schedule.py --slot monthly --force`
+
+---
+
+## АВТОПИЛОТ — запускается сам каждые 15 минут
+
+Скрипт `scripts/run_trading_autopilot.py` сам решает, какой шаг сейчас нужен, и выполняет его:
+
+- **15:00–21:00** торгового дня → премаркет-проверка (один раз; при сбое — 1 повтор)
+- **15:30–22:00** торгового дня → **интрадей-мониторинг** (каждые 15 мин): цены watchlist и открытых позиций без TradingView Desktop и ключей → сигналы ОТКРОЙ/ЗАКРОЙ/+2R в Telegram (каждый — один раз в день)
+- **22:15–24:00** → вечерний прогон (режим + скрин + планы сделок)
+- **суббота с 12:00** → недельный блок (DD, macro, FTD, top-risk)
+- **1-е воскресенье с 11:00** → месячный обзор
+- остальное время → «нет шагов» (записывается в лог)
+
+**Что пишет:** подробный лог каждого запуска в `trading-data/logs/autopilot/autopilot_<дата_время>.log` (решение + причина, полный вывод шага, код результата). Хранится 30 дней. Состояние интрадей-дедупа: `trading-data/logs/intraday_signals_state.json`.
+
+**Что шлёт в Telegram:** только важное — сбой шага (с путём к логу), исчерпание повторов, **смена гейта** (например `restrict → allow`), падение интрадей-мониторинга 3 раза подряд. Успешные шаги присылают свои подробные сводки сами.
+
+**Включить (cron, каждые 15 минут — нужно для интрадей-сигналов):**
+
+```bash
+crontab -e
+# добавить строку (старую ежечасную `0 * * * *` — заменить):
+*/15 * * * * cd /Users/alex/Projects/Repos/claude-trading-skills && /usr/bin/python3 scripts/run_trading_autopilot.py >> trading-data/logs/autopilot_cron.log 2>&1
+```
+
+**Проверить руками (ничего не выполняет, только решение):**
+
+```bash
+python3 scripts/run_trading_autopilot.py --dry-run
+python3 scripts/run_trading_autopilot.py --now 2026-06-10T16:05:00 --dry-run
+```
+
+**Форсировать шаг:** `python3 scripts/run_trading_autopilot.py --force-slot intraday` (также: premarket / evening-prep / weekly / monthly)
+
+Состояние (что уже выполнено сегодня): `cat trading-data/logs/autopilot_state.json`
+
+---
+
+## Если что-то пошло не так
+
+| Проблема | Что делать |
+|---|---|
+| Нет Telegram-сообщения к 15:10 / 22:45 | `python3 scripts/run_trading_autopilot.py` вручную; смотреть `trading-data/logs/autopilot/` |
+| В сессию нет интрадей-сигналов | Это норма, если триггеры не сработали. Проверить: `python3 scripts/run_trading_schedule.py --slot intraday --force --no-telegram` и `cat trading-data/logs/intraday_signals_state.json` |
+| Гейт-файла нет | Система считает `restrict` (fail-safe): новых сделок нет — это нормально |
+| `ticker-analysis` / скринеры не видят данные | Запустить TradingView Desktop (данные идут через него, кэш отключён) |
+| Telegram: «TradingView Desktop недоступен» | Запустить TradingView (`tv launch`); вечерний слот автопилот повторит сам |
+| Алерты `[WL]` не выставились/не снялись | Проверить TV Desktop; вручную: `python3 scripts/run_trading_schedule.py --slot evening-prep --force` (sync повторится) |
+| Алерт не создался | Повторить sync из шага 5.5; не запускать два sync одновременно |
+| Скрипт пишет в `reports/` вместо `trading-data/` | Проверить, что в `.env` репозитория есть `TRADING_DATE_DIR="trading-data"` |
+| Сработал стоп — «обидно» | Это система работает. Шаг 7, следующий кандидат |
+| Сомнения в любом пункте чек-листа | Сделки нет. Кандидат остаётся в watchlist |
+
+---
+
+*Аналитическая система, не инвестиционная рекомендация. Все решения о сделках принимаешь ты; paper-аккаунт Alpaca — для обкатки без риска.*

@@ -422,3 +422,8 @@ export interface StartJobResponse {
   activeJobId?: string;
   error?: string;
 }
+
+/** GET /api/trading-plan */
+export interface TradingPlanResponse {
+  content: string;
+}

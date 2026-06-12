@@ -8,11 +8,13 @@ export function Modal({
   onClose,
   children,
   footer,
+  fullscreen,
 }: {
   title?: ReactNode;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
+  fullscreen?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -23,8 +25,8 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className={`modal-backdrop${fullscreen ? ' modal-backdrop-full' : ''}`} onClick={onClose}>
+      <div className={`modal${fullscreen ? ' modal-full' : ''}`} onClick={(e) => e.stopPropagation()}>
         {title != null ? (
           <div className="modal-head">
             <h3>{title}</h3>
