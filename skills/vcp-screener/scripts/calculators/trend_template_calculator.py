@@ -172,8 +172,16 @@ def calculate_trend_template(
     raw_score = round(passed_count * points_per_criterion, 1)
     raw_score = min(100, raw_score)
 
-    # Pass threshold: 85+ (6/7 criteria) - uses RAW score only
-    passed = raw_score >= 85
+    # Pass gate: 85+ raw (6/7 criteria) AND the plan-checklist hard items —
+    # RS > 70 and the MA chain price > SMA50 > SMA200 are MANDATORY, not
+    # 1-of-7 (a 6/7 score with failed RS used to slip through). Missing RS
+    # data degrades to the soft gate (an SPY fetch failure must not blank the
+    # whole screen); missing MAs fail conservatively.
+    hard_rs = c7_pass or rs_rank is None
+    hard_ma_chain = bool(
+        c4_pass and sma50 is not None and sma200 is not None and sma50 > sma200
+    )
+    passed = raw_score >= 85 and hard_rs and hard_ma_chain
 
     # Extended penalty: deduct for price too far above SMA50 (ranking用)
     extended_penalty, sma50_distance_pct = _calculate_extended_penalty(
@@ -204,6 +212,10 @@ def calculate_trend_template(
         else None,
         "criteria_passed": passed_count,
         "criteria_total": 7,
+        "hard_gates": {
+            "rs_above_70": c7_pass if rs_rank is not None else None,
+            "ma_chain_price_sma50_sma200": hard_ma_chain,
+        },
         "criteria": criteria,
         "sma50": round(sma50, 2) if sma50 else None,
         "sma150": round(sma150, 2) if sma150 else None,

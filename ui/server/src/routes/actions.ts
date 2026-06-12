@@ -65,11 +65,15 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
   });
 
   r.post('/actions/sync-alerts', (_req, res) => {
-    // Fixed, input-free pipeline: parse signals.md -> create missing alerts (diff).
+    // Real sync: parse signals.md -> diff-DELETE stale manual alerts (a level
+    // change otherwise leaves old-price alerts firing next to the new ones) ->
+    // create missing. Scheduler-owned [WL] watchlist alerts are excluded.
     const pipeline =
       'set -a; [ -f .env ] && . ./.env; set +a; ' +
-      'node skills/signals-alerts/scripts/parse_signals.mjs | ' +
-      'node skills/signals-alerts/scripts/create_alerts.mjs';
+      'PLAN=$(node skills/signals-alerts/scripts/parse_signals.mjs) && ' +
+      'printf "%s" "$PLAN" | node skills/signals-alerts/scripts/delete_alerts.mjs' +
+      ' --keep-from-plan --message-not-contains "[WL]" && ' +
+      'printf "%s" "$PLAN" | node skills/signals-alerts/scripts/create_alerts.mjs';
     return startAndRespond(res, {
       label: 'sync-alerts (signals.md → TradingView)',
       cmd: pipeline,
@@ -89,7 +93,13 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
     return startAndRespond(res, {
       label: `delete-alerts ${clean.join(',')}`,
       cmd: 'node',
-      args: ['skills/signals-alerts/scripts/delete_alerts.mjs', '--tickers', clean.join(',')],
+      // [WL] watchlist alerts are owned by the scheduler's sync state —
+      // deleting them here would orphan that state; only manual alerts go.
+      args: [
+        'skills/signals-alerts/scripts/delete_alerts.mjs',
+        '--tickers', clean.join(','),
+        '--message-not-contains', '[WL]',
+      ],
       cwd: projectRoot,
     });
   });

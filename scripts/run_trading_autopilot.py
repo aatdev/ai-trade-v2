@@ -319,6 +319,26 @@ def release_lock(path: Path) -> None:
 # --------------------------------------------------------------------------- #
 # Execution + Telegram
 # --------------------------------------------------------------------------- #
+def slot_timeout_budget(slot: str, timeout: int) -> int:
+    """Outer kill budget for one schedule slot (the safety net, not the pacing).
+
+    The old flat ``timeout*2 + 300`` could not contain a busy evening-prep —
+    regime + gate-retry + chart-validation claude runs plus AUTO_ANALYZE_TOP_N
+    headless ticker analyses and the alert sync — and killed slow evenings
+    mid-pipeline, which then burned a retry on the same doomed budget.
+    """
+    if slot == "evening-prep":
+        return (
+            timeout * 4  # regime + gate retry + validation + screen/plan slack
+            + schedule.AUTO_ANALYZE_TOP_N * schedule.TICKER_ANALYSIS_TIMEOUT_S
+            + 3 * 900  # alert-sync node calls
+            + 300
+        )
+    if slot == "weekly":
+        return timeout * 5 + 300  # 3 deterministic scripts + claude synthesis
+    return timeout * 2 + 300
+
+
 def run_slot(slot: str, *, dry_run: bool, no_telegram: bool, timeout: int, run_log: RunLog) -> int:
     """Delegate one slot to run_trading_schedule.py and capture its output."""
     cmd = [sys.executable, str(SCHEDULE_SCRIPT), "--slot", slot, "--timeout", str(timeout)]
@@ -335,7 +355,7 @@ def run_slot(slot: str, *, dry_run: bool, no_telegram: bool, timeout: int, run_l
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=timeout * 2 + 300,
+            timeout=slot_timeout_budget(slot, timeout),
         )
     except subprocess.TimeoutExpired:
         run_log.write(f"EXEC TIMEOUT after {time.monotonic() - started:.0f}s")

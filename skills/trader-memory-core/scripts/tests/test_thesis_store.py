@@ -1117,6 +1117,18 @@ def test_cli_main_lifecycle_full_sequence(tmp_path: Path, capsys):
     assert t["outcome"]["pnl_dollars"] == round((165.0 - 150.0) * 7.86, 2)
 
 
+def test_cli_update_stop_trails_the_stop(tmp_path: Path):
+    """`update-stop` trails exit.stop_loss without hand-editing YAML — the heat
+    ledger reads that field, so a stale stop means stale portfolio risk."""
+    tid, _ = _register_and_get(tmp_path)
+    sd = str(tmp_path)
+    assert thesis_store.main(["--state-dir", sd, "update-stop", tid, "--stop", "105.5"]) == 0
+    assert thesis_store.get(tmp_path, tid)["exit"]["stop_loss"] == 105.5
+    # trailing again overwrites
+    assert thesis_store.main(["--state-dir", sd, "update-stop", tid, "--stop", "110.0"]) == 0
+    assert thesis_store.get(tmp_path, tid)["exit"]["stop_loss"] == 110.0
+
+
 def test_cli_main_attach_and_terminate(tmp_path: Path):
     """attach-position + terminate INVALIDATED via main([...])."""
     tid, _ = _register_and_get(tmp_path)

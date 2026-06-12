@@ -176,13 +176,21 @@ def _accumulate(summary: dict, res: dict) -> None:
         summary["error_details"].append(str(res["error"])[:300])
         return
     s = res.get("summary") or {}
-    for key in ("created", "deleted", "kept", "skipped"):
+    for key in ("created", "deleted", "kept", "skipped", "not_found_in_ui"):
         summary[key] += int(s.get(key) or 0)
     summary["errors"] += int(s.get("errors") or 0)
 
 
 def _new_summary() -> dict:
-    return {"created": 0, "deleted": 0, "kept": 0, "skipped": 0, "errors": 0, "error_details": []}
+    return {
+        "created": 0,
+        "deleted": 0,
+        "kept": 0,
+        "skipped": 0,
+        "not_found_in_ui": 0,
+        "errors": 0,
+        "error_details": [],
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -247,7 +255,12 @@ def sync_watchlist_alerts(
             ),
         )
 
-    save_alerts_state(state_path, {**state, "tickers": current})
+    if summary["errors"]:
+        # A failed delete must be retried on the next sync, not forgotten:
+        # keep every ticker we may still own alerts for.
+        save_alerts_state(state_path, {**state, "tickers": sorted(set(current) | previous)})
+    else:
+        save_alerts_state(state_path, {**state, "tickers": current})
     return summary
 
 
@@ -272,7 +285,10 @@ def purge_watchlist_alerts(
             timeout=timeout,
         ),
     )
-    state = load_alerts_state(state_path)
-    remaining = [t for t in state.get("tickers") or [] if str(t).upper() not in set(wanted)]
-    save_alerts_state(state_path, {**state, "tickers": remaining})
+    if not summary["errors"]:
+        # Only forget tickers whose purge actually succeeded; otherwise the
+        # orphaned [WL] alerts would never be retried.
+        state = load_alerts_state(state_path)
+        remaining = [t for t in state.get("tickers") or [] if str(t).upper() not in set(wanted)]
+        save_alerts_state(state_path, {**state, "tickers": remaining})
     return summary

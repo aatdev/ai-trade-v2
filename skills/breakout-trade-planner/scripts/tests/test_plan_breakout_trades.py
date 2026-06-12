@@ -262,6 +262,61 @@ class TestMinerviniGate:
         )
         assert classified["classification"] == "rejected"
 
+    def test_capped_rating_prebreakout_goes_watchlist_not_actionable(self):
+        """State/wide-and-loose caps live only in the rating STRING; a capped
+        name with composite >= 70 must never become a sized actionable order."""
+        result = _make_vcp_result(score=78.0)
+        result["rating"] = "Developing VCP"
+        result["wide_and_loose"] = True
+        classified = process_candidate(
+            result, _make_args(), 0.0, {}, {"sector_exposure": {}, "open_risk_pct": 0}
+        )
+        assert classified["classification"] == "watchlist"
+
+    def test_capped_rating_breakout_rejected(self):
+        result = _make_vcp_result(
+            score=78.0,
+            state="Breakout",
+            valid_vcp=True,
+            breakout_volume=True,
+            distance_from_pivot=1.5,
+            price=101.0,
+        )
+        result["rating"] = "Developing VCP"
+        classified = process_candidate(
+            result, _make_args(), 0.0, {}, {"sector_exposure": {}, "open_risk_pct": 0}
+        )
+        assert classified["classification"] == "rejected"
+        assert "capped" in classified["data"]["reason"]
+
+    def test_missing_rating_is_not_gated(self):
+        """Older screener outputs without a rating string keep working."""
+        result = _make_vcp_result(score=85.0)
+        result.pop("rating")
+        classified = process_candidate(
+            result, _make_args(), 0.0, {}, {"sector_exposure": {}, "open_risk_pct": 0}
+        )
+        assert classified["classification"] == "actionable"
+
+    def test_revalidation_advisory_includes_stop_and_target(self):
+        """The watchlist must never carry an entry trigger without a stop."""
+        result = _make_vcp_result(
+            score=85.0,
+            state="Breakout",
+            valid_vcp=True,
+            breakout_volume=True,
+            distance_from_pivot=1.5,
+            price=101.0,
+        )
+        classified = process_candidate(
+            result, _make_args(), 0.0, {}, {"sector_exposure": {}, "open_risk_pct": 0}
+        )
+        data = classified["data"]
+        assert data["stop_loss_price"] is not None
+        assert data["stop_loss_price"] < data["pivot"]
+        assert data["target_price"] is not None
+        assert data["target_price"] > data["pivot"]
+
     def test_breakout_developing_does_not_watchlist(self):
         """Breakout candidates must not go to watchlist — they already crossed pivot."""
         result = _make_vcp_result(

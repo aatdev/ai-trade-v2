@@ -429,6 +429,7 @@ def _project_index_fields(thesis: dict) -> dict:
     updated_date = updated_at[:10] if updated_at else None
     return {
         "ticker": thesis["ticker"],
+        "side": thesis.get("side") or "long",
         "status": thesis["status"],
         "thesis_type": thesis["thesis_type"],
         "created_at": created_date,
@@ -1616,6 +1617,12 @@ def main(argv: list[str] | None = None) -> int:
     tm_p.add_argument("--actual-date", default=None, help="Exit date (optional)")
     tm_p.add_argument("--event-date", default=None, help="Backdate status_history.at")
 
+    # update-stop: trail the stop without hand-editing YAML (the heat ledger
+    # reads exit.stop_loss — a stale stop means stale portfolio risk).
+    us_p = sub.add_parser("update-stop", help="Update exit.stop_loss (trail the stop)")
+    us_p.add_argument("thesis_id", help="Thesis ID")
+    us_p.add_argument("--stop", type=float, required=True, help="New stop price")
+
     args = parser.parse_args(argv)
     state_dir = Path(args.state_dir)
 
@@ -1722,6 +1729,9 @@ def main(argv: list[str] | None = None) -> int:
             event_date=_coerce_dt(args.event_date),
         )
         print(f"{args.thesis_id} → {t['status']} ({args.exit_reason})")
+    elif args.command == "update-stop":
+        t = update(state_dir, args.thesis_id, {"exit": {"stop_loss": args.stop}})
+        print(f"{args.thesis_id} → exit.stop_loss {args.stop} (status {t['status']})")
     elif args.command == "delete":
         if delete(state_dir, args.thesis_id):
             print(f"Deleted {args.thesis_id}")

@@ -20,6 +20,7 @@
  *   # сузить «наши» до алертов, содержащих подстроку в message (например,
  *   # авто-алерты watchlist помечены тегом [WL] — ручные алерты не трогаются)
  *   node delete_alerts.mjs --tickers BSX --message-contains "[WL]"
+ *   node delete_alerts.mjs --keep-from-plan --file plan.json --message-not-contains "[WL]"
  *
  * stdout: JSON { results: [{ ticker, deleted: [...], kept: [...], not_found, errors }], summary }
  */
@@ -34,7 +35,7 @@ import { evaluate } from '../../../vendor/tradingview-mcp/src/connection.js';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function parseArgs(argv) {
-  const out = { tickers: null, file: null, keepFromPlan: false, saveLayout: true, messageContains: null };
+  const out = { tickers: null, file: null, keepFromPlan: false, saveLayout: true, messageContains: null, messageNotContains: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--tickers' || a === '-t') out.tickers = argv[++i].split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     else if (a === '--keep-from-plan') out.keepFromPlan = true;
     else if (a === '--no-save-layout') out.saveLayout = false;
     else if (a === '--message-contains') out.messageContains = argv[++i];
+    else if (a === '--message-not-contains') out.messageNotContains = argv[++i];
   }
   return out;
 }
@@ -274,11 +276,12 @@ async function removeChartMarkers(ticker, alertsToDelete, result) {
   }
 }
 
-async function deleteForTicker(ticker, allAlerts, keepMessages, messageContains) {
+async function deleteForTicker(ticker, allAlerts, keepMessages, messageContains, messageNotContains) {
   const ours = allAlerts.filter(
     (a) =>
       (a?.message || '').startsWith(`${ticker}:`) &&
-      (!messageContains || (a?.message || '').includes(messageContains))
+      (!messageContains || (a?.message || '').includes(messageContains)) &&
+      (!messageNotContains || !(a?.message || '').includes(messageNotContains))
   );
   const result = { ticker, deleted: [], kept: [], errors: [], not_found_in_ui: [] };
 
@@ -347,7 +350,8 @@ async function main() {
     const ours = allAlerts.filter(
       (a) =>
         (a?.message || '').startsWith(`${t}:`) &&
-        (!args.messageContains || (a?.message || '').includes(args.messageContains))
+        (!args.messageContains || (a?.message || '').includes(args.messageContains)) &&
+        (!args.messageNotContains || !(a?.message || '').includes(args.messageNotContains))
     );
     const keep = keepByTicker?.get(t.toUpperCase());
     return keep ? ours.some((a) => !keep.has(a.message)) : ours.length > 0;
@@ -373,7 +377,7 @@ async function main() {
   const results = [];
   for (const t of tickers) {
     const keep = keepByTicker ? (keepByTicker.get(t.toUpperCase()) || new Set()) : null;
-    const r = await deleteForTicker(t, allAlerts, keep, args.messageContains);
+    const r = await deleteForTicker(t, allAlerts, keep, args.messageContains, args.messageNotContains);
     results.push(r);
   }
 

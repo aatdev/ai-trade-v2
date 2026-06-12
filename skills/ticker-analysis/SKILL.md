@@ -404,9 +404,11 @@ node .claude/skills/signals-alerts/scripts/prune_signals.mjs --ticker TICKER
 node .claude/skills/signals-alerts/scripts/parse_signals.mjs --tickers TICKER \
   > ./tmp/signals_plan_TICKER.json
 
-# 6.2 — diff-удаление: снести только устаревшие «наши» алерты по TICKER
+# 6.2 — diff-удаление: снести только устаревшие «наши» ручные алерты по TICKER.
+# --message-not-contains "[WL]" ОБЯЗАТЕЛЕН: watchlist-алерты [WL] принадлежат
+# вечернему sync-у расписания — без исключения шаг снёс бы их как «устаревшие».
 node .claude/skills/signals-alerts/scripts/delete_alerts.mjs \
-  --keep-from-plan --file ./tmp/signals_plan_TICKER.json
+  --keep-from-plan --message-not-contains "[WL]" --file ./tmp/signals_plan_TICKER.json
 
 # 6.3 — создание недостающих (дедупликация по message пропустит уже существующие)
 node .claude/skills/signals-alerts/scripts/create_alerts.mjs \

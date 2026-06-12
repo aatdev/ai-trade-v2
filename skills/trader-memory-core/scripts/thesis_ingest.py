@@ -261,6 +261,48 @@ def ingest_vcp(record: dict, input_file: str) -> dict:
     return thesis_data
 
 
+@_adapter("swing-short-screener")
+def ingest_swing_short(record: dict, input_file: str) -> dict:
+    """Transform a swing-short-screener candidate into SHORT thesis data.
+
+    Levels map straight from the screener: trade_levels.entry → entry
+    target, .stop → stop loss, .target_2r → take profit. ``side: short`` is
+    what makes the heat ledger count the risk as (stop − entry) × shares.
+    """
+    ticker = record.get("symbol")
+    if not ticker:
+        raise ValueError("Missing required field 'symbol' in swing-short record")
+
+    levels = record.get("trade_levels") or {}
+    thesis_data = {
+        "ticker": ticker,
+        "side": "short",
+        "thesis_type": "pivot_breakout",
+        "thesis_statement": (
+            f"{ticker} Stage 4 breakdown SHORT — grade {record.get('grade', '?')}, "
+            "stop above the last lower high"
+        ),
+        "_register_reason": "screened by swing-short-screener",
+        "entry": {},
+        "exit": {},
+        "origin": {
+            "skill": "swing-short-screener",
+            "output_file": input_file,
+            "screening_grade": record.get("grade"),
+            "screening_score": record.get("composite_score"),
+            "raw_provenance": {k: v for k, v in record.items()},
+        },
+    }
+    if levels.get("entry") is not None:
+        thesis_data["entry"]["target_price"] = levels["entry"]
+    if levels.get("stop") is not None:
+        thesis_data["exit"]["stop_loss"] = levels["stop"]
+    if levels.get("target_2r") is not None:
+        thesis_data["exit"]["take_profit"] = levels["target_2r"]
+
+    return thesis_data
+
+
 @_adapter("pead-screener")
 def ingest_pead(record: dict, input_file: str) -> dict:
     """Transform pead-screener result into thesis data."""
@@ -449,6 +491,22 @@ def _plan_fields(tp: dict) -> dict:
     return fields
 
 
+def _level_fields(thesis_data: dict) -> dict:
+    """Adapter-provided levels (entry target / stop / take-profit) as an
+    update()-shaped fields dict — used to refresh a reused pre-entry thesis
+    from the fresh screener record (e.g. swing-short trade_levels)."""
+    fields: dict = {}
+    target = (thesis_data.get("entry") or {}).get("target_price")
+    if target is not None:
+        fields.setdefault("entry", {})["target_price"] = target
+    ex = thesis_data.get("exit") or {}
+    if ex.get("stop_loss") is not None:
+        fields.setdefault("exit", {})["stop_loss"] = ex["stop_loss"]
+    if ex.get("take_profit") is not None:
+        fields.setdefault("exit", {})["take_profit"] = ex["take_profit"]
+    return fields
+
+
 def _enrich_from_plan(thesis_data: dict, plan_index: dict[str, dict]) -> None:
     """Mutate thesis_data in-place with breakout-planner levels.
 
@@ -541,13 +599,16 @@ def ingest(
         # Inject source date so thesis_id and created_at reflect the report date
         if source_date and "_source_date" not in thesis_data:
             thesis_data["_source_date"] = source_date
-        # Skip if a non-terminal thesis already exists for this ticker — avoids
-        # duplicate IDEA theses when the same ticker reappears in the watchlist
-        # on consecutive days.
+        # Skip if a non-terminal SAME-SIDE thesis already exists for this
+        # ticker — avoids duplicate IDEA theses when the same ticker reappears
+        # in the watchlist on consecutive days. A long and a short thesis for
+        # the same ticker are different trades and never reuse each other.
         t_ticker = str(thesis_data.get("ticker", "")).upper()
+        t_side = str(thesis_data.get("side") or "long").lower()
         existing_active = [
             e for e in thesis_store.query(state_path, ticker=t_ticker)
             if e.get("status") not in ("CLOSED", "INVALIDATED")
+            and str(e.get("side") or "long").lower() == t_side
         ]
         if existing_active:
             existing = existing_active[-1]
@@ -556,19 +617,23 @@ def ingest(
                 "Reusing thesis %s for %s (status=%s, non-terminal)",
                 tid, t_ticker, existing.get("status"),
             )
-            # Refresh plan levels on PRE-ENTRY reuse: the new plan carries fresh
-            # pivot/stop/target while the thesis still holds day-1 numbers (the
-            # heat ledger reads exit.stop_loss from here). Never touch an ACTIVE
+            # Refresh levels on PRE-ENTRY reuse: the fresh screener record /
+            # plan carries new pivot/stop/target while the thesis still holds
+            # day-1 numbers (the heat ledger reads exit.stop_loss from here).
+            # Plan levels win over adapter levels. Never touch an ACTIVE
             # thesis — its stop is the live bracket at the broker.
-            tp = plan_index.get(t_ticker) if plan_index else None
-            if tp and existing.get("status") in ("IDEA", "ENTRY_READY"):
-                fields = _plan_fields(tp)
+            if existing.get("status") in ("IDEA", "ENTRY_READY"):
+                fields = _level_fields(thesis_data)
+                tp = plan_index.get(t_ticker) if plan_index else None
+                if tp:
+                    for key, sub in _plan_fields(tp).items():
+                        fields.setdefault(key, {}).update(sub)
                 if fields:
                     try:
                         thesis_store.update(state_path, tid, fields)
-                        logger.info("Refreshed plan levels on reused thesis %s", tid)
+                        logger.info("Refreshed levels on reused thesis %s", tid)
                     except (ValueError, OSError) as e:
-                        logger.warning("Could not refresh plan levels on %s: %s", tid, e)
+                        logger.warning("Could not refresh levels on %s: %s", tid, e)
             thesis_ids.append(tid)
             ticker_id_map[t_ticker] = tid
             continue

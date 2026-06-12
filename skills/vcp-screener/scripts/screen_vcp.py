@@ -237,15 +237,21 @@ def passes_trend_filter(tt_result: dict, trend_min_score: float = 85.0) -> bool:
     return tt_result.get("raw_score", 0) >= trend_min_score
 
 
+# Plan checklist 5.3 hard floors: price >= $15 and >= $25M/day dollar volume.
+MIN_PRICE = 15.0
+MIN_AVG_VOLUME = 200_000
+MIN_DOLLAR_VOLUME = 25_000_000.0
+
+
 def pre_filter_stock(quote: dict) -> tuple:
     """
     Cheap pre-filter using quote data only.
 
-    Criteria:
-    - Price > $10
+    Criteria (plan checklist 5.3):
+    - Price >= $15
+    - Average DOLLAR volume >= $25M/day (plus a 200k share floor)
     - At least 20% above 52-week low
     - Within 30% of 52-week high
-    - Average volume > 200,000
 
     Returns:
         (passed: bool, stage2_likelihood_score: float)
@@ -257,9 +263,11 @@ def pre_filter_stock(quote: dict) -> tuple:
     # fall back to it so the liquidity gate still works on non-legacy keys.
     avg_volume = quote.get("avgVolume") or quote.get("volume", 0)
 
-    if price <= 10:
+    if price < MIN_PRICE:
         return False, 0
-    if avg_volume < 200000:
+    if avg_volume < MIN_AVG_VOLUME:
+        return False, 0
+    if price * avg_volume < MIN_DOLLAR_VOLUME:
         return False, 0
 
     # Check distance from 52w low

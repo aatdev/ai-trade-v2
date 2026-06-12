@@ -90,11 +90,15 @@ def build_revalidation_advisory(
     pivot: float,
     current_price: float,
     worst_entry: float,
+    stop_loss: float | None = None,
+    target_price: float | None = None,
 ) -> dict:
     """Build an advisory for Breakout-state candidates (no order template).
 
     These candidates already crossed the pivot and need live revalidation
-    before any order can be placed.
+    before any order can be placed. stop/target are included so the watchlist
+    never carries an entry trigger without a stop (the intraday monitor would
+    otherwise fire OPEN signals with no protective level).
     """
     return {
         "symbol": symbol,
@@ -103,6 +107,8 @@ def build_revalidation_advisory(
         "pivot": pivot,
         "current_price": current_price,
         "max_entry_price": worst_entry,
+        "stop_loss_price": stop_loss,
+        "target_price": target_price,
     }
 
 

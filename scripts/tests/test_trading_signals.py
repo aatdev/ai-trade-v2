@@ -287,6 +287,22 @@ class TestOpenSignals:
         signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
         assert _types(signals) == [("NVDA", "SKIPPED_CAPACITY")]
 
+    def test_unsized_candidate_reserves_default_risk_budget(self):
+        # A revalidation advisory (shares/risk None) must not pass the heat
+        # gate for free: it reserves a full 1% budget (150k × 1% = 1500 > 1000).
+        cand = long_candidate(shares=None, risk_dollars=None)
+        heat = make_heat(remaining_heat_dollars=1000.0)
+        wl = make_watchlist([cand])
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "SKIPPED_CAPACITY")]
+
+    def test_unsized_candidate_opens_when_budget_allows(self):
+        cand = long_candidate(shares=None, risk_dollars=None)
+        heat = make_heat(remaining_heat_dollars=9000.0)
+        wl = make_watchlist([cand])
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "OPEN_LONG")]
+
     def test_no_heat_budget_emits_skipped(self):
         wl = make_watchlist([long_candidate()])
         heat = make_heat(remaining_heat_dollars=1000.0)  # candidate risks 2356

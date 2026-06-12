@@ -794,6 +794,26 @@ def latest_watchlist() -> Path | None:
     return files[-1] if files else None
 
 
+def _prev_us_trading_day(d: dt.date) -> dt.date:
+    cur = d - dt.timedelta(days=1)
+    while not is_us_trading_day(cur):
+        cur -= dt.timedelta(days=1)
+    return cur
+
+
+def _watchlist_is_fresh(wl: dict | None, today: dt.date) -> bool:
+    """A watchlist arms OPEN signals only when built today or on the previous
+    US trading day (the evening run builds tomorrow's list). After a few
+    failed evenings the 'latest' file is days old — its levels are stale and
+    must not trigger entries. Unparseable/missing date counts as stale."""
+    raw = (wl or {}).get("date")
+    try:
+        built = dt.date.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        return False
+    return built >= _prev_us_trading_day(today)
+
+
 def _candidate_lines(candidates: list) -> str:
     lines = []
     for c in candidates[:8]:
@@ -818,7 +838,8 @@ def _candidate_lines(candidates: list) -> str:
 
 def build_premarket_msg(date_str: str, dec: dict, wl: Path | None) -> str:
     allowed = dec["decision"] == "allow"
-    wl_line = f"Watchlist: {wl.relative_to(PROJECT_ROOT)}" if wl else "Watchlist не найден."
+    # _rel (not relative_to): TRADING_DATE_DIR outside the repo would crash here.
+    wl_line = f"Watchlist: {_rel(wl)}" if wl else "Watchlist не найден."
     if allowed:
         action = (
             "Поставить bracket-ордера по триггерам брейкаута (swing-execution-manage / вход).\n"
@@ -898,23 +919,27 @@ def _intraday_signal_lines(s: dict) -> str:
         is_long = sig_type == tsig.OPEN_LONG
         qty = f"{c['shares']} акц" if c.get("shares") else "размер: position-sizer"
         risk = f" · риск {_usd(c.get('risk_dollars'))}" if c.get("risk_dollars") else ""
+        tid = c.get("thesis_id")
+        _cli = "python3 skills/trader-memory-core/scripts/trader_memory_cli.py"
+        shares_str = str(c["shares"]) if c.get("shares") else "<N>"
+        # `store` prefix: the CLI launcher has no bare `transition`.
+        # `%z` (not `%:z`): BSD date on macOS emits a literal `:z`.
+        journal_tail = (
+            f"   {_cli} store transition {tid} ENTRY_READY --reason trigger\n"
+            f"   {_cli} store open-position {tid}"
+            f" --actual-price <ЦЕНА> --actual-date $(date +%FT%T%z) --shares {shares_str}"
+            if tid
+            else ""
+        )
         if is_long:
-            tid = c.get("thesis_id")
-            _cli = "python3 skills/trader-memory-core/scripts/trader_memory_cli.py"
             if tid:
-                shares_str = str(c["shares"]) if c.get("shares") else "<N>"
-                # `store` prefix: the CLI launcher has no bare `transition`.
-                # `%z` (not `%:z`): BSD date on macOS emits a literal `:z`.
-                tail = (
-                    f"   Bracket-ордер (вход + стоп + тейк). Записать вход:\n"
-                    f"   {_cli} store transition {tid} ENTRY_READY --reason trigger\n"
-                    f"   {_cli} store open-position {tid}"
-                    f" --actual-price <ЦЕНА> --actual-date $(date +%FT%T%z) --shares {shares_str}"
-                )
+                tail = f"   Bracket-ордер (вход + стоп + тейк). Записать вход:\n{journal_tail}"
             else:
                 tail = "   Bracket-ордер (вход + стоп + тейк); после исполнения записать вход в журнал (шаг 3)."
         else:
             tail = "   Sell-short bracket; правила: риск 1%, тайм-стоп 10 т.д., не держать через отчёт."
+            if journal_tail:
+                tail += f"\n   Записать вход:\n{journal_tail}"
         return (
             f"{'🟢' if is_long else '🔻'} ОТКРОЙ {'ЛОНГ' if is_long else 'ШОРТ'} {ticker} "
             f"@ {_usd(price)} — триггер {_usd(c.get('pivot'))} сработал\n"
@@ -1134,7 +1159,18 @@ def slot_premarket(date_str: str, args) -> int:
         logging.WARNING if dec.get("degraded") else logging.INFO,
     )
 
-    msg = build_premarket_msg(date_str, dec, latest_watchlist())
+    wl_file = latest_watchlist()
+    msg = build_premarket_msg(date_str, dec, wl_file)
+    wl_data = _read_json(wl_file) if wl_file else None
+    try:
+        _today = dt.date.fromisoformat(date_str)
+    except ValueError:
+        _today = dt.date.today()
+    if wl_data is not None and not _watchlist_is_fresh(wl_data, _today):
+        msg = (
+            f"⚠️ Watchlist устарел ({wl_data.get('date')}) — вечерний прогон не отработал; "
+            "OPEN-сигналы сегодня НЕ придут, ордера по нему не ставить.\n\n" + msg
+        )
     # Surface a missing TradingView Desktop IMMEDIATELY: without it the heat
     # refresh above and tonight's screen/alert sync will not work.
     if not args.dry_run and not tv_available():
@@ -1175,6 +1211,8 @@ def _sync_tv_alerts(wl: dict, args) -> str:
         f"⏰ Алерты TV: +{res['created']} новых, −{res['deleted']} устаревших, "
         f"без изменений {res['kept']}"
     )
+    if res.get("not_found_in_ui"):
+        line += f", не найдено в UI {res['not_found_in_ui']} (удали вручную)"
     if res["errors"]:
         line += f", ошибок {res['errors']}"
         log("alert sync errors: " + "; ".join(res["error_details"]), logging.WARNING)
@@ -1537,21 +1575,73 @@ def _write_watchlist(wl: dict, date_str: str, args) -> Path:
     return wl_path
 
 
-def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
-    """Deterministic screen -> plan -> hybrid validation -> watchlist + theses."""
-    vcp = run_skill_script(
-        [VCP_SCREEN_SCRIPT, "--top", "10"],
-        label="vcp-screener (top 10)",
+def _ingest_theses(
+    source: str, input_path: Path, wl: dict, wl_path: Path, date_str: str, args,
+    *, plan_path: Path | None = None,
+) -> None:
+    """Register watchlist candidates as theses and inject thesis_id back into
+    the watchlist (the intraday OPEN signal embeds the journal commands)."""
+    ids_output_path = SCHEDULE_DIR / f"thesis_ids_{date_str}.json"
+    ingest_cmd = [
+        TRADER_MEMORY_CLI, "ingest",
+        "--source", source,
+        "--input", str(input_path),
+        "--watchlist-filter", str(wl_path),
+        "--ids-output", str(ids_output_path),
+    ]
+    if plan_path:
+        ingest_cmd += ["--plan-input", str(plan_path)]
+    run_skill_script(
+        ingest_cmd,
+        label=f"thesis-ingest ({source})",
         dry_run=args.dry_run,
         timeout=args.timeout,
-        output_glob=(SCREENERS_DIR, "vcp_screener_*.json"),
     )
+    ticker_to_tid = _read_json(ids_output_path) if ids_output_path.exists() else {}
+    if ticker_to_tid:
+        for cand in wl.get("candidates") or []:
+            tid = ticker_to_tid.get(str(cand.get("ticker", "")).upper())
+            if tid:
+                cand["thesis_id"] = tid
+        wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
+        log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
+
+
+def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
+    """Deterministic screen -> plan -> hybrid validation -> watchlist + theses."""
+    # Heat FIRST (cheap, local): without the ledger the planner would assume a
+    # zero-risk baseline and silently ignore the 6% heat ceiling with real
+    # positions open. No heat -> no new risk (fail-safe), and we skip the
+    # expensive screen entirely.
     heat = run_skill_script(
         [TRADER_MEMORY_CLI, "heat"],
         label="portfolio-heat",
         dry_run=args.dry_run,
         timeout=args.timeout,
         output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
+    )
+    if heat is None and not args.dry_run:
+        log(
+            "portfolio-heat недоступен — лонг-пайплайн пропущен "
+            "(fail-safe: без heat-леджера новый риск не планируем)",
+            logging.ERROR,
+        )
+        wl = tsig.build_watchlist(
+            date_str, "allow", None, None, None,
+            notes="heat-отчёт не построился — скрин пропущен, новый риск заблокирован (fail-safe)",
+        )
+        wl_path = _write_watchlist(wl, date_str, args)
+        return wl_path, wl, (
+            "⚠️ heat-отчёт не построился — скрин и планирование пропущены, "
+            "новый риск заблокирован (fail-safe). Проверь trader_memory_cli heat вручную."
+        )
+
+    vcp = run_skill_script(
+        [VCP_SCREEN_SCRIPT, "--top", "10"],
+        label="vcp-screener (top 10)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(SCREENERS_DIR, "vcp_screener_*.json"),
     )
     plan_path = None
     if vcp:
@@ -1578,30 +1668,7 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
     )
     wl_path = _write_watchlist(wl, date_str, args)
     if vcp and not args.dry_run:
-        ids_output_path = SCHEDULE_DIR / f"thesis_ids_{date_str}.json"
-        ingest_cmd = [
-            TRADER_MEMORY_CLI, "ingest",
-            "--source", "vcp-screener",
-            "--input", str(vcp),
-            "--watchlist-filter", str(wl_path),
-            "--ids-output", str(ids_output_path),
-        ]
-        if plan_path:
-            ingest_cmd += ["--plan-input", str(plan_path)]
-        run_skill_script(
-            ingest_cmd,
-            label="thesis-ingest (trader-memory-core)",
-            dry_run=args.dry_run,
-            timeout=args.timeout,
-        )
-        ticker_to_tid = _read_json(ids_output_path) if ids_output_path.exists() else {}
-        if ticker_to_tid:
-            for cand in wl.get("candidates") or []:
-                tid = ticker_to_tid.get(str(cand.get("ticker", "")).upper())
-                if tid:
-                    cand["thesis_id"] = tid
-            wl_path.write_text(json.dumps(wl, indent=2, ensure_ascii=False), encoding="utf-8")
-            log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
+        _ingest_theses("vcp-screener", vcp, wl, wl_path, date_str, args, plan_path=plan_path)
     wl = _auto_analyze_reconcile(wl, wl_path, date_str, args)
     return wl_path, wl, _validation_note(wl, validation)
 
@@ -1762,6 +1829,16 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
         )
         return 1
 
+    # Fresh heat snapshot (mirrors the long branch): tomorrow's intraday
+    # monitor needs today's open positions and the capacity budget.
+    run_skill_script(
+        [TRADER_MEMORY_CLI, "heat"],
+        label="portfolio-heat (short branch)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
+    )
+
     short_path = run_skill_script(
         # --full-sp500: without it the screener caps the universe at its default
         # --max-candidates 100, i.e. the first ~100 constituents alphabetically.
@@ -1795,6 +1872,8 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
         source_plan=_rel(short_path) if short_path else None,
     )
     wl_path = _write_watchlist(wl, date_str, args)
+    if short_path and not args.dry_run:
+        _ingest_theses("swing-short-screener", short_path, wl, wl_path, date_str, args)
     msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
     if earnings_note:
         msg += f"\n\n{earnings_note}"
@@ -1872,6 +1951,17 @@ def slot_intraday(date_str: str, args) -> int:
 
     wl_path = latest_watchlist()
     wl = _read_json(wl_path) if wl_path else None
+    try:
+        _today = dt.date.fromisoformat(date_str)
+    except ValueError:
+        _today = dt.date.today()
+    if wl is not None and not _watchlist_is_fresh(wl, _today):
+        log(
+            f"intraday: watchlist {wl.get('date')!r} устарел (старше прошлого торгового "
+            "дня) — OPEN-сигналы не армируются, мониторим только открытые позиции",
+            logging.WARNING,
+        )
+        wl = None
     heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
     heat = _read_json(heat_path) if heat_path else None
     dec = read_decision(decision_path(date_str))

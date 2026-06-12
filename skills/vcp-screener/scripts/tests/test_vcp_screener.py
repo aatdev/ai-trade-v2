@@ -211,6 +211,33 @@ class TestTrendTemplate:
         c3 = result["criteria"].get("c3_sma200_trending_up", {})
         assert "Cannot verify" not in c3.get("detail", "")
 
+    def test_rs_below_70_is_a_hard_fail(self):
+        """Plan checklist 5.3: RS > 70 is mandatory — a 6/7 raw score with
+        failed RS must not pass the gate."""
+        prices = _make_prices(250, start=80, daily_change=0.001)
+        quote = {"price": 120, "yearHigh": 125, "yearLow": 70}
+        good = calculate_trend_template(prices, quote, rs_rank=85)
+        weak = calculate_trend_template(prices, quote, rs_rank=40)
+        assert good["passed"] is True
+        assert weak["passed"] is False
+        assert weak["hard_gates"]["rs_above_70"] is False
+
+    def test_missing_rs_degrades_to_soft_gate(self):
+        """SPY-failure path: rs_rank=None must not blank the whole screen."""
+        prices = _make_prices(250, start=80, daily_change=0.001)
+        quote = {"price": 120, "yearHigh": 125, "yearLow": 70}
+        result = calculate_trend_template(prices, quote, rs_rank=None)
+        assert result["hard_gates"]["rs_above_70"] is None
+        assert result["passed"] is True  # 6/7 raw clears 85; RS data missing
+
+    def test_ma_chain_is_a_hard_gate(self):
+        """price > SMA50 > SMA200 is mandatory (plan checklist 5.3)."""
+        prices = _make_prices(250, start=120, daily_change=-0.001)  # decline
+        quote = {"price": 90, "yearHigh": 125, "yearLow": 85}
+        result = calculate_trend_template(prices, quote, rs_rank=85)
+        assert result["hard_gates"]["ma_chain_price_sma50_sma200"] is False
+        assert result["passed"] is False
+
 
 # ===========================================================================
 # Volume Pattern Tests
@@ -2087,6 +2114,22 @@ def test_prefilter_score_capped_at_100():
     assert passed is True
     # pct_above_low = 2.0, capped at 1.0 → 50 + (1 - 0.032) * 50 ≈ 98.4
     assert score <= 100
+
+
+def test_prefilter_enforces_price_and_dollar_volume_floors():
+    """Plan checklist 5.3: price >= $15 and >= $25M/day dollar volume."""
+    # sub-$15 price
+    assert pre_filter_stock(
+        {"price": 12.0, "yearLow": 8.0, "yearHigh": 13.0, "avgVolume": 5_000_000}
+    )[0] is False
+    # $20 × 200k shares = $4M/day — below the $25M dollar floor
+    assert pre_filter_stock(
+        {"price": 20.0, "yearLow": 12.0, "yearHigh": 22.0, "avgVolume": 200_000}
+    )[0] is False
+    # $100 × 300k = $30M/day — passes
+    assert pre_filter_stock(
+        {"price": 100.0, "yearLow": 60.0, "yearHigh": 105.0, "avgVolume": 300_000}
+    )[0] is True
 
 
 def test_below_stop_report_shows_stop_violated():

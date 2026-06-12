@@ -50,8 +50,10 @@ _US_EASTERN = ZoneInfo("America/New_York")
 DEFAULT_CHASE_PCT = 2.0
 # "Approaching stop" early-warning band (percent of the stop level).
 NEAR_STOP_BAND_PCT = 1.0
-# Short side risks half of the long per-trade risk (trading plan step 6.3).
+# Per-trade risk (% of account) for short sizing and for the conservative
+# capacity reserve of unsized candidates (profile risk_pct mirrors this).
 SHORT_RISK_PCT = 1.0
+DEFAULT_RISK_PCT = 1.0
 SHORT_MAX_POSITION_PCT = 25.0
 
 # Plan rule 6.4: NEVER hold a short through earnings. Under the 10-trading-day
@@ -507,7 +509,13 @@ def evaluate_signals(
         if not signal or signal["key"] in sent:
             continue
         if signal["type"] in (OPEN_LONG, OPEN_SHORT):
-            risk = candidate.get("risk_dollars") or 0
+            risk = candidate.get("risk_dollars")
+            if risk is None:
+                # Unsized candidate (e.g. a revalidation advisory): reserve a
+                # full per-trade risk budget instead of slipping through the
+                # heat gate for free while still taking a position slot.
+                account = (heat or {}).get("account_size") or 0
+                risk = account * DEFAULT_RISK_PCT / 100
             no_slot = slots_left is not None and slots_left <= 0
             no_heat = heat_left is not None and risk > heat_left
             if no_slot or no_heat:

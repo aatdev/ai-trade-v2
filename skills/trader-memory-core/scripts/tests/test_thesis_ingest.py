@@ -786,6 +786,72 @@ def test_repeat_ticker_reuse_never_touches_active_thesis(tmp_path: Path):
     assert thesis["exit"]["stop_loss"] == 47.0  # untouched
 
 
+def _short_record(symbol: str, entry: float, stop: float, target: float) -> dict:
+    return {
+        "candidates": [
+            {
+                "symbol": symbol,
+                "name": symbol,
+                "sector": "Technology",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": entry, "stop": stop, "stop_pct": 4.0,
+                                 "target_2r": target},
+            }
+        ]
+    }
+
+
+def test_ingest_swing_short_creates_short_thesis(tmp_path: Path):
+    """swing-short-screener candidate → SHORT thesis with screener levels."""
+    state_dir = tmp_path / "theses"
+    f = _write_json(tmp_path, _short_record("NFLX", 245.0, 260.0, 215.0), "s.json")
+    ids = thesis_ingest.ingest("swing-short-screener", f, str(state_dir))
+    assert len(ids) == 1
+    thesis = thesis_store.get(state_dir, ids[0])
+    assert thesis["side"] == "short"
+    assert thesis["thesis_type"] == "pivot_breakout"
+    assert thesis["entry"]["target_price"] == 245.0
+    assert thesis["exit"]["stop_loss"] == 260.0
+    assert thesis["exit"]["take_profit"] == 215.0
+    assert thesis["origin"]["screening_grade"] == "A"
+
+
+def test_long_and_short_theses_for_same_ticker_coexist(tmp_path: Path):
+    """A short ingest must never reuse an open LONG thesis for the ticker."""
+    state_dir = tmp_path / "theses"
+    f_long = _write_json(tmp_path, _vcp_record("NVDA", "2026-06-11"), "l.json")
+    ids_long = thesis_ingest.ingest("vcp-screener", f_long, str(state_dir))
+
+    f_short = _write_json(tmp_path, _short_record("NVDA", 150.0, 158.0, 134.0), "s.json")
+    ids_short = thesis_ingest.ingest("swing-short-screener", f_short, str(state_dir))
+
+    assert ids_long[0] != ids_short[0]
+    assert thesis_store.get(state_dir, ids_short[0])["side"] == "short"
+
+    # ...and a repeat short ingest reuses the SHORT thesis, not the long one.
+    f_short2 = _write_json(tmp_path, _short_record("NVDA", 149.0, 156.0, 135.0), "s2.json")
+    ids_short2 = thesis_ingest.ingest("swing-short-screener", f_short2, str(state_dir))
+    assert ids_short2[0] == ids_short[0]
+
+
+def test_short_reuse_refreshes_screener_levels_without_plan(tmp_path: Path):
+    """Pre-entry short reuse adopts the fresh screener trade_levels (the short
+    branch has no breakout plan; levels come from the adapter itself)."""
+    state_dir = tmp_path / "theses"
+    f1 = _write_json(tmp_path, _short_record("ADBE", 218.8, 275.4, 105.5), "d1.json")
+    ids1 = thesis_ingest.ingest("swing-short-screener", f1, str(state_dir))
+
+    f2 = _write_json(tmp_path, _short_record("ADBE", 210.0, 218.5, 193.0), "d2.json")
+    ids2 = thesis_ingest.ingest("swing-short-screener", f2, str(state_dir))
+
+    assert ids1 == ids2
+    thesis = thesis_store.get(state_dir, ids1[0])
+    assert thesis["exit"]["stop_loss"] == 218.5
+    assert thesis["exit"]["take_profit"] == 193.0
+    assert thesis["entry"]["target_price"] == 210.0
+
+
 def test_repeat_ticker_creates_new_thesis_after_closed(tmp_path: Path):
     """If the previous thesis is CLOSED, a new one should be created on
     the next ingest — the trade cycle reset."""

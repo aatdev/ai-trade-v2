@@ -92,6 +92,15 @@ class TestDecideAction:
         action, _ = ap.decide_action(_at("16:00"), state)
         assert action == "intraday"
 
+    def test_slot_timeout_budget_scales_for_evening_prep(self):
+        flat = ap.slot_timeout_budget("premarket", 1800)
+        evening = ap.slot_timeout_budget("evening-prep", 1800)
+        weekly = ap.slot_timeout_budget("weekly", 1800)
+        assert flat == 1800 * 2 + 300
+        # evening must at least fit the regime retry + all auto ticker analyses
+        assert evening >= 1800 * 4 + ap.schedule.AUTO_ANALYZE_TOP_N * ap.schedule.TICKER_ANALYSIS_TIMEOUT_S
+        assert weekly > flat
+
     def test_intraday_tolerates_cron_jitter(self):
         # The run stamps last_at a second after the cron tick (15:45:01); the
         # next tick at 16:00:00 sees 14m59s elapsed. A strict `< 15` check

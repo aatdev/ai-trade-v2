@@ -634,6 +634,7 @@ class TestEveningHybrid:
         short_candidates=None,
         tv_up=True,
         quotes_map=None,
+        heat_ok=True,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
         _write_json(tmp_path / "trading_profile.json", {"account_size": 150000})
@@ -656,7 +657,7 @@ class TestEveningHybrid:
                     tmp_path / "screeners" / "vcp_screener_2026-06-11_221000.json", {"results": []}
                 )
             if "heat" in label:
-                return _heat_file(tmp_path)
+                return _heat_file(tmp_path) if heat_ok else None
             if "planner" in label:
                 return plan_path
             if "short" in label:
@@ -715,6 +716,19 @@ class TestEveningHybrid:
         assert wl["candidates"][0]["shares"] == 380
         assert sent and "NVDA" in sent[0]
 
+    def test_heat_failure_blocks_long_pipeline_fail_safe(self, monkeypatch, tmp_path):
+        """No heat ledger → the planner would assume a zero-risk baseline with
+        real positions open. Fail-safe: skip the screen, block new risk."""
+        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="allow", heat_ok=False)
+        assert rc == 0
+        assert not any("vcp" in c for c in calls)
+        assert not any("planner" in c for c in calls)
+        wl = json.loads(
+            (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
+        )
+        assert wl["candidates"] == []
+        assert any("fail-safe" in m for m in sent)
+
     def test_validation_reject_drops_candidate(self, monkeypatch, tmp_path):
         validation = {
             "date": "2026-06-11",
@@ -751,8 +765,12 @@ class TestEveningHybrid:
         )
         assert rc == 0
         assert any("short" in c for c in calls)
-        short_cmd = next(v for k, v in self.script_cmds.items() if "short" in k)
+        assert any("heat" in c for c in calls)  # fresh ledger for tomorrow's monitor
+        assert any("ingest" in c for c in calls)  # shorts register theses too
+        short_cmd = next(v for k, v in self.script_cmds.items() if "swing-short-screener" in k)
         assert "--full-sp500" in short_cmd  # full universe, not the first 100 names
+        ingest_cmd = next(v for k, v in self.script_cmds.items() if "ingest" in k)
+        assert "swing-short-screener" in ingest_cmd
         wl = json.loads(
             (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
         )
@@ -818,6 +836,69 @@ class TestEveningHybrid:
         rc, calls, _ = self._run(monkeypatch, tmp_path, decision="restrict", market_top=market_top)
         assert rc == 0
         assert not any("short" in c for c in calls)
+
+
+# --------------------------------------------------------------------------- #
+# Watchlist freshness (stale lists must not arm OPEN signals)
+# --------------------------------------------------------------------------- #
+class TestWatchlistFreshness:
+    def test_today_and_prev_trading_day_are_fresh(self):
+        today = dt.date(2026, 6, 11)  # Thursday
+        assert ts._watchlist_is_fresh({"date": "2026-06-11"}, today) is True
+        assert ts._watchlist_is_fresh({"date": "2026-06-10"}, today) is True
+        assert ts._watchlist_is_fresh({"date": "2026-06-09"}, today) is False
+
+    def test_monday_accepts_friday_list(self):
+        monday = dt.date(2026, 6, 8)
+        assert ts._watchlist_is_fresh({"date": "2026-06-05"}, monday) is True
+        assert ts._watchlist_is_fresh({"date": "2026-06-04"}, monday) is False
+
+    def test_bad_or_missing_date_is_stale(self):
+        today = dt.date(2026, 6, 11)
+        assert ts._watchlist_is_fresh({}, today) is False
+        assert ts._watchlist_is_fresh({"date": "junk"}, today) is False
+        assert ts._watchlist_is_fresh(None, today) is False
+
+    def test_intraday_stale_watchlist_does_not_arm_open_signals(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _write_json(
+            tmp_path / "schedule" / "watchlist_2026-06-08.json",
+            {"date": "2026-06-08", "candidates": [_NVDA_CANDIDATE]},
+        )
+        _heat_file(
+            tmp_path,
+            positions=[{"ticker": "AAPL", "entry_price": 100.0, "shares": 100, "stop_loss": 95.0}],
+        )
+        monkeypatch.setattr(
+            ts.tsig,
+            "fetch_quotes",
+            lambda tickers, **k: {"NVDA": {"price": 156.0}, "AAPL": {"price": 94.0}},
+        )
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert sent and "AAPL" in sent[0]  # open positions still managed
+        assert "ОТКРОЙ ЛОНГ NVDA" not in sent[0]  # stale levels never fire entries
+
+    def test_premarket_warns_on_stale_watchlist(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "schedule" / "watchlist_2026-06-08.json",
+            {"date": "2026-06-08", "candidates": []},
+        )
+        monkeypatch.setattr(ts, "run_skill_script", lambda *a, **k: None)
+        monkeypatch.setattr(
+            ts, "run_regime_gate",
+            lambda *a, **k: (True, {"decision": "allow", "rationale": "x"}),
+        )
+        monkeypatch.setattr(ts, "tv_available", lambda **k: True)
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "premarket", "--date", "2026-06-11", "--no-telegram"])
+        assert rc == 0
+        assert sent and "Watchlist устарел" in sent[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -1108,6 +1189,37 @@ def test_open_long_signal_embeds_working_journal_commands(monkeypatch, tmp_path)
     assert rc == 0
     assert sent and "store transition th_abc ENTRY_READY" in sent[0]
     assert "%:z" not in sent[0]
+
+
+def test_open_short_signal_embeds_journal_commands(monkeypatch, tmp_path):
+    """Shorts get the same copy-paste journal commands as longs once the short
+    branch registers theses."""
+    _patch_trading_dirs(monkeypatch, tmp_path)
+    _gate(tmp_path, "2026-06-11", "restrict")
+    short_cand = {
+        "ticker": "NFLX",
+        "side": "short",
+        "setup": "Stage 4 (grade A)",
+        "pivot": 245.0,
+        "worst_entry": 240.1,
+        "stop": 260.0,
+        "target": 215.0,
+        "shares": 100,
+        "risk_dollars": 1500.0,
+        "score": 82.5,
+        "thesis_id": "th_nflx_pvt_20260611_cd34",
+    }
+    _watchlist_file(tmp_path, "2026-06-11", [short_cand])
+    _heat_file(tmp_path)
+    monkeypatch.setattr(ts.tsig, "fetch_quotes", lambda tickers, **k: {"NFLX": {"price": 244.0}})
+    sent = []
+    monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+
+    rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+    assert rc == 0
+    assert sent and "ОТКРОЙ ШОРТ NFLX" in sent[0]
+    assert "store transition th_nflx_pvt_20260611_cd34 ENTRY_READY" in sent[0]
+    assert "store open-position th_nflx_pvt_20260611_cd34" in sent[0]
 
 
 # --------------------------------------------------------------------------- #

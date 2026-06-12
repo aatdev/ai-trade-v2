@@ -44,6 +44,9 @@ from risk_calculator import (
 
 ACCEPTED_INPUT_VERSIONS = {"1.0"}
 MAX_RISK_PCT = 8.0
+# Screener ratings that may become actionable orders; anything else (e.g.
+# "Developing VCP" from a state cap / wide-and-loose cap) is watch-only.
+BUYABLE_RATINGS = {"Textbook VCP", "Strong VCP", "Good VCP"}
 
 # Parameter-profile keys shared across the trading scripts. Keys outside this
 # union trigger a warning (typo guard); keys inside it that a given script does
@@ -275,6 +278,16 @@ def process_candidate(
         "execution_state": execution_state,
     }
 
+    # Respect the screener's caps: state cap and wide-and-loose live only in
+    # the rating STRING — the numeric composite ignores them, so re-deriving
+    # the band from the number silently promotes "do not buy" patterns to
+    # fully sized actionable orders. Absent rating (older outputs) = no gate.
+    rating = result.get("rating")
+    if rating is not None and rating not in BUYABLE_RATINGS:
+        if execution_state == "Pre-breakout" and valid_vcp:
+            return _watchlist(base_output, pivot, stop_loss)
+        return _reject(symbol, f"screener rating '{rating}' is capped below buyable")
+
     # --- Pre-breakout path ---
     if execution_state == "Pre-breakout":
         plan_eligible = (
@@ -328,7 +341,10 @@ def process_candidate(
         )
 
         if plan_eligible:
-            advisory = build_revalidation_advisory(symbol, pivot, current_price, worst_entry)
+            advisory = build_revalidation_advisory(
+                symbol, pivot, current_price, worst_entry,
+                stop_loss=stop_loss, target_price=tp_worst,
+            )
             advisory.update(base_output)
             advisory["decision_code"] = "REVALIDATION_BREAKOUT"
             advisory["risk_pct_worst"] = risk_pct_worst

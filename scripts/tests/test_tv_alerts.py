@@ -204,3 +204,41 @@ class TestSync:
         res = ta.purge_watchlist_alerts([], tmp_path / "s.json", project_root=tmp_path)
         assert calls == []
         assert res["deleted"] == 0
+
+    def test_sync_keeps_dropped_tickers_in_state_on_error(self, monkeypatch, tmp_path):
+        """A failed purge must be retried next sync — dropping the ticker from
+        state would orphan its [WL] alerts in TradingView forever."""
+        responses = [
+            {"error": "TradingView wedged mid-run"},  # purge of OLD1 fails
+            {"summary": {"deleted": 0, "kept": 3, "errors": 0}},
+            {"summary": {"created": 0, "skipped": 3, "errors": 0}},
+        ]
+        self._capture_node(monkeypatch, responses)
+        state_path = tmp_path / "alerts_state.json"
+        state_path.write_text(json.dumps({"tickers": ["OLD1", "NVDA"]}))
+        res = ta.sync_watchlist_alerts(wl([long_candidate()]), state_path, project_root=tmp_path)
+        assert res["errors"] >= 1
+        state = json.loads(state_path.read_text())
+        assert "OLD1" in state["tickers"]  # not forgotten
+        assert "NVDA" in state["tickers"]
+
+    def test_purge_keeps_state_on_error(self, monkeypatch, tmp_path):
+        responses = [{"error": "CDP timeout"}]
+        self._capture_node(monkeypatch, responses)
+        state_path = tmp_path / "alerts_state.json"
+        state_path.write_text(json.dumps({"tickers": ["NVDA", "AAPL"]}))
+        res = ta.purge_watchlist_alerts(["NVDA"], state_path, project_root=tmp_path)
+        assert res["errors"] == 1
+        state = json.loads(state_path.read_text())
+        assert state["tickers"] == ["NVDA", "AAPL"]  # untouched, retried next time
+
+    def test_not_found_in_ui_accumulated(self, monkeypatch, tmp_path):
+        responses = [
+            {"summary": {"deleted": 1, "kept": 0, "not_found_in_ui": 2, "errors": 0}},
+            {"summary": {"created": 3, "skipped": 0, "errors": 0}},
+        ]
+        self._capture_node(monkeypatch, responses)
+        res = ta.sync_watchlist_alerts(
+            wl([long_candidate()]), tmp_path / "s.json", project_root=tmp_path
+        )
+        assert res["not_found_in_ui"] == 2
