@@ -283,6 +283,16 @@ export interface TickerAnalysisResponse {
   charts: string[]; // timeframes available, e.g. ["daily","weekly"]
 }
 
+/** GET /api/analysis/tickers — which tickers already have saved analysis. */
+export interface AnalysisIndexEntry {
+  latest: string | null;
+  count: number;
+}
+
+export interface AnalysisIndexResponse {
+  tickers: Record<string, AnalysisIndexEntry>;
+}
+
 /* ---------------- Actions / jobs ---------------- */
 
 export type SchedulerSlot = 'premarket' | 'evening-prep' | 'intraday' | 'weekly' | 'monthly';
@@ -301,6 +311,7 @@ export interface JobSummary {
   startedAt: number;
   endedAt: number | null;
   exitCode: number | null;
+  meta?: Record<string, unknown>;
 }
 
 export interface JobDetail extends JobSummary {

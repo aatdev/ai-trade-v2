@@ -80,6 +80,16 @@ describe('GET /api/theses', () => {
   });
 });
 
+describe('GET /api/analysis/tickers', () => {
+  it('lists tickers that have saved analysis with their latest date', async () => {
+    const res = await request(app).get('/api/analysis/tickers');
+    expect(res.status).toBe(200);
+    expect(res.body.tickers.AAPL).toEqual({ latest: '2026-06-11', count: 1 });
+    // signals.md is a file, not a ticker dir — must not appear
+    expect(Object.keys(res.body.tickers)).not.toContain('signals');
+  });
+});
+
 describe('GET /api/profile & /api/signals', () => {
   it('reads the profile and signals journal', async () => {
     const profile = await request(app).get('/api/profile');

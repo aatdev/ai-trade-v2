@@ -21,6 +21,22 @@ describe('POST /api/actions/delete-alerts', () => {
   });
 });
 
+describe('POST /api/actions/analyze-ticker', () => {
+  it('rejects an invalid ticker before spawning claude', async () => {
+    const res = await request(app).post('/api/actions/analyze-ticker').send({ ticker: 'not a ticker!' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
+describe('POST /api/actions/jobs/:id/cancel', () => {
+  it('409 for an unknown / non-running job', async () => {
+    const res = await request(app).post('/api/actions/jobs/nope/cancel');
+    expect(res.status).toBe(409);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
 describe('ticker routes guard against traversal', () => {
   it('rejects an invalid symbol', async () => {
     const res = await request(app).get('/api/ticker/A_B%2F..');

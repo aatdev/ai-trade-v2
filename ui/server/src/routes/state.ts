@@ -1,6 +1,7 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { Router } from 'express';
-import { basename, findLatest, listDates, readJson, readText, tailLines } from '../lib/files';
+import { basename, findLatest, listDates, listDir, readJson, readText, tailLines } from '../lib/files';
 import { deleteSignal, parseSignalBlocks, signalsFile } from '../lib/signals';
 import {
   RE,
@@ -110,6 +111,27 @@ export function stateRouter(dataDir: string): Router {
     const result = deleteSignal(dataDir, ticker, date);
     if (!result.found) return res.status(404).json({ error: 'signal not found', ...result });
     return res.json(result);
+  });
+
+  r.get('/analysis/tickers', (_req, res) => {
+    const dir = path.join(dataDir, 'analysis');
+    const tickers: Record<string, { latest: string | null; count: number }> = {};
+    for (const name of listDir(dir)) {
+      if (!TICKER_RE.test(name)) continue;
+      const sub = path.join(dir, name);
+      let dates: string[] = [];
+      try {
+        if (!fs.statSync(sub).isDirectory()) continue;
+        dates = listDir(sub).filter((d) => DATE_RE.test(d));
+      } catch {
+        continue;
+      }
+      if (dates.length > 0) {
+        dates.sort();
+        tickers[name.toUpperCase()] = { latest: dates[dates.length - 1], count: dates.length };
+      }
+    }
+    res.json({ tickers });
   });
 
   r.get('/profile', (_req, res) => {

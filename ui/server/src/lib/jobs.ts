@@ -12,6 +12,10 @@ export interface StartOptions {
   cwd: string;
   /** Run through `bash -c <single string>` (only for fixed, input-free commands). */
   shell?: boolean;
+  /** Extra env merged over process.env for this job. */
+  env?: NodeJS.ProcessEnv;
+  /** Arbitrary metadata surfaced in the jobs list (e.g. { kind, ticker }). */
+  meta?: Record<string, unknown>;
 }
 
 interface InternalJob {
@@ -25,6 +29,7 @@ interface InternalJob {
   exitCode: number | null;
   lines: JobLogLine[];
   proc: ChildProcess | null;
+  meta?: Record<string, unknown>;
 }
 
 type Subscriber = (line: JobLogLine) => void;
@@ -59,6 +64,7 @@ export class JobManager {
       exitCode: null,
       lines: [],
       proc: null,
+      meta: opts.meta,
     };
     this.jobs.set(id, job);
     this.order.push(id);
@@ -73,7 +79,7 @@ export class JobManager {
     try {
       proc = spawn(spawnCmd, spawnArgs, {
         cwd: opts.cwd,
-        env: process.env,
+        env: opts.env ? { ...process.env, ...opts.env } : process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch (err) {
@@ -161,6 +167,15 @@ export class JobManager {
     };
   }
 
+  /** Request termination of a running job. Returns false if not running. */
+  cancel(id: string): boolean {
+    const job = this.jobs.get(id);
+    if (!job || job.status !== 'running' || !job.proc) return false;
+    this.append(job, 'system', 'cancellation requested (SIGTERM)');
+    job.proc.kill('SIGTERM');
+    return true;
+  }
+
   private toSummary(job: InternalJob): JobSummary {
     return {
       id: job.id,
@@ -169,6 +184,7 @@ export class JobManager {
       startedAt: job.startedAt,
       endedAt: job.endedAt,
       exitCode: job.exitCode,
+      meta: job.meta,
     };
   }
 

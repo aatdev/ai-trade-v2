@@ -1,9 +1,14 @@
 import { Router } from 'express';
+import { ANALYZE_MODEL, resolveMcpConfigPath } from '../config';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
 
 const SLOTS = new Set<SchedulerSlot>(['premarket', 'evening-prep', 'intraday', 'weekly', 'monthly']);
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
+
+function resolveClaudeBin(): string {
+  return process.env.CLAUDE_BIN || 'claude';
+}
 
 export function actionsRouter(projectRoot: string, jobs: JobManager): Router {
   const r = Router();
@@ -82,8 +87,65 @@ export function actionsRouter(projectRoot: string, jobs: JobManager): Router {
     });
   });
 
+  r.post('/actions/analyze-ticker', (req, res) => {
+    const ticker = String(req.body?.ticker ?? '').toUpperCase().trim();
+    if (!TICKER_RE.test(ticker)) {
+      const body: StartJobResponse = { ok: false, error: `invalid ticker: ${String(req.body?.ticker)}` };
+      return res.status(400).json(body);
+    }
+    const perm = process.env.TRADING_SCHEDULE_PERMISSION_MODE || 'bypassPermissions';
+    const createAlerts = req.body?.createAlerts === true;
+    const saveToNotes = req.body?.saveToNotes === true;
+    const parts = [
+      `Проанализируй тикер ${ticker}: запусти скил ticker-analysis — полный комплексный анализ`,
+      `(новости, фундаментал, технический анализ через TradingView MCP). Сохрани четыре markdown-файла`,
+      `и daily/weekly скриншоты в trading-data/analysis/${ticker}/.`,
+      createAlerts
+        ? `После анализа СОЗДАЙ алерты в TradingView по приоритетному сценарию (Trigger / Stop / T1 / T2 / T3) — используй скил signals-alerts.`
+        : `Алерты в TradingView НЕ создавай.`,
+    ];
+    if (saveToNotes) {
+      parts.push(
+        `Также СОХРАНИ итоговый отчёт в личную базу MyNotes через скил save-note (подкаталог «Анализ-тикеров/${ticker}»).`,
+      );
+    }
+    const prompt = parts.join(' ');
+    // Run on Opus 4.8; stream events so the UI shows live progress (each step).
+    const args = [
+      '-p',
+      prompt,
+      '--permission-mode',
+      perm,
+      '--model',
+      ANALYZE_MODEL,
+      '--output-format',
+      'stream-json',
+      '--verbose',
+    ];
+    // Load the vendored TradingView MCP server so the skill gets mcp__tradingview__*.
+    // --strict-mcp-config => only this server (deterministic; ignores whatever
+    // other MCP servers the user has configured). Built-in tools/skills are
+    // unaffected. The tools surface as deferred tools (found via ToolSearch).
+    const mcpConfig = resolveMcpConfigPath(projectRoot);
+    if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+
+    return startAndRespond(res, {
+      label: `analyze ${ticker} (${ANALYZE_MODEL})`,
+      cmd: resolveClaudeBin(),
+      args,
+      cwd: projectRoot,
+      env: { TV_NO_CACHE: '1' },
+      meta: { kind: 'analyze-ticker', ticker, model: ANALYZE_MODEL, createAlerts, saveToNotes },
+    });
+  });
+
   r.get('/actions/jobs', (_req, res) => {
     res.json({ jobs: jobs.list(), active: jobs.active });
+  });
+
+  r.post('/actions/jobs/:id/cancel', (req, res) => {
+    const ok = jobs.cancel(req.params.id);
+    return res.status(ok ? 200 : 409).json({ ok });
   });
 
   r.get('/actions/jobs/:id', (req, res) => {

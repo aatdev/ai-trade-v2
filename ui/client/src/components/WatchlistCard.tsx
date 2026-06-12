@@ -1,10 +1,34 @@
 import { Link } from 'react-router-dom';
-import type { WatchlistCandidate } from '@shared/types';
-import { useWatchlist, type Refetch } from '../api';
+import type { AnalysisIndexEntry, WatchlistCandidate } from '@shared/types';
+import { useAnalysisIndex, useWatchlist, type Refetch } from '../api';
 import { fmtMoney, fmtNum, fmtScore } from '../lib/format';
+import AnalyzeButton from './AnalyzeButton';
 import { Card, Collapsible, Empty, ErrorNote, Loading, SideBadge } from './ui';
 
-function CandidateTable({ rows }: { rows: WatchlistCandidate[] }) {
+type Index = Record<string, AnalysisIndexEntry>;
+
+function AnalysisFlag({ ticker, entry }: { ticker: string; entry?: AnalysisIndexEntry }) {
+  if (!entry) return null;
+  return (
+    <Link
+      to={`/ticker/${ticker}`}
+      className="analysis-flag"
+      title={`Analysis available — latest ${entry.latest} (${entry.count} day${entry.count === 1 ? '' : 's'})`}
+    >
+      📄
+    </Link>
+  );
+}
+
+function CandidateTable({
+  rows,
+  index,
+  withAnalyze,
+}: {
+  rows: WatchlistCandidate[];
+  index: Index;
+  withAnalyze: boolean;
+}) {
   return (
     <div className="scroll-x">
       <table>
@@ -21,13 +45,15 @@ function CandidateTable({ rows }: { rows: WatchlistCandidate[] }) {
             <th>Risk $</th>
             <th>Score</th>
             <th>Val</th>
+            {withAnalyze ? <th style={{ textAlign: 'left' }}>Analysis</th> : null}
           </tr>
         </thead>
         <tbody>
           {rows.map((c) => (
             <tr key={c.ticker}>
               <td className="sym">
-                <Link to={`/ticker/${c.ticker}`}>{c.ticker}</Link>
+                <Link to={`/ticker/${c.ticker}`}>{c.ticker}</Link>{' '}
+                <AnalysisFlag ticker={c.ticker} entry={index[c.ticker.toUpperCase()]} />
               </td>
               <td style={{ textAlign: 'left' }}>
                 <SideBadge side={c.side} />
@@ -51,6 +77,11 @@ function CandidateTable({ rows }: { rows: WatchlistCandidate[] }) {
                   <span className="muted">·</span>
                 )}
               </td>
+              {withAnalyze ? (
+                <td style={{ textAlign: 'left' }}>
+                  <AnalyzeButton ticker={c.ticker.toUpperCase()} />
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>
@@ -61,6 +92,9 @@ function CandidateTable({ rows }: { rows: WatchlistCandidate[] }) {
 
 export default function WatchlistCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
   const { data, isLoading, error } = useWatchlist(date, refetch);
+  const { data: analysisIndex } = useAnalysisIndex(refetch);
+  const index: Index = analysisIndex?.tickers ?? {};
+
   if (isLoading)
     return (
       <Card title="Watchlist">
@@ -91,11 +125,11 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
       {wl.candidates.length === 0 ? (
         <Empty>No candidates.</Empty>
       ) : (
-        <CandidateTable rows={wl.candidates} />
+        <CandidateTable rows={wl.candidates} index={index} withAnalyze />
       )}
       {wl.rejected_by_validation.length > 0 ? (
         <Collapsible label="Rejected by chart validation" count={wl.rejected_by_validation.length}>
-          <CandidateTable rows={wl.rejected_by_validation} />
+          <CandidateTable rows={wl.rejected_by_validation} index={index} withAnalyze={false} />
         </Collapsible>
       ) : null}
     </Card>

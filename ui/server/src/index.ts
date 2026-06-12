@@ -1,5 +1,9 @@
 import { createApp } from './app';
-import { PORT, PROJECT_ROOT, resolveTradingDataDir } from './config';
+import { PORT, PROJECT_ROOT, ensureRuntimePath, loadDotEnv, resolveTradingDataDir } from './config';
+
+// Make spawned claude/skill processes self-sufficient (secrets + executables).
+loadDotEnv(PROJECT_ROOT);
+ensureRuntimePath();
 
 const dataDir = resolveTradingDataDir(PROJECT_ROOT);
 const app = createApp({ dataDir, projectRoot: PROJECT_ROOT });

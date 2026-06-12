@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import type {
+  AnalysisIndexResponse,
   AutopilotResponse,
   DatesResponse,
   DeleteSignalResponse,
@@ -124,12 +125,27 @@ export const useTickerAnalysis = (symbol: string, date: string | null) =>
 export const chartUrl = (symbol: string, date: string, tf: string) =>
   `/api/ticker/${encodeURIComponent(symbol)}/${date}/chart/${tf}`;
 
+export const useAnalysisIndex = (refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['analysisIndex'],
+    queryFn: () => getJSON<AnalysisIndexResponse>('/api/analysis/tickers'),
+    refetchInterval,
+  });
+
 /* ---------------- actions ---------------- */
 
 export const runSlot = (body: { slot: string; dryRun: boolean; force: boolean; noTelegram: boolean }) =>
   postJSON<StartJobResponse>('/api/actions/run-slot', body);
 
 export const syncAlerts = () => postJSON<StartJobResponse>('/api/actions/sync-alerts', {});
+
+export const analyzeTicker = (
+  ticker: string,
+  opts?: { createAlerts?: boolean; saveToNotes?: boolean },
+) => postJSON<StartJobResponse>('/api/actions/analyze-ticker', { ticker, ...opts });
+
+export const cancelJob = (id: string) =>
+  postJSON<{ ok: boolean }>(`/api/actions/jobs/${id}/cancel`, {});
 
 export const deleteAlerts = (tickers: string[]) =>
   postJSON<StartJobResponse>('/api/actions/delete-alerts', { tickers });
