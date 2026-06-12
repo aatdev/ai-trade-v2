@@ -93,13 +93,15 @@ def test_switch_times_out_without_blocking(client, monkeypatch):
 
 
 def test_fetch_bars_uses_switch_then_reads(client, monkeypatch):
-    """End-to-end: _fetch_bars switches via the poll, then returns shaped bars
-    without ever paying a blind settle sleep."""
+    """End-to-end on the LEGACY path (the mocked `_cli` answers the `bars`
+    probe with a non-bars payload, so the client falls back): _fetch_bars
+    switches via the poll, then returns shaped bars without ever paying a
+    blind settle sleep."""
     monkeypatch.setattr(client, "_switch_symbol", lambda sym: True)
 
     bars_payload = {"bars": [{"time": 1700000000 + i * 86400, "open": 1, "high": 2,
                               "low": 0.5, "close": 1.5, "volume": 100} for i in range(250)]}
-    monkeypatch.setattr(client, "_cli", lambda *a, parse=True: bars_payload)
+    monkeypatch.setattr(client, "_cli", lambda *a, parse=True, **kw: bars_payload)
 
     out = client._fetch_bars("AAPL")
     assert len(out) == 250

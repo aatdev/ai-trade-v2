@@ -11,7 +11,12 @@ screeners route their whole data layer through it and need NO FMP key.
 
 This base owns everything skills share:
   - PRICE layer — `tv` CLI plumbing, bar fetching, the metrics-cache fast path,
-    and FMP-shaped get_quote / get_historical_prices / get_batch_*.
+    and FMP-shaped get_quote / get_historical_prices / get_batch_*. Live
+    fetches go through the single-process `tv bars` command (the CLI switches
+    the chart and waits for readiness in-process, one spawn per symbol — or
+    per BATCH_CHUNK symbols for batch calls — instead of 3-4 spawns plus
+    blind settle sleeps); a legacy switch+poll+ohlcv path remains for CLI
+    checkouts that predate `tv bars`.
   - FUNDAMENTAL layer — get_profile / get_income_statement / get_company_profile(s)
     from the TradingView scanner (`tv fundamentals`), no FMP quota.
   - MACRO helpers — get_vix_term_structure, get_treasury_rates (from TVC index
@@ -87,6 +92,20 @@ POLL_INTERVAL = 0.1
 # Trend/RS calculators need a year of history; a stock with fewer daily bars
 # (recent IPO/spin-off) can't be evaluated and is skipped cleanly.
 MIN_BARS = 200
+# How many symbols to pull per `tv bars` invocation in batch prefetch. One
+# process/CDP connection serves the whole chunk (~0.5s/symbol in-process), so
+# the ~1s spawn overhead is amortized chunk-wide. Sized so a worst-case chunk
+# (every symbol burning the CLI's in-process readiness timeout) still finishes
+# within the proportional subprocess timeout below.
+BATCH_CHUNK = 20
+# Per-symbol worst case inside `tv bars` is its ~8s readiness timeout; base
+# covers process spawn + CDP connect retries + JSON payload transfer.
+_BARS_TIMEOUT_BASE = 30
+_BARS_TIMEOUT_PER_SYMBOL = 8
+
+
+def _bars_call_timeout(n_symbols: int) -> int:
+    return _BARS_TIMEOUT_BASE + _BARS_TIMEOUT_PER_SYMBOL * n_symbols
 
 
 class ApiCallBudgetExceeded(Exception):
@@ -172,23 +191,34 @@ class TVClient:
         self.api_calls_made = 0
         self.rate_limit_reached = False
         self._tf_set = False
+        # Tri-state probe for the single-process `tv bars` fast path:
+        # None = not probed yet, True = available, False = CLI predates the
+        # command (every live fetch uses the legacy switch+poll+ohlcv path).
+        self._bars_cmd_ok: Optional[bool] = None
         # Fail fast if the CLI is not reachable.
         self._cli_argv = _resolve_cli()
 
     # ------------------------------------------------------------------ CLI
-    def _cli(self, *args: str, parse: bool = True):
+    def _cli(self, *args: str, parse: bool = True, timeout: float = 40):
         self.api_calls_made += 1
         try:
             out = subprocess.run(
                 [*self._cli_argv, *args],
                 capture_output=True,
                 text=True,
-                timeout=40,
+                timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             print(f"  WARN: tv {' '.join(args)} timed out", file=sys.stderr)
             return None
         if out.returncode != 0:
+            # A CLI checkout that predates `tv bars` rejects it with a plain
+            # "Unknown command" on stderr — remember that so the fast path
+            # stops probing and goes straight to the legacy path. Any other
+            # failure (connection, timeout) is transient and leaves the
+            # tri-state untouched.
+            if args and args[0] == "bars" and "Unknown command" in (out.stderr or ""):
+                self._bars_cmd_ok = False
             return None
         if not parse:
             return out.stdout
@@ -230,14 +260,46 @@ class TVClient:
                 return False
             time.sleep(self.poll_interval)
 
-    def _fetch_bars(self, symbol: str) -> list[dict]:
-        """Switch the chart to `symbol` on the daily timeframe and pull bars.
+    @staticmethod
+    def _bars_batch_results(data) -> Optional[list]:
+        """The `results` list of a parsed `tv bars` payload, or None when the
+        payload is not bars-shaped (failed call, or some other JSON)."""
+        if isinstance(data, dict) and isinstance(data.get("results"), list):
+            return data["results"]
+        return None
 
-        Applies index_remap before the switch (e.g. ^GSPC -> SP:SPX). Returns
-        bars NEWEST FIRST in FMP-compatible dict form, or []."""
-        tv_symbol = self.index_remap.get(symbol, symbol)
+    def _bars_live(self, tv_symbol: str, count: int) -> Optional[list[dict]]:
+        """Raw daily bars (OLDEST FIRST, TradingView shape) for one already
+        index-remapped symbol.
+
+        Fast path: a single `tv bars` invocation — the CLI switches the chart
+        and waits for readiness in-process, so one ~1s process/CDP setup
+        replaces the legacy path's 3-4. A per-symbol failure reported by the
+        CLI (invalid/delisted ticker it already waited out) returns None with
+        NO legacy retry. The legacy path serves CLIs that predate `tv bars`
+        (detected once via the `_bars_cmd_ok` tri-state) and transient CLI
+        failures."""
+        if self._bars_cmd_ok is not False:
+            data = self._cli("bars", tv_symbol, "-n", str(count), timeout=_bars_call_timeout(1))
+            results = self._bars_batch_results(data)
+            if results is not None:
+                self._bars_cmd_ok = True
+                for r in results:
+                    if r.get("symbol") == tv_symbol:
+                        return (r.get("bars") or None) if r.get("success") else None
+                return None
+            if data is not None:
+                # Parseable answer that is not a bars payload — treat the
+                # command as unusable rather than re-probing every symbol.
+                self._bars_cmd_ok = False
+        return self._bars_live_legacy(tv_symbol, count)
+
+    def _bars_live_legacy(self, tv_symbol: str, count: int) -> Optional[list[dict]]:
+        """Pre-`tv bars` live path: one CLI spawn to switch the symbol, spawns
+        to poll the switch, one to pull bars — plus blind settle retries for a
+        cold chart. Kept as the fallback for older CLI checkouts."""
         self._switch_symbol(tv_symbol)
-        data = self._cli("ohlcv", "-n", str(self.bars))
+        data = self._cli("ohlcv", "-n", str(count))
 
         # Chart may still be loading right after a symbol switch — retry twice
         # with a longer settle (a cold chart needs a few seconds).
@@ -245,21 +307,32 @@ class TVClient:
             if data and data.get("bars"):
                 break
             time.sleep(self.settle * 1.5)
-            data = self._cli("ohlcv", "-n", str(self.bars))
+            data = self._cli("ohlcv", "-n", str(count))
         if not data or not data.get("bars"):
+            return None
+        return data["bars"]
+
+    def _fetch_bars(self, symbol: str) -> list[dict]:
+        """Pull daily bars for `symbol` from the live chart.
+
+        Applies index_remap before the fetch (e.g. ^GSPC -> SP:SPX). Returns
+        bars NEWEST FIRST in FMP-compatible dict form, or []."""
+        tv_symbol = self.index_remap.get(symbol, symbol)
+        raw = self._bars_live(tv_symbol, self.bars)
+        if not raw:
             return []
 
         # Skip too-short histories cleanly instead of feeding them into the
         # calculators (which crash on a None SMA). An empty history reads as
         # "skip symbol" to every screener.
-        if len(data["bars"]) < self.min_bars:
+        if len(raw) < self.min_bars:
             print(
-                f"  SKIP {symbol}: only {len(data['bars'])} daily bars (<{self.min_bars})",
+                f"  SKIP {symbol}: only {len(raw)} daily bars (<{self.min_bars})",
                 file=sys.stderr,
             )
             return []
 
-        return self._shape_bars(data["bars"])
+        return self._shape_bars(raw)
 
     @staticmethod
     def _shape_bars(raw: list[dict]) -> list[dict]:
@@ -366,7 +439,66 @@ class TVClient:
         self.cache[cache_key] = result
         return result
 
+    def _prefetch_bars(self, symbols: list[str]) -> None:
+        """Bulk-load daily histories for `symbols` into the client cache.
+
+        Symbols already cached (client cache or a fresh metrics snapshot) are
+        skipped; the rest are fetched live in BATCH_CHUNK groups, ONE `tv
+        bars` process per chunk instead of 3-4 spawns per symbol. Per-symbol
+        failures are cached as misses (the CLI already waited them out
+        in-process); a failed chunk SPAWN leaves its symbols uncached so the
+        per-symbol path can retry them. No-op when the CLI lacks `tv bars`."""
+        if self._bars_cmd_ok is False:
+            return
+        todo = []
+        for sym in symbols:
+            if f"hist_{sym}" in self.cache:
+                continue
+            if self._cache_ok and sym not in self.index_remap:
+                cb = metrics_cache.cached_ohlcv(sym, min_bars=self.min_bars)
+                if cb:
+                    self.cache[f"hist_{sym}"] = {"symbol": sym, "historical": cb}
+                    continue
+            todo.append(sym)
+
+        for start in range(0, len(todo), BATCH_CHUNK):
+            chunk = todo[start : start + BATCH_CHUNK]
+            tv_syms = [self.index_remap.get(s, s) for s in chunk]
+            data = self._cli(
+                "bars", *tv_syms, "-n", str(self.bars), timeout=_bars_call_timeout(len(chunk))
+            )
+            results = self._bars_batch_results(data)
+            if results is None:
+                if data is not None:
+                    self._bars_cmd_ok = False
+                if self._bars_cmd_ok is False:
+                    return
+                continue  # transient spawn failure: leave chunk unresolved
+            self._bars_cmd_ok = True
+            by_tv_symbol = {r.get("symbol"): r for r in results}
+            for sym, tv_sym in zip(chunk, tv_syms):
+                r = by_tv_symbol.get(tv_sym)
+                if r is None:
+                    continue
+                raw = r.get("bars") or []
+                if r.get("success") and len(raw) >= self.min_bars:
+                    self.cache[f"hist_{sym}"] = {
+                        "symbol": sym,
+                        "historical": self._shape_bars(raw),
+                    }
+                else:
+                    if r.get("success"):
+                        print(
+                            f"  SKIP {sym}: only {len(raw)} daily bars (<{self.min_bars})",
+                            file=sys.stderr,
+                        )
+                    self.cache[f"hist_{sym}"] = None
+            done = min(start + BATCH_CHUNK, len(todo))
+            if len(todo) > BATCH_CHUNK:
+                print(f"    Bars batch: {done}/{len(todo)}", flush=True)
+
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
+        self._prefetch_bars(symbols)
         results = {}
         total = len(symbols)
         for i, sym in enumerate(symbols):
@@ -381,6 +513,7 @@ class TVClient:
         return results
 
     def get_batch_historical(self, symbols: list[str], days: int = 260) -> dict[str, list[dict]]:
+        self._prefetch_bars(symbols)
         results = {}
         for sym in symbols:
             data = self._history(sym)
@@ -691,14 +824,10 @@ class TVClient:
         (falling back to `default_tv`). Bypasses the per-ticker metrics cache
         (indices aren't collected)."""
         tv_symbol = self.index_remap.get(fmp_symbol, default_tv)
-        self._switch_symbol(tv_symbol)
-        data = self._cli("ohlcv", "-n", "2")
-        if not data or not data.get("bars"):
-            time.sleep(self.settle * 1.5)
-            data = self._cli("ohlcv", "-n", "2")
-        if not data or not data.get("bars"):
+        bars = self._bars_live(tv_symbol, 2)
+        if not bars:
             return None
-        return data["bars"][-1].get("close")
+        return bars[-1].get("close")
 
     def get_treasury_rates(self, days: int = 600) -> Optional[list[dict]]:
         """Treasury 2y/10y yields from TVC:US02Y / TVC:US10Y daily closes,
@@ -721,15 +850,11 @@ class TVClient:
     def _yield_series(self, tv_symbol: str) -> Optional[list[dict]]:
         """Raw {date, close} daily series for a TVC yield symbol, OLDEST first.
         Bypasses min_bars/cache (yields aren't in the metrics cache)."""
-        self._switch_symbol(tv_symbol)
-        data = self._cli("ohlcv", "-n", str(self.bars))
-        if not data or not data.get("bars"):
-            time.sleep(self.settle * 1.5)
-            data = self._cli("ohlcv", "-n", str(self.bars))
-        if not data or not data.get("bars"):
+        bars = self._bars_live(tv_symbol, self.bars)
+        if not bars:
             return None
         out = []
-        for b in data["bars"]:
+        for b in bars:
             try:
                 iso = datetime.fromtimestamp(int(b["time"]), tz=timezone.utc).strftime("%Y-%m-%d")
             except (KeyError, ValueError, OSError):

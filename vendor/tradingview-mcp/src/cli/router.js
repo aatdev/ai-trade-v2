@@ -131,8 +131,10 @@ export async function run(argv) {
 async function execute(handler, values, positionals) {
   try {
     const result = await handler(values, positionals);
-    console.log(JSON.stringify(result, null, 2));
-    process.exit(0);
+    // process.exit() does NOT wait for pending async stdout writes; on a pipe
+    // console.log + exit truncates payloads beyond the 64KB pipe buffer
+    // (e.g. multi-symbol `tv bars`). Write with a flush callback instead.
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n', () => process.exit(0));
   } catch (err) {
     handleError(err);
   }
@@ -141,10 +143,8 @@ async function execute(handler, values, positionals) {
 function handleError(err) {
   const message = err.message || String(err);
   // Connection failures get exit code 2
-  if (/CDP|connection|ECONNREFUSED|not running/i.test(message)) {
-    console.error(JSON.stringify({ success: false, error: message }, null, 2));
-    process.exit(2);
-  }
-  console.error(JSON.stringify({ success: false, error: message }, null, 2));
-  process.exit(1);
+  const code = /CDP|connection|ECONNREFUSED|not running/i.test(message) ? 2 : 1;
+  process.stderr.write(JSON.stringify({ success: false, error: message }, null, 2) + '\n', () =>
+    process.exit(code)
+  );
 }
