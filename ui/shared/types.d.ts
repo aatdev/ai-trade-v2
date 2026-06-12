@@ -56,7 +56,7 @@ export interface ExposureResponse {
 
 /* ---------------- Watchlist ---------------- */
 
-export type CandidateSource = 'screener' | 'analysis' | string;
+export type CandidateSource = 'screener' | 'analysis' | 'analysis-excluded' | string;
 
 /** Snapshot of the original screener-derived values, kept after a reconcile. */
 export interface ScreenerOrigin {
@@ -89,6 +89,8 @@ export interface WatchlistCandidate {
   t2?: number | null;
   t3?: number | null;
   screener_origin?: ScreenerOrigin | null;
+  /** Injected by the scheduler's thesis-ingest; must survive UI rewrites. */
+  thesis_id?: string | null;
 }
 
 export interface Watchlist {

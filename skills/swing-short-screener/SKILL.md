@@ -88,8 +88,11 @@ For each top candidate, present:
 
 - **Grade** (A/B/C/D) and composite score
 - **Strongest weakness signal** (which factor drives the score)
-- Short trade levels: entry (current price), stop (recent 20-session swing high),
-  2R target
+- Short trade levels: entry (current price), stop (most recent lower high within
+  20 sessions + 0.5×ATR buffer; falls back to the 20-session max), 2R target.
+  Candidates whose stop distance falls outside 2–10% of entry are rejected
+  (`--min-stop-pct` / `--max-stop-pct`): below the floor the stop sits in daily
+  noise, above the ceiling the geometry is post-crash junk
 - ★ marker if the oversold/extended state cap was applied
 - Relative strength vs the index and volume ratio on the breakdown
 

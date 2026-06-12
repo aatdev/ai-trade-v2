@@ -433,22 +433,33 @@ def _watchlist_tickers(wl_file: str) -> set[str]:
     }
 
 
+def _plan_fields(tp: dict) -> dict:
+    """Plan levels as a thesis_store.update()-shaped fields dict.
+
+    Maps signal_entry → entry.target_price, stop_loss_price → exit.stop_loss,
+    target_price → exit.take_profit.
+    """
+    fields: dict = {}
+    if tp.get("signal_entry") is not None:
+        fields.setdefault("entry", {})["target_price"] = tp["signal_entry"]
+    if tp.get("stop_loss_price") is not None:
+        fields.setdefault("exit", {})["stop_loss"] = tp["stop_loss_price"]
+    if tp.get("target_price") is not None:
+        fields.setdefault("exit", {})["take_profit"] = tp["target_price"]
+    return fields
+
+
 def _enrich_from_plan(thesis_data: dict, plan_index: dict[str, dict]) -> None:
     """Mutate thesis_data in-place with breakout-planner levels.
 
-    Maps signal_entry → entry.target_price, stop_loss_price → exit.stop_loss,
-    target_price → exit.take_profit; stores shares/risk_dollars in raw_provenance.
+    Levels via _plan_fields(); shares/risk_dollars go into raw_provenance.
     """
     ticker = str(thesis_data.get("ticker", "")).upper()
     tp = plan_index.get(ticker)
     if not tp:
         return
-    if tp.get("signal_entry") is not None:
-        thesis_data.setdefault("entry", {})["target_price"] = tp["signal_entry"]
-    if tp.get("stop_loss_price") is not None:
-        thesis_data.setdefault("exit", {})["stop_loss"] = tp["stop_loss_price"]
-    if tp.get("target_price") is not None:
-        thesis_data.setdefault("exit", {})["take_profit"] = tp["target_price"]
+    for key, sub in _plan_fields(tp).items():
+        thesis_data.setdefault(key, {}).update(sub)
     prov = thesis_data.setdefault("origin", {}).setdefault("raw_provenance", {})
     for key, val in [("plan_shares", tp.get("shares")), ("plan_risk_dollars", tp.get("risk_dollars"))]:
         if val is not None:
@@ -539,11 +550,25 @@ def ingest(
             if e.get("status") not in ("CLOSED", "INVALIDATED")
         ]
         if existing_active:
-            tid = existing_active[-1]["thesis_id"]
+            existing = existing_active[-1]
+            tid = existing["thesis_id"]
             logger.info(
                 "Reusing thesis %s for %s (status=%s, non-terminal)",
-                tid, t_ticker, existing_active[-1].get("status"),
+                tid, t_ticker, existing.get("status"),
             )
+            # Refresh plan levels on PRE-ENTRY reuse: the new plan carries fresh
+            # pivot/stop/target while the thesis still holds day-1 numbers (the
+            # heat ledger reads exit.stop_loss from here). Never touch an ACTIVE
+            # thesis — its stop is the live bracket at the broker.
+            tp = plan_index.get(t_ticker) if plan_index else None
+            if tp and existing.get("status") in ("IDEA", "ENTRY_READY"):
+                fields = _plan_fields(tp)
+                if fields:
+                    try:
+                        thesis_store.update(state_path, tid, fields)
+                        logger.info("Refreshed plan levels on reused thesis %s", tid)
+                    except (ValueError, OSError) as e:
+                        logger.warning("Could not refresh plan levels on %s: %s", tid, e)
             thesis_ids.append(tid)
             ticker_id_map[t_ticker] = tid
             continue

@@ -728,6 +728,64 @@ def test_repeat_ticker_reuses_existing_non_terminal_thesis(tmp_path: Path):
     assert len(theses) == 1
 
 
+def _plan_json(symbol: str, entry: float, stop: float, target: float) -> dict:
+    return {
+        "actionable_orders": [
+            {
+                "symbol": symbol,
+                "composite_score": 80.0,
+                "trade_plan": {
+                    "signal_entry": entry,
+                    "stop_loss_price": stop,
+                    "target_price": target,
+                    "shares": 100,
+                    "risk_dollars": 500.0,
+                },
+            }
+        ]
+    }
+
+
+def test_repeat_ticker_reuse_refreshes_plan_levels(tmp_path: Path):
+    """Day-2 reuse of a pre-entry thesis adopts the fresh plan levels —
+    heat reads exit.stop_loss from the thesis, so day-1 numbers go stale."""
+    state_dir = tmp_path / "theses"
+
+    f1 = _write_json(tmp_path, _vcp_record("NVDA", "2026-06-11"), "d1.json")
+    p1 = _write_json(tmp_path, _plan_json("NVDA", 100.0, 95.0, 110.0), "p1.json")
+    ids1 = thesis_ingest.ingest("vcp-screener", f1, str(state_dir), plan_input=p1)
+
+    f2 = _write_json(tmp_path, _vcp_record("NVDA", "2026-06-12"), "d2.json")
+    p2 = _write_json(tmp_path, _plan_json("NVDA", 102.0, 97.5, 112.0), "p2.json")
+    ids2 = thesis_ingest.ingest("vcp-screener", f2, str(state_dir), plan_input=p2)
+
+    assert ids1 == ids2
+    thesis = thesis_store.get(state_dir, ids1[0])
+    assert thesis["entry"]["target_price"] == 102.0
+    assert thesis["exit"]["stop_loss"] == 97.5
+    assert thesis["exit"]["take_profit"] == 112.0
+
+
+def test_repeat_ticker_reuse_never_touches_active_thesis(tmp_path: Path):
+    """An ACTIVE thesis keeps its live stop (the broker bracket is the source
+    of truth) — re-ingest with new plan levels must not overwrite it."""
+    state_dir = tmp_path / "theses"
+
+    f1 = _write_json(tmp_path, _vcp_record("AAPL", "2026-06-10"), "d1.json")
+    p1 = _write_json(tmp_path, _plan_json("AAPL", 50.0, 47.0, 56.0), "p1.json")
+    ids1 = thesis_ingest.ingest("vcp-screener", f1, str(state_dir), plan_input=p1)
+    thesis_store.transition(state_dir, ids1[0], "ENTRY_READY", "trigger")
+    thesis_store.open_position(state_dir, ids1[0], 50.1, "2026-06-10T16:00:00+00:00", shares=100)
+
+    f2 = _write_json(tmp_path, _vcp_record("AAPL", "2026-06-12"), "d2.json")
+    p2 = _write_json(tmp_path, _plan_json("AAPL", 52.0, 49.0, 58.0), "p2.json")
+    ids2 = thesis_ingest.ingest("vcp-screener", f2, str(state_dir), plan_input=p2)
+
+    assert ids1 == ids2
+    thesis = thesis_store.get(state_dir, ids1[0])
+    assert thesis["exit"]["stop_loss"] == 47.0  # untouched
+
+
 def test_repeat_ticker_creates_new_thesis_after_closed(tmp_path: Path):
     """If the previous thesis is CLOSED, a new one should be created on
     the next ingest — the trade cycle reset."""

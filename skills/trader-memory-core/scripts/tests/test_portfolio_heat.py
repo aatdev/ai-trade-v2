@@ -19,6 +19,7 @@ def _make_active(
     stop: float | None,
     shares: float,
     sector: str | None = None,
+    side: str | None = None,
 ) -> str:
     """Register a thesis and walk it to ACTIVE with entry/shares (+ optional stop)."""
     origin = {"skill": "test-skill", "output_file": "t.json"}
@@ -30,6 +31,8 @@ def _make_active(
         "thesis_statement": f"{ticker} heat-ledger test thesis (entry {entry})",
         "origin": origin,
     }
+    if side:
+        data["side"] = side
     tid = thesis_store.register(state_dir, data)
     thesis_store.transition(state_dir, tid, "ENTRY_READY", reason="test")
     thesis_store.open_position(
@@ -76,6 +79,26 @@ class TestCollectPositions:
 
     def test_stop_above_entry_contributes_zero_risk(self, tmp_path):
         _make_active(tmp_path, "NVDA", entry=50.0, stop=55.0, shares=100)
+        positions, _ = portfolio_heat.collect_positions(tmp_path)
+        assert positions[0]["risk_dollars"] == 0.0
+
+    def test_default_side_is_long(self, tmp_path):
+        _make_active(tmp_path, "AAPL", entry=50.0, stop=45.0, shares=100)
+        positions, _ = portfolio_heat.collect_positions(tmp_path)
+        assert positions[0]["side"] == "long"
+
+    def test_short_position_risk_is_stop_minus_entry(self, tmp_path):
+        """Shorts must contribute (stop − entry) × shares, not silently 0."""
+        _make_active(tmp_path, "ADBE", entry=210.0, stop=218.5, shares=100, side="short")
+        positions, warnings = portfolio_heat.collect_positions(tmp_path)
+        assert warnings == []
+        pos = positions[0]
+        assert pos["side"] == "short"
+        assert pos["risk_dollars"] == 850.0  # (218.5 − 210) × 100
+        assert pos["risk_basis"] == "stop_minus_entry"
+
+    def test_short_stop_trailed_below_entry_zero_risk(self, tmp_path):
+        _make_active(tmp_path, "XYZ", entry=100.0, stop=98.0, shares=50, side="short")
         positions, _ = portfolio_heat.collect_positions(tmp_path)
         assert positions[0]["risk_dollars"] == 0.0
 

@@ -92,6 +92,16 @@ class TestDecideAction:
         action, _ = ap.decide_action(_at("16:00"), state)
         assert action == "intraday"
 
+    def test_intraday_tolerates_cron_jitter(self):
+        # The run stamps last_at a second after the cron tick (15:45:01); the
+        # next tick at 16:00:00 sees 14m59s elapsed. A strict `< 15` check
+        # skipped every other tick (observed 30-min effective cadence) — the
+        # tolerance must let this run.
+        state = _slot_state("premarket", "done", 1)
+        state["intraday"] = {"last_at": f"{TUE}T15:45:01", "runs": 1}
+        action, _ = ap.decide_action(_at("16:00"), state)
+        assert action == "intraday"
+
     def test_saturday_before_noon_is_noop(self):
         action, reason = ap.decide_action(_at("11:00", "2026-06-13"), _state())
         assert action == "none"

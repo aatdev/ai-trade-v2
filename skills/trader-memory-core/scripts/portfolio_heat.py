@@ -4,9 +4,11 @@
 Reads ACTIVE / PARTIALLY_CLOSED theses from ``state/theses/`` and computes the
 portfolio's *live* open risk ("heat"):
 
-    risk per position = max(0, entry_price - current stop) x shares remaining
+    long  position: risk = max(0, entry_price - current stop) x shares remaining
+    short position: risk = max(0, current stop - entry_price) x shares remaining
 
-(long convention; a stop raised to/above entry contributes zero heat). Output
+(direction from the thesis ``side`` field, absent reads as long; a stop trailed
+to/through breakeven contributes zero heat on either side). Output
 is a JSON + Markdown report whose top level is directly consumable by
 breakout-trade-planner ``--current-exposure-json``::
 
@@ -148,10 +150,16 @@ def _extract_position(thesis: dict, warnings: list[dict]) -> dict | None:
 
     stop = (thesis.get("exit") or {}).get("stop_loss")
     sector = (((thesis.get("origin") or {}).get("raw_provenance") or {}).get("sector")) or "Unknown"
+    side = str(thesis.get("side") or "long").lower()
 
     if stop is not None:
-        risk_dollars = round(max(0.0, float(entry_price) - float(stop)) * float(shares), 2)
-        risk_basis = "entry_minus_stop"
+        if side == "short":
+            risk_per_share = max(0.0, float(stop) - float(entry_price))
+            risk_basis = "stop_minus_entry"
+        else:
+            risk_per_share = max(0.0, float(entry_price) - float(stop))
+            risk_basis = "entry_minus_stop"
+        risk_dollars = round(risk_per_share * float(shares), 2)
     elif pos.get("risk_dollars") is not None:
         risk_dollars = round(float(pos["risk_dollars"]), 2)
         risk_basis = "sizer_risk_dollars"
@@ -184,6 +192,7 @@ def _extract_position(thesis: dict, warnings: list[dict]) -> dict | None:
     return {
         "thesis_id": tid,
         "ticker": ticker,
+        "side": side,
         "status": thesis["status"],
         "shares": shares,
         "entry_price": entry_price,
@@ -287,14 +296,14 @@ def generate_markdown(report: dict) -> str:
 
     if report["positions"]:
         lines.append("## Open Positions\n")
-        lines.append("| Ticker | Status | Shares | Entry | Stop | Risk $ | Risk % | Sector |")
-        lines.append("|--------|--------|--------|-------|------|--------|--------|--------|")
+        lines.append("| Ticker | Side | Status | Shares | Entry | Stop | Risk $ | Risk % | Sector |")
+        lines.append("|--------|------|--------|--------|-------|------|--------|--------|--------|")
         for p in report["positions"]:
             risk_d = f"${p['risk_dollars']:,.2f}" if p["risk_dollars"] is not None else "?"
             risk_p = f"{p['risk_pct_of_account']}%" if p["risk_pct_of_account"] is not None else "?"
             stop = f"${p['stop_loss']:.2f}" if p["stop_loss"] is not None else "—"
             lines.append(
-                f"| {p['ticker']} | {p['status']} | {p['shares']} | "
+                f"| {p['ticker']} | {p.get('side', 'long')} | {p['status']} | {p['shares']} | "
                 f"${p['entry_price']:.2f} | {stop} | {risk_d} | {risk_p} | {p['sector']} |"
             )
         lines.append("")
@@ -311,7 +320,10 @@ def generate_markdown(report: dict) -> str:
             lines.append(f"- **{w.get('ticker', '?')}** [{w['code']}]: {w['message']}")
         lines.append("")
 
-    lines.append("\n---\n*Risk = max(0, entry − stop) × shares; not investment advice.*\n")
+    lines.append(
+        "\n---\n*Risk = max(0, entry − stop) × shares (long) / "
+        "max(0, stop − entry) × shares (short); not investment advice.*\n"
+    )
     return "\n".join(lines)
 
 

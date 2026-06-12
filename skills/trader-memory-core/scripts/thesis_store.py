@@ -361,6 +361,7 @@ def _default_thesis() -> dict:
     return {
         "thesis_id": None,
         "ticker": None,
+        "side": "long",
         "created_at": None,
         "updated_at": None,
         "thesis_type": None,
@@ -515,6 +516,7 @@ def register(state_dir: Path, thesis_data: dict) -> str:
 
     # Copy optional fields
     for key in [
+        "side",
         "setup_type",
         "catalyst",
         "thesis_statement",

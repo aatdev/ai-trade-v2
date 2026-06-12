@@ -230,6 +230,8 @@ VALIDATION_TOP_N = 3
 # distribution-day count, and no fresh confirmed FTD.
 SHORT_TOP_RISK_MIN = 41.0
 SHORT_DD_MIN = 3
+# A confirmed FTD older than this many weekdays no longer forbids shorting.
+FTD_FRESH_WEEKDAYS = 10
 # market_top / ftd reports older than this are treated as absent (fail-safe).
 MARKET_REPORT_MAX_AGE_DAYS = 7
 # How many top watchlist candidates get the auto ticker-analysis + reconcile pass.
@@ -357,35 +359,113 @@ def notify(text: str, *, dry_run: bool, no_telegram: bool, file: str | None = No
 # --------------------------------------------------------------------------- #
 # Headless Claude execution
 # --------------------------------------------------------------------------- #
-def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
-    """Run one workflow headlessly via ``claude -p``. Returns success bool.
+import tempfile as _tempfile
 
-    Configurable via env:
-      CLAUDE_BIN                        path to the claude CLI (default: PATH,
-                                        then known install dirs)
-      TRADING_SCHEDULE_PERMISSION_MODE  --permission-mode value (default bypassPermissions)
-      TRADING_SCHEDULE_CLAUDE_FLAGS     extra space-separated flags appended verbatim
+
+def _run_claude_kill_ppid(
+    prompt: str,
+    *,
+    label: str,
+    dry_run: bool,
+    timeout: int,
+    claude_bin: str,
+    perm_mode: str,
+    extra: list[str],
+) -> bool:
+    """Run Claude with file-output + ``kill $PPID`` termination pattern.
+
+    Wraps the prompt so Claude writes its final answer to a temp file and then
+    kills its parent process (the ``subprocess.run`` call), which releases the
+    blocking wait.  Used when the interactive ``-p/--print`` flag is unavailable
+    or unreliable in the current environment.
     """
-    claude_bin = resolve_claude_bin()
-    perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
-    cmd = [claude_bin, "-p", prompt, "--permission-mode", perm_mode, "--output-format", "text"]
-    extra = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "").split()
-    cmd += extra
+    fd, raw_path = _tempfile.mkstemp(prefix="claude_sched_", suffix=".txt")
+    os.close(fd)
+    output_path = Path(raw_path)
+    wrapped = (
+        f"{prompt}\n\n"
+        "После завершения задачи выполни строго эти шаги:\n"
+        f"1) Запиши финальный ответ в UTF-8 файл: {output_path}\n"
+        "2) Выполни в bash команду: kill $PPID\n"
+        "3) После этого ничего не пиши и не делай."
+    )
+    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, wrapped]
 
-    log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
-    log(f"command: {claude_bin} -p <prompt {len(prompt)} chars> {' '.join(cmd[3:])}", logging.DEBUG)
+    log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}, mode=kill-ppid) ---")
+    log(f"command: {claude_bin} --permission-mode {perm_mode} <wrapped prompt {len(wrapped)} chars>",
+        logging.DEBUG)
     if dry_run:
-        log("(dry-run) prompt that would be sent to claude -p:\n" + prompt)
+        log(f"(dry-run) kill-ppid prompt:\n{wrapped}")
+        output_path.unlink(missing_ok=True)
         return True
 
     started = time.monotonic()
     try:
         res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        log(
-            f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
-            logging.ERROR,
+        log(f"{label}: claude timed out after {timeout}s", logging.ERROR)
+        return False
+    except OSError as exc:
+        log(f"{label}: could not launch claude ({exc})", logging.ERROR)
+        return False
+
+    elapsed = time.monotonic() - started
+    try:
+        file_text = output_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        file_text = ""
+
+    if file_text:
+        log(f"{label} output-file (tail):\n{file_text[-2000:]}")
+        log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
+        output_path.unlink(missing_ok=True)
+        return True
+
+    if res.stdout:
+        log(f"{label} stdout (tail):\n" + res.stdout[-2000:])
+    log(
+        f"{label}: no output in {output_path} (rc={res.returncode}, {elapsed:.0f}s)\n{res.stderr[-1000:]}",
+        logging.ERROR,
+    )
+    return False
+
+
+def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
+    """Run one workflow headlessly via ``claude``. Returns success bool.
+
+    Configurable via env:
+      CLAUDE_BIN                        path to the claude CLI (default: PATH,
+                                        then known install dirs)
+      TRADING_SCHEDULE_PERMISSION_MODE  --permission-mode value (default bypassPermissions)
+      TRADING_SCHEDULE_CLAUDE_FLAGS     extra space-separated flags appended verbatim
+      TRADING_SCHEDULE_CLAUDE_EXIT_MODE "normal" (default) or "kill-ppid"
+    """
+    claude_bin = resolve_claude_bin()
+    perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
+    extra = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "").split()
+    exit_mode = os.environ.get("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "normal").strip().lower()
+
+    if exit_mode == "kill-ppid":
+        return _run_claude_kill_ppid(
+            prompt, label=label, dry_run=dry_run, timeout=timeout,
+            claude_bin=claude_bin, perm_mode=perm_mode, extra=extra,
         )
+
+    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt]
+
+    log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
+    log(f"command: {claude_bin} --permission-mode {perm_mode} <prompt {len(prompt)} chars> {' '.join(extra)}",
+        logging.DEBUG)
+    if dry_run:
+        log("(dry-run) prompt that would be sent to claude:\n" + prompt)
+        return True
+
+    started = time.monotonic()
+    try:
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
+            logging.ERROR)
         return False
     except OSError as exc:
         log(f"{label}: could not launch claude ({exc})", logging.ERROR)
@@ -395,10 +475,8 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
     if res.stdout:
         log(f"{label} stdout (tail):\n" + res.stdout[-2000:])
     if res.returncode != 0:
-        log(
-            f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-1000:]}",
-            logging.ERROR,
-        )
+        log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-1000:]}",
+            logging.ERROR)
         return False
     log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
     return True
@@ -825,11 +903,13 @@ def _intraday_signal_lines(s: dict) -> str:
             _cli = "python3 skills/trader-memory-core/scripts/trader_memory_cli.py"
             if tid:
                 shares_str = str(c["shares"]) if c.get("shares") else "<N>"
+                # `store` prefix: the CLI launcher has no bare `transition`.
+                # `%z` (not `%:z`): BSD date on macOS emits a literal `:z`.
                 tail = (
                     f"   Bracket-ордер (вход + стоп + тейк). Записать вход:\n"
-                    f"   {_cli} transition {tid} ENTRY_READY --reason trigger\n"
+                    f"   {_cli} store transition {tid} ENTRY_READY --reason trigger\n"
                     f"   {_cli} store open-position {tid}"
-                    f" --actual-price <ЦЕНА> --actual-date $(date +%FT%T%:z) --shares {shares_str}"
+                    f" --actual-price <ЦЕНА> --actual-date $(date +%FT%T%z) --shares {shares_str}"
                 )
             else:
                 tail = "   Bracket-ордер (вход + стоп + тейк); после исполнения записать вход в журнал (шаг 3)."
@@ -851,6 +931,20 @@ def _intraday_signal_lines(s: dict) -> str:
             f"⏸ {ticker}: триггер сработал @ {_usd(price)}, "
             f"но {s.get('reason', 'лимиты портфеля заняты')} — пропуск."
         )
+    if sig_type == tsig.SKIPPED_EARNINGS:
+        return (
+            f"📅 {ticker}: триггер шорта @ {_usd(price)}, но отчёт {s.get('earnings_date', '?')} "
+            f"(через {s.get('days_to_earnings', '?')} т.д.) — шорт НЕ открывать "
+            "(правило 6.4: не держать шорт через отчёт)."
+        )
+    if sig_type == tsig.EARNINGS_SOON:
+        head = (
+            f"📅 {ticker}: отчёт {s.get('earnings_date', '?')} "
+            f"(через {s.get('days_to_earnings', '?')} т.д.)"
+        )
+        if s.get("side") == "short":
+            return head + " — шорт ЗАКРЫТЬ до отчёта (правило 6.4)."
+        return head + " — реши заранее: держать лонг через отчёт или сократить."
     if sig_type == tsig.STOP_HIT:
         return (
             f"⛔️ {ticker}: цена {_usd(price)} за стопом {_usd(p.get('stop_loss'))} — "
@@ -1091,12 +1185,11 @@ def _sync_tv_alerts(wl: dict, args) -> str:
 def _resolve_mcp_config() -> str | None:
     """Write a temp MCP-config JSON pointing at the vendored TradingView server.
     Returns the file path, or None if the vendored server is absent."""
-    import tempfile
     server_entry = PROJECT_ROOT / "vendor" / "tradingview-mcp" / "src" / "server.js"
     if not server_entry.is_file():
         return None
     config = {"mcpServers": {"tradingview": {"command": "node", "args": [str(server_entry)]}}}
-    out = Path(tempfile.gettempdir()) / "trading-schedule-tradingview-mcp.json"
+    out = Path(_tempfile.gettempdir()) / "trading-schedule-tradingview-mcp.json"
     try:
         out.write_text(json.dumps(config), encoding="utf-8")
         return str(out)
@@ -1104,11 +1197,41 @@ def _resolve_mcp_config() -> str | None:
         return None
 
 
+# Block heading the ticker-analysis skill actually writes (date FIRST):
+#   ## 2026-06-12 — AOS — 🟢 BUY (reversal)
+_SIGNAL_HEADING_RE = re.compile(
+    r"^##\s+(\d{4}-\d{2}-\d{2})\s*[—\-]\s*([A-Za-z0-9.\-]+)\s*(?:[—\-]\s*(.*))?$",
+    re.MULTILINE,
+)
+
+
+def _first_dollar(s: str) -> float | None:
+    """First $-prefixed number in a line; bare number as fallback."""
+    m = re.search(r"\$\s*(\d+(?:\.\d+)?)", s)
+    if not m:
+        m = re.search(r"(\d+(?:\.\d+)?)", s)
+    return float(m.group(1)) if m else None
+
+
+def _all_dollars(s: str) -> list[float]:
+    out = [float(x) for x in re.findall(r"\$\s*(\d+(?:\.\d+)?)", s)]
+    if not out:
+        out = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", s)]
+    return out
+
+
 def _parse_signals_md(ticker: str) -> dict | None:
     """Parse the latest signal block for ticker from analysis/signals.md.
 
-    Returns dict with direction/trigger/stop/t1/t2/t3, or None if not found/invalid.
-    Mirrors parseSignalBlocks + parseSignalLevels from ui/server/src/lib/signals.ts.
+    Mirrors ui/server/src/lib/signals.ts (parseSignalBlocks + parseSignalLevels)
+    against the REAL format the ticker-analysis skill writes: date-first
+    heading, status emoji (🟢 BUY / 🟡 HOLD / 🔴 SELL), `$`-prefixed numbers,
+    `**Trigger для Long/Short:**` lines, «Альтернатива» lines skipped. The old
+    implementation expected a ticker-first heading, a nonexistent `Direction:`
+    field and bare numbers — it parsed 0 real blocks, leaving the auto-analyze
+    reconcile dead. A 🟡 HOLD block never arms levels.
+
+    Returns direction/trigger/stop/t1/t2/t3 + entry_low/entry_high, or None.
     """
     signals_file = TRADING_DATA_DIR / "analysis" / "signals.md"
     try:
@@ -1117,105 +1240,115 @@ def _parse_signals_md(ticker: str) -> dict | None:
         return None
 
     T = ticker.upper()
-    blocks: list[dict] = []
-    current: dict | None = None
-    for line in text.splitlines():
-        m = re.match(r"^##\s+([A-Z][A-Z0-9.\-]{0,9})\s+[—\-]\s+(\d{4}-\d{2}-\d{2})", line.strip())
+    latest: tuple[str, str, str] | None = None  # (date, status, body)
+    for chunk in text.split("\n---\n"):
+        m = _SIGNAL_HEADING_RE.search(chunk)
+        if m and m.group(2).upper() == T:
+            latest = (m.group(1), (m.group(3) or "").strip(), chunk)
+    if latest is None:
+        return None
+    date, status, body = latest
+
+    if "HOLD" in status.upper() or "🟡" in status:
+        return None
+
+    direction = None
+    if re.search(r"🟢\s*BUY", body):
+        direction = "long"
+    elif re.search(r"🔴\s*SELL", body):
+        direction = "short"
+
+    trigger = None
+    for line in body.splitlines():
+        m = re.search(
+            r"\*\*Trigger\s+(?:для\s+)?(Long|Short)\b[^:]*:\*\*\s*(.+)$", line, re.IGNORECASE
+        )
         if m:
-            if current:
-                blocks.append(current)
-            current = {"ticker": m.group(1), "date": m.group(2), "lines": []}
-        elif current is not None:
-            current["lines"].append(line)
-    if current:
-        blocks.append(current)
-
-    matches = [b for b in blocks if b["ticker"].upper() == T]
-    if not matches:
-        return None
-    body = "\n".join(matches[-1]["lines"])
-    date = matches[-1]["date"]
-
-    def _num(pattern: str) -> float | None:
-        m2 = re.search(pattern, body, re.IGNORECASE)
-        try:
-            return float(m2.group(1)) if m2 else None
-        except (ValueError, AttributeError):
-            return None
-
-    # Flexible: handles **Direction:** long, **Direction** : long, Direction: long.
-    dm = re.search(r"Direction[*:\s]+(long|short)", body, re.IGNORECASE)
-    direction = dm.group(1).lower() if dm else None
-    if direction not in ("long", "short"):
+            trigger = _first_dollar(m.group(2))
+            if direction is None:
+                direction = "long" if m.group(1).lower() == "long" else "short"
+            break
+    if direction not in ("long", "short") or trigger is None:
         return None
 
-    trigger = _num(r"Trigger[*:\s]+([\d.]+)")
-    stop = _num(r"Stop[*:\s]+([\d.]+)")
-    t1 = _num(r"T1[*:\s]+([\d.]+)")
-    t2 = _num(r"T2[*:\s]+([\d.]+)")
-    t3 = _num(r"T3[*:\s]+([\d.]+)")
+    stop = t1 = t2 = t3 = entry_low = entry_high = None
+    for line in body.splitlines():
+        if re.search(r"Альтернатив[ау]", line, re.IGNORECASE):
+            continue
+        if stop is None:
+            m = re.search(r"\*\*Stop:\*\*\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                stop = _first_dollar(m.group(1))
+                continue
+        if t1 is None:
+            m = re.search(r"\*\*T1(?:\s*/\s*T2)?(?:\s*/\s*T3)?:\*\*\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                nums = _all_dollars(m.group(1))
+                t1 = nums[0] if nums else None
+                t2 = nums[1] if len(nums) > 1 else None
+                t3 = nums[2] if len(nums) > 2 else None
+                continue
+        if entry_low is None:
+            m = re.search(r"\*\*Entry[^:]*:\*\*\s*(.+)$", line, re.IGNORECASE)
+            if m:
+                nums = _all_dollars(m.group(1))
+                if nums:
+                    entry_low, entry_high = min(nums), max(nums)
+
     if None in (trigger, stop, t1):
         return None
     return {"ticker": T, "date": date, "direction": direction,
-            "trigger": trigger, "stop": stop, "t1": t1, "t2": t2, "t3": t3}
+            "trigger": trigger, "stop": stop, "t1": t1, "t2": t2, "t3": t3,
+            "entry_low": entry_low, "entry_high": entry_high}
 
 
 def _run_ticker_analysis(ticker: str, args) -> bool:
     """Run ticker-analysis skill via headless Claude + TradingView MCP.
 
-    Returns True if Claude exited 0. Writes output to trading-data/analysis/{ticker}/.
+    Delegates to run_claude() (respects TRADING_SCHEDULE_CLAUDE_EXIT_MODE).
+    MCP flags injected via TRADING_SCHEDULE_CLAUDE_FLAGS for this call only.
     Capped at TICKER_ANALYSIS_TIMEOUT_S so one slow ticker doesn't block the slot.
     """
-    claude_bin = resolve_claude_bin()
-    perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
     prompt = (
         f"Проанализируй тикер {ticker}: запусти скил ticker-analysis — полный комплексный анализ "
         f"(новости, фундаментал, технический анализ через TradingView MCP). "
         f"Сохрани четыре markdown-файла и daily/weekly скриншоты в "
         f"trading-data/analysis/{ticker}/. Алерты в TradingView НЕ создавай."
     )
-    cmd = [
-        claude_bin, "-p", prompt,
-        "--permission-mode", perm_mode,
-        "--model", TICKER_ANALYSIS_MODEL,
-        "--output-format", "text",
-    ]
     mcp_config = _resolve_mcp_config()
+    extra_flags = f"--model {TICKER_ANALYSIS_MODEL}"
     if mcp_config:
-        cmd += ["--mcp-config", mcp_config, "--strict-mcp-config"]
+        extra_flags += f" --mcp-config {mcp_config} --strict-mcp-config"
 
-    timeout = min(args.timeout, TICKER_ANALYSIS_TIMEOUT_S)
-    label = f"ticker-analysis ({ticker})"
-    log(f"--- claude workflow START: {label} (timeout={timeout}s) ---")
-    if args.dry_run:
-        log(f"(dry-run) would run: {claude_bin} -p <{ticker} analysis prompt> [MCP={'yes' if mcp_config else 'no'}]")
-        return True
+    if not args.dry_run:
+        (TRADING_DATA_DIR / "analysis" / ticker).mkdir(parents=True, exist_ok=True)
 
-    (TRADING_DATA_DIR / "analysis" / ticker).mkdir(parents=True, exist_ok=True)
-    started = time.monotonic()
+    # Temporarily extend CLAUDE_FLAGS for MCP + model; restore after the call.
+    orig = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "")
+    combined = (orig + " " + extra_flags).strip()
+    os.environ["TRADING_SCHEDULE_CLAUDE_FLAGS"] = combined
     try:
-        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log(f"{label}: timed out after {timeout}s", logging.ERROR)
-        return False
-    except OSError as exc:
-        log(f"{label}: could not launch claude ({exc})", logging.ERROR)
-        return False
-
-    elapsed = time.monotonic() - started
-    if res.stdout:
-        log(f"{label} stdout (tail):\n" + res.stdout[-1000:])
-    if res.returncode != 0:
-        log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-500:]}", logging.ERROR)
-        return False
-    log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
-    return True
+        return run_claude(
+            prompt,
+            label=f"ticker-analysis ({ticker})",
+            dry_run=args.dry_run,
+            timeout=min(args.timeout, TICKER_ANALYSIS_TIMEOUT_S),
+        )
+    finally:
+        if orig:
+            os.environ["TRADING_SCHEDULE_CLAUDE_FLAGS"] = orig
+        else:
+            os.environ.pop("TRADING_SCHEDULE_CLAUDE_FLAGS", None)
 
 
 def _invalidate_thesis(thesis_id: str, *, reason: str) -> None:
-    """Transition a thesis to INVALIDATED via trader-memory-cli (best-effort)."""
-    cmd = [sys.executable, str(TRADER_MEMORY_CLI), "transition", thesis_id, "INVALIDATED",
-           "--reason", reason]
+    """Move a thesis to INVALIDATED via trader-memory-cli (best-effort).
+
+    The state machine forbids `transition <id> INVALIDATED` (terminal states go
+    through terminate()), and the CLI launcher routes only store/ingest/review/
+    heat — so the correct invocation is `store terminate`."""
+    cmd = [sys.executable, str(TRADER_MEMORY_CLI), "store", "terminate", thesis_id,
+           "--terminal-status", "INVALIDATED", "--exit-reason", reason]
     try:
         res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
@@ -1224,6 +1357,29 @@ def _invalidate_thesis(thesis_id: str, *, reason: str) -> None:
             log(f"thesis invalidated: {thesis_id} ({reason})")
     except (subprocess.SubprocessError, OSError) as exc:
         log(f"thesis invalidate {thesis_id}: {exc}", logging.WARNING)
+
+
+def _profile_sized_shares(profile: dict, pivot, stop) -> tuple[int | None, float | None]:
+    """Risk-budget sizing for an analysis-updated candidate (mirrors the UI's
+    reconcile.ts): shares = account x risk% / |pivot - stop|, capped at
+    max_position_pct of the account. Never inherits the candidate's previous
+    risk_dollars — that is the *achieved post-cap* risk of the old geometry,
+    not a budget (a capped 0.1%-risk short once resized a flipped long to 1/9
+    of the intended risk). Returns (None, None) when the profile cannot size."""
+    try:
+        account = float(profile.get("account_size") or 0)
+        pivot_f = float(pivot)
+        dist = abs(pivot_f - float(stop))
+    except (TypeError, ValueError):
+        return None, None
+    if account <= 0 or pivot_f <= 0 or dist <= 0:
+        return None, None
+    risk_pct = float(profile.get("risk_pct") or 1.0)
+    cap_pct = float(profile.get("max_position_pct") or 25.0)
+    shares = min(int(account * risk_pct / 100 / dist), int(account * cap_pct / 100 / pivot_f))
+    if shares <= 0:
+        return None, None
+    return shares, round(shares * dist, 2)
 
 
 def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dict:
@@ -1280,10 +1436,20 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
         else:
             log(f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
                 f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}")
-            risk_dollars = cand.get("risk_dollars")
-            dist = abs(signal["trigger"] - signal["stop"])
-            shares = (round(risk_dollars / dist) if risk_dollars and dist > 0
-                      else cand.get("shares"))
+            profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+            shares, risk_dollars = _profile_sized_shares(
+                profile, signal["trigger"], signal["stop"]
+            )
+            if shares is None:
+                shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
+            # worst_entry from the analysis Entry range when present, else the
+            # standard chase band — never the trigger itself (zero chase room
+            # turns the first tick past the trigger into MISSED + alert purge).
+            chase = tsig.DEFAULT_CHASE_PCT / 100
+            if cand_side == "short":
+                worst = signal.get("entry_low") or round(signal["trigger"] * (1 - chase), 2)
+            else:
+                worst = signal.get("entry_high") or round(signal["trigger"] * (1 + chase), 2)
             screener_origin = cand.get("screener_origin") or {
                 "side": cand.get("side"),
                 "pivot": cand.get("pivot"),
@@ -1296,13 +1462,14 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
             updated = {
                 **cand,
                 "pivot": signal["trigger"],
-                "worst_entry": signal["trigger"],
+                "worst_entry": worst,
                 "stop": signal["stop"],
                 "target": signal["t1"],
                 "t1": signal["t1"],
                 "t2": signal["t2"],
                 "t3": signal["t3"],
                 "shares": shares,
+                "risk_dollars": risk_dollars,
                 "validation_note": f"From ticker-analysis (signals.md {signal['date']})",
                 "validated": True,
                 "source": "analysis",
@@ -1439,15 +1606,57 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
     return wl_path, wl, _validation_note(wl, validation)
 
 
-def _any_ftd_detected(node) -> bool:
-    """Recursive search for a truthy ftd_detected anywhere in a report JSON."""
-    if isinstance(node, dict):
-        if node.get("ftd_detected"):
-            return True
-        return any(_any_ftd_detected(v) for v in node.values())
-    if isinstance(node, list):
-        return any(_any_ftd_detected(v) for v in node)
-    return False
+def _weekdays_since(date_iso: str) -> int | None:
+    """Weekdays elapsed since a YYYY-MM-DD date; None on a bad date."""
+    try:
+        start = dt.date.fromisoformat(date_iso)
+    except (TypeError, ValueError):
+        return None
+    return tsig.weekdays_until(dt.date.today().isoformat(), start)
+
+
+def _ftd_from_detector(path: Path | None) -> tuple[bool, str] | None:
+    """FTD verdict from the dedicated ftd-detector report (the full O'Neil
+    state machine: per-index state, invalidation, dates). Returns
+    (blocking, note) or None when the report is missing/unreadable.
+
+    Only a CONFIRMED, non-invalidated FTD within FTD_FRESH_WEEKDAYS blocks the
+    short branch: the old recursive ftd_detected grep treated a 3-month-old or
+    even an *invalidated* FTD (the textbook short trigger) as fresh.
+    """
+    data = _read_json(path) if path else None
+    if not data:
+        return None
+    invalidated = bool((data.get("ftd_invalidation") or {}).get("invalidated"))
+    best_date = None
+    confirmed = False
+    for idx in ("sp500", "nasdaq"):
+        node = data.get(idx) or {}
+        ftd = node.get("ftd") or {}
+        if str(node.get("state") or "") == "FTD_CONFIRMED" and ftd.get("ftd_detected"):
+            confirmed = True
+            d = ftd.get("ftd_date")
+            if d and (best_date is None or d > best_date):
+                best_date = d
+    if not confirmed:
+        return False, "ftd-detector: подтверждённого FTD нет"
+    if invalidated:
+        return False, "ftd-detector: FTD инвалидирован (пробой ниже лоу FTD)"
+    if best_date is not None:
+        age = _weekdays_since(best_date)
+        if age is not None and age > FTD_FRESH_WEEKDAYS:
+            return False, f"FTD {best_date} старше {FTD_FRESH_WEEKDAYS} т.д. — не блокирует"
+    return True, f"подтверждённый FTD {best_date or '(дата неизвестна)'}"
+
+
+def _dd_count_from_ibd(path: Path | None) -> float | None:
+    """Worst-index d25 count from the IBD monitor (the O'Neil-correct count
+    with 25-session expiry and 5% rally invalidation). None when unavailable."""
+    data = _read_json(path) if path else None
+    rows = ((data or {}).get("market_distribution_state") or {}).get("index_results") or []
+    counts = [r.get("d25_count") for r in rows if isinstance(r, dict)]
+    counts = [c for c in counts if isinstance(c, (int, float))]
+    return max(counts) if counts else None
 
 
 def _short_conditions() -> tuple[bool, str]:
@@ -1462,18 +1671,72 @@ def _short_conditions() -> tuple[bool, str]:
         )
     data = _read_json(path) or {}
     score = (data.get("composite") or {}).get("composite_score") or 0
-    dd = (data.get("components") or {}).get("distribution_days") or {}
-    dd_count = dd.get("effective_count") or (dd.get("clustering") or {}).get("total_count") or 0
-    ftd = bool((data.get("follow_through_day") or {}).get("ftd_detected"))
-    ftd_path = _latest(MARKET_DIR, "ftd_detector_*.json")
-    if ftd_path and ftd_path.stat().st_mtime > path.stat().st_mtime:
-        ftd = _any_ftd_detected(_read_json(ftd_path) or {})
+
+    # DD count: prefer the IBD monitor (correct rally-invalidation rules);
+    # market_top's invalidation-free count is systematically overstated.
+    dd_source = "ibd"
+    dd_count = None
+    ibd_path = _latest(MARKET_DIR, "ibd_distribution_day_monitor_*.json")
+    if ibd_path and time.time() - ibd_path.stat().st_mtime <= max_age:
+        dd_count = _dd_count_from_ibd(ibd_path)
+    if dd_count is None:
+        dd = (data.get("components") or {}).get("distribution_days") or {}
+        dd_count = dd.get("effective_count") or (dd.get("clustering") or {}).get("total_count") or 0
+        dd_source = "market_top"
+
+    # FTD: the dedicated detector wins whenever its report exists (regardless
+    # of mtime ordering); market_top's break-on-detect flag is the fallback.
+    verdict = _ftd_from_detector(_latest(MARKET_DIR, "ftd_detector_*.json"))
+    if verdict is not None:
+        ftd, ftd_note = verdict
+    else:
+        ftd = bool((data.get("follow_through_day") or {}).get("ftd_detected"))
+        ftd_note = "market_top.follow_through_day"
 
     if not (score >= SHORT_TOP_RISK_MIN or dd_count >= SHORT_DD_MIN):
-        return False, f"давления нет (top-risk {score}, DD {dd_count}) — шорт-скрин не нужен"
+        return False, f"давления нет (top-risk {score}, DD {dd_count} [{dd_source}]) — шорт-скрин не нужен"
     if ftd:
-        return False, "подтверждён свежий FTD — шортить запрещено (правило 6.4)"
-    return True, f"top-risk {score} / DD {dd_count}, свежего FTD нет"
+        return False, f"свежий FTD — шортить запрещено (правило 6.4): {ftd_note}"
+    return True, f"top-risk {score} / DD {dd_count} [{dd_source}], свежего FTD нет"
+
+
+def _filter_shorts_on_earnings(shorts: list, args) -> tuple[list, str]:
+    """Plan rule 6.4: never hold a short through earnings — drop candidates
+    reporting within the profile earnings gate (default 10 trading days, the
+    short time-stop horizon). Fails open with an explicit warning note when the
+    scanner is unreachable; the trader then checks the dates manually."""
+    if not shorts or args.dry_run:
+        return shorts, ""
+    profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    gate_days = int(profile.get("earnings_gate_days") or 10)
+    symbols = [str(s.get("symbol", "")).upper() for s in shorts if s.get("symbol")]
+    try:
+        quotes = tsig.fetch_quotes(symbols)
+    except tsig.QuotesError as exc:
+        log(f"short earnings gate: даты отчётов недоступны: {exc}", logging.WARNING)
+        return shorts, (
+            "⚠️ Даты отчётов недоступны — проверь earnings вручную "
+            "(шорт через отчёт запрещён, правило 6.4)."
+        )
+    today = dt.date.today()
+    kept, dropped = [], []
+    for s in shorts:
+        sym = str(s.get("symbol", "")).upper()
+        ed = (quotes.get(sym) or {}).get("earnings_date")
+        days = None
+        if ed:
+            try:
+                days = tsig.weekdays_until(ed, today)
+            except ValueError:
+                days = None
+        if days is not None and days <= gate_days:
+            dropped.append(f"{sym} ({ed}, {days} т.д.)")
+        else:
+            kept.append(s)
+    if dropped:
+        log("short earnings gate: исключены перед отчётом: " + ", ".join(dropped))
+        return kept, "📅 Исключены перед отчётом (правило 6.4): " + ", ".join(dropped)
+    return kept, ""
 
 
 def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) -> int:
@@ -1500,13 +1763,16 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
         return 1
 
     short_path = run_skill_script(
-        [SHORT_SCREEN_SCRIPT, "--min-grade", "B", "--top", "10"],
+        # --full-sp500: without it the screener caps the universe at its default
+        # --max-candidates 100, i.e. the first ~100 constituents alphabetically.
+        [SHORT_SCREEN_SCRIPT, "--full-sp500", "--min-grade", "B", "--top", "10"],
         label="swing-short-screener (grade B+)",
         dry_run=args.dry_run,
         timeout=args.timeout,
         output_glob=(SCREENERS_DIR, "swing_short_screener_*.json"),
     )
     shorts = ((_read_json(short_path) or {}).get("candidates") or []) if short_path else []
+    shorts, earnings_note = _filter_shorts_on_earnings(shorts, args)
     val_candidates = [
         {
             "ticker": s.get("symbol"),
@@ -1530,6 +1796,8 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
     )
     wl_path = _write_watchlist(wl, date_str, args)
     msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
+    if earnings_note:
+        msg += f"\n\n{earnings_note}"
     val_note = _validation_note(wl, validation)
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"

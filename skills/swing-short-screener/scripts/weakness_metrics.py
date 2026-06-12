@@ -74,6 +74,41 @@ def pct_return(closes: list[float], period: int) -> Optional[float]:
     return (latest - past) / past
 
 
+def atr(bars: list[dict], period: int = 14) -> Optional[float]:
+    """Average True Range over ``period`` sessions (most-recent-first bars).
+
+    TR = max(high − low, |high − prev_close|, |low − prev_close|); simple
+    average. Returns None when there is not enough history.
+    """
+    if len(bars) < period + 1:
+        return None
+    trs = []
+    for i in range(period):
+        high = float(bars[i]["high"])
+        low = float(bars[i]["low"])
+        prev_close = float(bars[i + 1]["close"])
+        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    return sum(trs) / period
+
+
+def last_swing_high(highs: list[float], k: int = 2, lookback: int = 20) -> Optional[float]:
+    """Most recent swing high within ``lookback`` sessions (most-recent-first).
+
+    A swing high is a bar strictly above its ``k`` more-recent neighbours and
+    at-or-above its ``k`` older neighbours — the "last lower high" a short stop
+    belongs above. Returns None when the window has no local maximum (e.g. a
+    steady decline with no bounce yet).
+    """
+    n = min(len(highs), lookback)
+    for i in range(k, n - k):
+        center = highs[i]
+        more_recent = highs[i - k : i]
+        older = highs[i + 1 : i + 1 + k]
+        if all(center > h for h in more_recent) and all(center >= h for h in older):
+            return center
+    return None
+
+
 def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
     """Compute every weakness measurement for one symbol.
 
@@ -114,6 +149,9 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
 
     pct_below_ma50 = ((ma50 - price) / ma50 * 100) if ma50 > 0 else 0.0
 
+    atr14 = atr(bars, 14)
+    swing_high = last_swing_high(highs, k=2, lookback=20)
+
     return {
         "price": round(price, 2),
         "ma50": round(ma50, 2),
@@ -133,5 +171,7 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
         "prior_high_20_40": round(prior_high, 2),
         "lower_high_pct": round(lower_high_pct, 4),
         "pct_below_ma50": round(pct_below_ma50, 2),
+        "atr14": round(atr14, 2) if atr14 is not None else None,
+        "swing_high_20": round(swing_high, 2) if swing_high is not None else None,
         "bars_available": len(bars),
     }

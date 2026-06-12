@@ -88,6 +88,25 @@ def test_oversold_extended_caps_grade_at_c():
     assert result["raw_grade"] in ("A", "B")
 
 
+def test_stop_uses_swing_high_plus_atr_buffer_not_20d_max():
+    # ADBE-like post-crash shape: the 20d absolute max (275) is the pre-crash
+    # top; the relevant lower high is the recent bounce (222). The stop must
+    # sit just above the lower high, not 26% away at the old top.
+    m = _clean_stage4_metrics(
+        price=218.8, recent_high_20=275.44, swing_high_20=222.0, atr14=4.0
+    )
+    tl = score_candidate(m, spy_return=0.0)["trade_levels"]
+    assert tl["stop"] == 224.0  # 222 + 0.5 × ATR(4)
+    assert tl["stop_pct"] < 5
+    assert tl["target_2r"] == round(218.8 - 2 * (224.0 - 218.8), 2)
+
+
+def test_stop_falls_back_to_20d_max_without_swing_high():
+    m = _clean_stage4_metrics(swing_high_20=None, atr14=None)
+    tl = score_candidate(m, spy_return=0.0)["trade_levels"]
+    assert tl["stop"] == 152.0  # recent_high_20, no ATR buffer available
+
+
 def test_strong_market_lowers_relative_strength():
     # Same weak stock, but index ripped +20% → underperformance even larger,
     # RS already maxed; confirm scorer still produces a valid grade.

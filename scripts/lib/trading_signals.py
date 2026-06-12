@@ -27,6 +27,7 @@ subprocess orchestration live in run_trading_schedule.py.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import tempfile
@@ -34,10 +35,15 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 SCAN_URL = "https://scanner.tradingview.com/america/scan"
 USER_AGENT = "claude-trading-skills/auto-mode (+https://github.com)"
 US_EXCHANGES = ["AMEX", "NASDAQ", "NYSE"]
+# Earnings timestamps from the scanner are converted to the US-Eastern calendar
+# date so an after-close report keeps its actual trading date (mirrors
+# breakout-trade-planner's earnings_gate).
+_US_EASTERN = ZoneInfo("America/New_York")
 
 # Entry chase band used when a candidate has no explicit worst_entry:
 # do not chase price more than this % past the pivot/entry level.
@@ -48,11 +54,20 @@ NEAR_STOP_BAND_PCT = 1.0
 SHORT_RISK_PCT = 1.0
 SHORT_MAX_POSITION_PCT = 25.0
 
+# Plan rule 6.4: NEVER hold a short through earnings. Under the 10-trading-day
+# short time-stop a new short opened within this many weekdays of the report
+# would still be open on earnings day -> block the OPEN signal outright.
+SHORT_EARNINGS_GATE_WEEKDAYS = 10
+# Early warning for ANY open position approaching its report.
+POSITION_EARNINGS_WARN_WEEKDAYS = 3
+
 # Signal types
 OPEN_LONG = "OPEN_LONG"
 OPEN_SHORT = "OPEN_SHORT"
 MISSED = "MISSED"
 SKIPPED_CAPACITY = "SKIPPED_CAPACITY"
+SKIPPED_EARNINGS = "SKIPPED_EARNINGS"
+EARNINGS_SOON = "EARNINGS_SOON"
 STOP_HIT = "STOP_HIT"
 NEAR_STOP = "NEAR_STOP"
 TWO_R = "TWO_R"
@@ -109,7 +124,7 @@ def fetch_quotes(
             {"left": "name", "operation": "in_range", "right": wanted},
             {"left": "exchange", "operation": "in_range", "right": US_EXCHANGES},
         ],
-        "columns": ["name", "close", "volume"],
+        "columns": ["name", "close", "volume", "earnings_release_next_date"],
         "range": [0, max(50, 4 * len(wanted))],
     }
 
@@ -136,9 +151,37 @@ def fetch_quotes(
         quotes[name] = {
             "price": float(close),
             "volume": values[2] if len(values) > 2 else None,
+            "earnings_date": _earnings_date_from_ts(values[3]) if len(values) > 3 else None,
             "symbol_full": row.get("s"),
         }
     return quotes
+
+
+def _earnings_date_from_ts(ts) -> str | None:
+    """Scanner earnings timestamp -> 'YYYY-MM-DD' (US-Eastern), None if unset."""
+    if not ts:
+        return None
+    try:
+        event = dt.datetime.fromtimestamp(float(ts), tz=dt.timezone.utc).astimezone(_US_EASTERN)
+    except (TypeError, ValueError, OSError):
+        return None
+    return event.date().isoformat()
+
+
+def weekdays_until(target_iso: str, today: dt.date) -> int:
+    """Count weekdays in (today, target]; same-day or past dates -> 0.
+
+    Holiday-naive (mirrors the planner's earnings gate): near an exchange
+    holiday this overestimates by one day. Raises ValueError on a bad date.
+    """
+    event = dt.date.fromisoformat(target_iso)
+    days = 0
+    cur = today
+    while cur < event:
+        cur += dt.timedelta(days=1)
+        if cur.weekday() < 5:
+            days += 1
+    return days
 
 
 # --------------------------------------------------------------------------- #
@@ -289,6 +332,15 @@ def build_watchlist(
 # Signal evaluation
 # --------------------------------------------------------------------------- #
 def _position_side(position: dict) -> str:
+    """Explicit ``side`` from the heat ledger wins; geometry is only a fallback.
+
+    Inferring from stop > entry misclassifies a LONG whose stop was trailed
+    above entry (breakeven+ / SMA trail) as a short and inverts every manage
+    signal — a healthy long above its trailed stop would fire a false STOP_HIT.
+    """
+    side = str(position.get("side") or "").lower()
+    if side in ("long", "short"):
+        return side
     stop = position.get("stop_loss") or 0
     entry = position.get("entry_price") or 0
     return "short" if stop > entry else "long"
@@ -364,32 +416,63 @@ def _position_manage_signal(position: dict, price: float) -> dict | None:
     return None
 
 
+def _days_to_earnings(quote: dict | None, today: dt.date) -> tuple[str, int] | None:
+    """(earnings_date, weekdays-until) from a quote; None when unknown/invalid."""
+    ed = (quote or {}).get("earnings_date")
+    if not ed:
+        return None
+    try:
+        return ed, weekdays_until(ed, today)
+    except ValueError:
+        return None
+
+
 def evaluate_signals(
     watchlist: dict | None,
     heat: dict | None,
     quotes: dict[str, dict],
     gate_decision: str,
     sent: set[str],
+    *,
+    today: dt.date | None = None,
 ) -> list[dict]:
     """Compute the actionable signals for this monitoring round.
 
     Inputs are read-only; dedup against ``sent`` (keys "TICKER:TYPE" already
     notified today). OPEN signals additionally respect the portfolio limits in
     the latest heat report: open slots and remaining heat budget, consumed in
-    composite-score order (best candidates claim capacity first).
+    composite-score order (best candidates claim capacity first). Quotes that
+    carry ``earnings_date`` arm the earnings rules: OPEN_SHORT is blocked
+    within SHORT_EARNINGS_GATE_WEEKDAYS of the report (plan rule 6.4), and any
+    open position within POSITION_EARNINGS_WARN_WEEKDAYS gets EARNINGS_SOON.
     """
+    today = today or dt.date.today()
     signals: list[dict] = []
     positions = (heat or {}).get("positions") or []
     open_tickers = {str(p.get("ticker", "")).upper() for p in positions}
 
     # --- manage open positions (always, regardless of gate) -----------------
     for position in positions:
-        quote = quotes.get(str(position.get("ticker", "")).upper())
+        ticker = str(position.get("ticker", "")).upper()
+        quote = quotes.get(ticker)
         if not quote:
             continue
         signal = _position_manage_signal(position, quote["price"])
         if signal and signal["key"] not in sent:
             signals.append(signal)
+        earnings = _days_to_earnings(quote, today)
+        if earnings and earnings[1] <= POSITION_EARNINGS_WARN_WEEKDAYS:
+            warn = _signal(
+                EARNINGS_SOON,
+                ticker,
+                _position_side(position),
+                quote["price"],
+                position=position,
+                earnings_date=earnings[0],
+                days_to_earnings=earnings[1],
+            )
+            if warn["key"] not in sent:
+                signals.append(warn)
 
     # --- opening signals from the watchlist ---------------------------------
     slots_left = (heat or {}).get("remaining_position_slots")
@@ -407,6 +490,20 @@ def evaluate_signals(
         signal = _candidate_open_signal(
             {**candidate, "ticker": ticker}, quote["price"], gate_decision
         )
+        # Plan rule 6.4: never hold a short through earnings — a report within
+        # the gate window turns the OPEN_SHORT into an explicit skip.
+        if signal and signal["type"] == OPEN_SHORT:
+            earnings = _days_to_earnings(quote, today)
+            if earnings and earnings[1] <= SHORT_EARNINGS_GATE_WEEKDAYS:
+                signal = _signal(
+                    SKIPPED_EARNINGS,
+                    ticker,
+                    "short",
+                    signal["price"],
+                    candidate=candidate,
+                    earnings_date=earnings[0],
+                    days_to_earnings=earnings[1],
+                )
         if not signal or signal["key"] in sent:
             continue
         if signal["type"] in (OPEN_LONG, OPEN_SHORT):

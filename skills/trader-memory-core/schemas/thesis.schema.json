@@ -26,6 +26,11 @@
       "minLength": 1,
       "description": "Single stock ticker symbol (Phase 1: no multi-leg)"
     },
+    "side": {
+      "type": ["string", "null"],
+      "enum": ["long", "short", null],
+      "description": "Trade direction; absent/null reads as long"
+    },
     "created_at": {
       "type": "string",
       "format": "date-time"

@@ -10,6 +10,7 @@ from screen_short import (
     parse_arguments,
     passes_short_filter,
     run_from_fixture,
+    stop_geometry_reason,
 )
 from weakness_metrics import compute_metrics
 
@@ -42,6 +43,34 @@ def test_analyze_downtrend_produces_record(downtrend_bars):
     assert reason == ""
     assert record["grade"] in ("A", "B", "C")
     assert record["metrics"]["below_ma200"] is True
+
+
+def test_stop_geometry_bounds():
+    assert stop_geometry_reason(0.44) == "stop_too_tight_noise"  # the real ALLE case
+    assert stop_geometry_reason(25.9) == "stop_too_wide_post_crash"  # the real ADBE case
+    assert stop_geometry_reason(4.0) == ""
+    assert stop_geometry_reason(2.0) == ""  # inclusive bounds
+    assert stop_geometry_reason(10.0) == ""
+
+
+def test_analyze_symbol_rejects_noise_stop(downtrend_bars, monkeypatch):
+    import screen_short
+
+    fake_score = {
+        "composite_score": 85.0,
+        "grade": "A",
+        "raw_grade": "A",
+        "state_cap_applied": False,
+        "oversold_extended": False,
+        "components": {},
+        "strongest_signal": "trend_structure",
+        "weakest_signal": "liquidity",
+        "trade_levels": {"entry": 100.0, "stop": 100.5, "stop_pct": 0.5, "target_2r": 99.0},
+    }
+    monkeypatch.setattr(screen_short, "score_candidate", lambda m, s: fake_score)
+    record, reason = analyze_symbol(downtrend_bars, spy_return=0.0)
+    assert record is None
+    assert reason == "stop_too_tight_noise"
 
 
 def test_filter_and_rank_orders_and_drops_d():

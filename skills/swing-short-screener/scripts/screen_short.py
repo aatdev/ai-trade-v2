@@ -47,6 +47,12 @@ GRADE_ORDER = {"A": 4, "B": 3, "C": 2, "D": 1}
 
 DEFAULT_MIN_PRICE = 5.0
 DEFAULT_MIN_DOLLAR_VOL = 3_000_000.0
+# Stop-distance sanity bounds (% of entry). Below the floor the stop sits in
+# daily noise (a 0.4% stop is a guaranteed stop-out); above the ceiling the
+# geometry is post-crash junk — the 2R target can't be reached inside the
+# 10-trading-day short time-stop and risk-per-share dwarfs the position cap.
+DEFAULT_MIN_STOP_PCT = 2.0
+DEFAULT_MAX_STOP_PCT = 10.0
 
 
 def _trading_data_dir():
@@ -97,6 +103,19 @@ def passes_short_filter(
     return True, ""
 
 
+def stop_geometry_reason(
+    stop_pct: float,
+    min_stop_pct: float = DEFAULT_MIN_STOP_PCT,
+    max_stop_pct: float = DEFAULT_MAX_STOP_PCT,
+) -> str:
+    """Empty string when the stop distance is tradable; rejection reason otherwise."""
+    if stop_pct < min_stop_pct:
+        return "stop_too_tight_noise"
+    if stop_pct > max_stop_pct:
+        return "stop_too_wide_post_crash"
+    return ""
+
+
 def analyze_symbol(
     bars: list[dict],
     spy_return,
@@ -105,6 +124,8 @@ def analyze_symbol(
     min_price: float = DEFAULT_MIN_PRICE,
     min_dollar_vol: float = DEFAULT_MIN_DOLLAR_VOL,
     rs_lookback: int = 63,
+    min_stop_pct: float = DEFAULT_MIN_STOP_PCT,
+    max_stop_pct: float = DEFAULT_MAX_STOP_PCT,
 ) -> tuple[dict, str]:
     """Run one symbol end-to-end. Returns (record_or_None, reject_reason)."""
     metrics = compute_metrics(bars, rs_lookback=rs_lookback)
@@ -112,6 +133,11 @@ def analyze_symbol(
     if not passed:
         return None, reason
     score = score_candidate(metrics, spy_return)
+    geometry = stop_geometry_reason(
+        (score.get("trade_levels") or {}).get("stop_pct") or 0.0, min_stop_pct, max_stop_pct
+    )
+    if geometry:
+        return None, geometry
     record = build_result_record(name or "", name, sector, metrics, score)
     return record, ""
 
@@ -141,6 +167,8 @@ def run_from_fixture(fixture_path: str, rs_lookback: int, args) -> tuple[list[di
             min_price=args.min_price,
             min_dollar_vol=args.min_dollar_vol,
             rs_lookback=rs_lookback,
+            min_stop_pct=args.min_stop_pct,
+            max_stop_pct=args.max_stop_pct,
         )
         if record is not None:
             record["symbol"] = symbol
@@ -212,6 +240,8 @@ def run_live(args) -> tuple[list[dict], dict]:
             min_price=args.min_price,
             min_dollar_vol=args.min_dollar_vol,
             rs_lookback=args.rs_lookback,
+            min_stop_pct=args.min_stop_pct,
+            max_stop_pct=args.max_stop_pct,
         )
         if record is not None:
             record["symbol"] = entry["symbol"]
@@ -256,6 +286,18 @@ def parse_arguments(argv=None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_MIN_DOLLAR_VOL,
         help="Reject names below this avg daily dollar volume",
+    )
+    p.add_argument(
+        "--min-stop-pct",
+        type=float,
+        default=DEFAULT_MIN_STOP_PCT,
+        help="Reject candidates whose stop distance is below this %% of entry (noise stop)",
+    )
+    p.add_argument(
+        "--max-stop-pct",
+        type=float,
+        default=DEFAULT_MAX_STOP_PCT,
+        help="Reject candidates whose stop distance exceeds this %% of entry (post-crash)",
     )
     p.add_argument("--as-of", help="Date label for the report (YYYY-MM-DD); else today")
     p.add_argument(

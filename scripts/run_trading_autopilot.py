@@ -74,6 +74,10 @@ MAX_ATTEMPTS = 2
 # The intraday monitor is repeatable: re-run no sooner than this many minutes
 # after the previous run (cron fires every 15 min: `*/15 * * * *`).
 INTRADAY_INTERVAL_MIN = 15
+# The run stamps last_at a second or two AFTER the cron tick (15:15:01), so the
+# next tick at 15:30:00 sees ~14m59s elapsed; a strict `< 15` check skipped
+# every other tick (observed 30-min effective cadence). Compare with slack.
+INTRADAY_INTERVAL_TOLERANCE_MIN = 1.0
 # Telegram only after this many CONSECUTIVE intraday failures (reset on success).
 INTRADAY_FAILURE_ALERT_STREAK = 3
 RUN_LOG_RETENTION_DAYS = 30
@@ -244,7 +248,7 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
                 elapsed_min = (now - dt.datetime.fromisoformat(last)).total_seconds() / 60
             except ValueError:
                 elapsed_min = INTRADAY_INTERVAL_MIN
-            if elapsed_min < INTRADAY_INTERVAL_MIN:
+            if elapsed_min < INTRADAY_INTERVAL_MIN - INTRADAY_INTERVAL_TOLERANCE_MIN:
                 wait = max(1, INTRADAY_INTERVAL_MIN - int(elapsed_min))
                 return "none", f"intraday: следующий чек через ~{wait} мин"
         return "intraday", "сессия США: мониторинг сигналов (watchlist + открытые позиции)"

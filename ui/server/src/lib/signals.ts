@@ -101,6 +101,10 @@ function allDollars(s: string): number[] {
  * Returns null when direction or the core levels are missing.
  */
 export function parseSignalLevels(block: SignalBlock): AnalysisSignal | null {
+  // A 🟡 HOLD block is a wait-read: even when it carries a Trigger line (it
+  // should not, per ticker-analysis SKILL.md), it must not arm levels — a
+  // HOLD once flipped a grade-A screener short into a "validated" long.
+  if (block.status && (/\bHOLD\b/i.test(block.status) || block.status.includes('🟡'))) return null;
   const lines = block.markdown.split('\n');
   let direction: 'long' | 'short' | null = /🟢\s*BUY/.test(block.markdown)
     ? 'long'

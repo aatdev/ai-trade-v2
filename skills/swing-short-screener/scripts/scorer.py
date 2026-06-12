@@ -37,6 +37,10 @@ COMPONENT_WEIGHTS = {
     "liquidity": 0.10,
 }
 
+# Stop buffer above the last swing high, in ATRs — keeps the stop out of
+# one-bar noise without ballooning the risk distance.
+STOP_ATR_BUFFER = 0.5
+
 COMPONENT_LABELS = {
     "trend_structure": "Trend Structure (Stage 4)",
     "relative_strength": "Relative Strength (underperformance)",
@@ -162,10 +166,15 @@ def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
     grade = _cap_grade_at_c(raw_grade) if oversold_extended else raw_grade
     cap_applied = grade != raw_grade
 
-    # Short trade levels: enter near current price, stop above the recent
-    # 20-session swing high, target 2R below entry.
+    # Short trade levels: enter near current price, stop above the most recent
+    # LOWER HIGH plus an ATR buffer (plan rule: «стоп НАД последним нижним
+    # максимумом»), target 2R below entry. The 20-session absolute max is only
+    # a fallback — on a post-crash name it is the pre-crash top, which produced
+    # 25%+ stops with unreachable 2R targets.
     entry = m.get("price", 0.0)
-    stop = m.get("recent_high_20", entry)
+    swing = m.get("swing_high_20") or m.get("recent_high_20", entry)
+    atr14 = m.get("atr14") or 0.0
+    stop = swing + STOP_ATR_BUFFER * atr14
     risk = max(stop - entry, 0.0)
     target = round(entry - 2 * risk, 2)
     stop_pct = round((risk / entry) * 100, 2) if entry else 0.0

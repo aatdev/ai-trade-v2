@@ -1,5 +1,6 @@
 """Tests for scripts/lib/trading_signals.py (auto-mode signal engine)."""
 
+import datetime as dt
 import importlib.util
 import json
 from pathlib import Path
@@ -366,6 +367,94 @@ class TestManageSignals:
         heat = make_heat(positions=[short_position()])
         signals = sig.evaluate_signals(None, heat, {"NFLX": {"price": 261.0}}, "allow", set())
         assert signals[0]["side"] == "short"
+
+    def test_trailed_long_with_explicit_side_is_quiet_above_stop(self):
+        # Long trailed to breakeven+ (stop 105 > entry 100). Geometry alone
+        # would misread it as a short and fire a false STOP_HIT at 110; the
+        # explicit side from the heat ledger must win → no signal.
+        pos = long_position(side="long", stop_loss=105.0)
+        heat = make_heat(positions=[pos])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 110.0}}, "allow", set())
+        assert signals == []
+
+    def test_trailed_long_explicit_side_fires_stop_hit_below_trailed_stop(self):
+        pos = long_position(side="long", stop_loss=105.0)
+        heat = make_heat(positions=[pos])
+        signals = sig.evaluate_signals(None, heat, {"AAPL": {"price": 104.5}}, "allow", set())
+        assert _types(signals) == [("AAPL", "STOP_HIT")]
+        assert signals[0]["side"] == "long"
+
+    def test_explicit_short_side_overrides_geometry(self):
+        # Short whose stop was trailed BELOW entry (in profit): geometry says
+        # "long"; the explicit side must keep short semantics — price rallying
+        # back through the trailed stop is a STOP_HIT.
+        pos = short_position(side="short", stop_loss=240.0)  # entry 245
+        heat = make_heat(positions=[pos])
+        signals = sig.evaluate_signals(None, heat, {"NFLX": {"price": 241.0}}, "restrict", set())
+        assert _types(signals) == [("NFLX", "STOP_HIT")]
+        assert signals[0]["side"] == "short"
+
+
+# --------------------------------------------------------------------------- #
+# evaluate_signals — earnings rules (plan rule 6.4)
+# --------------------------------------------------------------------------- #
+_THU = dt.date(2026, 6, 11)  # Thursday
+
+
+class TestEarningsRules:
+    def test_weekdays_until(self):
+        assert sig.weekdays_until("2026-06-12", _THU) == 1  # Friday
+        assert sig.weekdays_until("2026-06-15", _THU) == 2  # Monday, weekend skipped
+        assert sig.weekdays_until("2026-06-11", _THU) == 0  # same day
+        assert sig.weekdays_until("2026-06-10", _THU) == 0  # past
+
+    def test_open_short_blocked_before_earnings(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 244.0, "earnings_date": "2026-06-18"}}  # 5 weekdays
+        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        assert _types(signals) == [("NFLX", "SKIPPED_EARNINGS")]
+        assert signals[0]["days_to_earnings"] == 5
+
+    def test_open_short_allowed_when_earnings_far(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 244.0, "earnings_date": "2026-07-30"}}
+        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        assert _types(signals) == [("NFLX", "OPEN_SHORT")]
+
+    def test_open_short_allowed_when_earnings_unknown(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 244.0, "earnings_date": None}}
+        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        assert _types(signals) == [("NFLX", "OPEN_SHORT")]
+
+    def test_open_long_not_blocked_by_earnings(self):
+        # The long side is already gated at plan time by the breakout planner.
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 156.0, "earnings_date": "2026-06-18"}}
+        signals = sig.evaluate_signals(wl, None, quotes, "allow", set(), today=_THU)
+        assert _types(signals) == [("NVDA", "OPEN_LONG")]
+
+    def test_earnings_soon_warns_open_position(self):
+        heat = make_heat(positions=[long_position()])
+        quotes = {"AAPL": {"price": 100.0, "earnings_date": "2026-06-15"}}  # 2 weekdays
+        signals = sig.evaluate_signals(None, heat, quotes, "allow", set(), today=_THU)
+        assert ("AAPL", "EARNINGS_SOON") in _types(signals)
+        warn = next(s for s in signals if s["type"] == "EARNINGS_SOON")
+        assert warn["side"] == "long"
+        assert warn["days_to_earnings"] == 2
+
+    def test_no_earnings_warning_when_far(self):
+        heat = make_heat(positions=[long_position()])
+        quotes = {"AAPL": {"price": 100.0, "earnings_date": "2026-07-30"}}
+        signals = sig.evaluate_signals(None, heat, quotes, "allow", set(), today=_THU)
+        assert signals == []
+
+    def test_earnings_soon_deduped(self):
+        heat = make_heat(positions=[long_position()])
+        quotes = {"AAPL": {"price": 100.0, "earnings_date": "2026-06-15"}}
+        sent = {"AAPL:EARNINGS_SOON"}
+        signals = sig.evaluate_signals(None, heat, quotes, "allow", sent, today=_THU)
+        assert signals == []
 
 
 # --------------------------------------------------------------------------- #

@@ -450,6 +450,10 @@ def _patch_trading_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "PLANS_DIR", tmp_path / "plans")
     monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path / "journal")
     monkeypatch.setattr(ts, "SIGNALS_STATE_FILE", tmp_path / "logs" / "intraday_signals_state.json")
+    # Never touch the production lock: a non-dry-run ts.main() in a test would
+    # otherwise race (and block) the real cron autopilot via trading-data/logs/.
+    monkeypatch.setattr(ts, "LOCK_FILE", tmp_path / "logs" / "trading_schedule.lock")
+    monkeypatch.setattr(ts, "ALERTS_STATE_FILE", tmp_path / "logs" / "watchlist_alerts_state.json")
     for d in ("schedule", "market", "screeners", "plans", "journal", "logs"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
 
@@ -629,6 +633,7 @@ class TestEveningHybrid:
         market_top=None,
         short_candidates=None,
         tv_up=True,
+        quotes_map=None,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
         _write_json(tmp_path / "trading_profile.json", {"account_size": 150000})
@@ -641,9 +646,11 @@ class TestEveningHybrid:
             _write_json(tmp_path / "market" / "market_top_2026-06-11_120000.json", market_top)
 
         script_calls = []
+        script_cmds = {}
 
         def fake_run_skill_script(cmd, *, label, dry_run, timeout, output_glob=None):
             script_calls.append(label)
+            script_cmds[label] = [str(c) for c in cmd]
             if "vcp" in label:
                 return _write_json(
                     tmp_path / "screeners" / "vcp_screener_2026-06-11_221000.json", {"results": []}
@@ -671,6 +678,8 @@ class TestEveningHybrid:
         monkeypatch.setattr(ts, "run_skill_script", fake_run_skill_script)
         monkeypatch.setattr(ts, "run_claude", fake_run_claude)
         monkeypatch.setattr(ts, "tv_available", lambda **k: tv_up)
+        # The short-branch earnings gate fetches quotes; never hit the network.
+        monkeypatch.setattr(ts.tsig, "fetch_quotes", lambda tickers, **k: quotes_map or {})
         monkeypatch.setattr(
             ts.talerts,
             "sync_watchlist_alerts",
@@ -689,6 +698,7 @@ class TestEveningHybrid:
         monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
         rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-11", "--no-telegram"])
         self.synced = synced
+        self.script_cmds = script_cmds
         return rc, script_calls, sent
 
     def test_allow_runs_deterministic_chain_and_builds_watchlist(self, monkeypatch, tmp_path):
@@ -741,12 +751,57 @@ class TestEveningHybrid:
         )
         assert rc == 0
         assert any("short" in c for c in calls)
+        short_cmd = next(v for k, v in self.script_cmds.items() if "short" in k)
+        assert "--full-sp500" in short_cmd  # full universe, not the first 100 names
         wl = json.loads(
             (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
         )
         assert wl["candidates"][0]["side"] == "short"
         assert wl["candidates"][0]["shares"] == 100  # 1% of 150k / 15
         assert sent and "ШОРТ" in sent[0]
+
+    def test_short_candidates_before_earnings_are_dropped(self, monkeypatch, tmp_path):
+        """Plan rule 6.4: a short reporting within the earnings gate must not
+        reach the watchlist; the Telegram digest names the exclusion."""
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        shorts = [
+            {
+                "symbol": "NFLX",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": 245.0, "stop": 260.0, "target_2r": 215.0},
+            },
+            {
+                "symbol": "ADBE",
+                "grade": "A",
+                "composite_score": 80.0,
+                "trade_levels": {"entry": 210.0, "stop": 218.5, "target_2r": 193.0},
+            },
+        ]
+        near = (dt.date.today() + dt.timedelta(days=2)).isoformat()  # ≤2 weekdays
+        far = (dt.date.today() + dt.timedelta(days=40)).isoformat()  # ≥28 weekdays
+        quotes_map = {
+            "ADBE": {"price": 210.0, "earnings_date": near},
+            "NFLX": {"price": 245.0, "earnings_date": far},
+        }
+        rc, _, sent = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            short_candidates=shorts,
+            quotes_map=quotes_map,
+        )
+        assert rc == 0
+        wl = json.loads(
+            (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
+        )
+        assert [c["ticker"] for c in wl["candidates"]] == ["NFLX"]
+        assert any("Исключены перед отчётом" in m and "ADBE" in m for m in sent)
 
     def test_restrict_without_market_top_skips_shorts(self, monkeypatch, tmp_path):
         rc, calls, sent = self._run(monkeypatch, tmp_path, decision="restrict")
@@ -763,6 +818,296 @@ class TestEveningHybrid:
         rc, calls, _ = self._run(monkeypatch, tmp_path, decision="restrict", market_top=market_top)
         assert rc == 0
         assert not any("short" in c for c in calls)
+
+
+# --------------------------------------------------------------------------- #
+# signals.md parsing (must mirror the REAL ticker-analysis block format)
+# --------------------------------------------------------------------------- #
+_REAL_SIGNALS_MD = """# Trading Signals Journal
+
+---
+
+## 2026-06-10 — AOS — 🔴 SELL (breakdown)
+
+- **Trigger для Short:** close 1D < $57.00
+- **Entry (Short):** $55.50–$57.00
+- **Stop:** $59.00
+- **T1 / T2 / T3:** $53.00 / $50.00 / $47.00
+
+---
+
+## 2026-06-12 — AOS — 🟢 BUY (reversal)
+
+- **Trigger для Long:** close 1D > $60.00
+- **Entry (Long):** $58.00–$60.50
+- **Stop:** $56.00
+- **T1 / T2 / T3:** $64.00 / $70.00 / $78.00
+- **Альтернатива (Short):** close < $55 → stop $58, T1 $50
+
+---
+
+## 2026-06-12 — ALLE — 🟡 HOLD (отскок к сопротивлению)
+
+- **Trigger для Long:** close 1D > $135.50
+- **Stop:** $129.40
+- **T1 / T2 / T3:** $138.50 / $144.50 / $148.80
+---
+"""
+
+
+class TestParseSignalsMd:
+    def _write(self, monkeypatch, tmp_path, text=_REAL_SIGNALS_MD):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        f = tmp_path / "analysis" / "signals.md"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+
+    def test_parses_real_format_latest_block_wins(self, monkeypatch, tmp_path):
+        self._write(monkeypatch, tmp_path)
+        sig = ts._parse_signals_md("AOS")
+        assert sig is not None
+        assert sig["date"] == "2026-06-12"
+        assert sig["direction"] == "long"
+        assert sig["trigger"] == 60.0
+        assert sig["stop"] == 56.0  # not the alternative-scenario $58
+        assert (sig["t1"], sig["t2"], sig["t3"]) == (64.0, 70.0, 78.0)
+        assert (sig["entry_low"], sig["entry_high"]) == (58.0, 60.5)
+
+    def test_hold_block_never_arms_levels(self, monkeypatch, tmp_path):
+        self._write(monkeypatch, tmp_path)
+        assert ts._parse_signals_md("ALLE") is None
+
+    def test_direction_from_trigger_line_without_emoji(self, monkeypatch, tmp_path):
+        md = (
+            "# J\n\n---\n\n## 2026-06-12 — NVDA — анализ\n\n"
+            "- **Trigger для Short:** close < $150.00\n"
+            "- **Stop:** $158.00\n"
+            "- **T1 / T2 / T3:** $140.00 / $135.00 / $130.00\n"
+        )
+        self._write(monkeypatch, tmp_path, md)
+        sig = ts._parse_signals_md("NVDA")
+        assert sig["direction"] == "short"
+        assert sig["trigger"] == 150.0
+
+    def test_unknown_ticker_returns_none(self, monkeypatch, tmp_path):
+        self._write(monkeypatch, tmp_path)
+        assert ts._parse_signals_md("TSLA") is None
+
+    def test_missing_core_level_returns_none(self, monkeypatch, tmp_path):
+        md = "# J\n\n---\n\n## 2026-06-12 — NVDA — 🟢 BUY\n\n- **Trigger для Long:** $150\n"
+        self._write(monkeypatch, tmp_path, md)
+        assert ts._parse_signals_md("NVDA") is None  # no Stop / T1
+
+
+# --------------------------------------------------------------------------- #
+# Short-branch market-pressure gate (_short_conditions)
+# --------------------------------------------------------------------------- #
+def _weekdays_ago(n: int) -> str:
+    """ISO date n weekdays back from today."""
+    d = dt.date.today()
+    while n > 0:
+        d -= dt.timedelta(days=1)
+        if d.weekday() < 5:
+            n -= 1
+    return d.isoformat()
+
+
+class TestShortConditions:
+    def _setup(self, monkeypatch, tmp_path, *, market_top=None, ftd=None, ibd=None):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        if market_top is not None:
+            _write_json(tmp_path / "market" / "market_top_2026-06-11_120000.json", market_top)
+        if ftd is not None:
+            _write_json(tmp_path / "market" / "ftd_detector_2026-06-11_130000.json", ftd)
+        if ibd is not None:
+            _write_json(
+                tmp_path / "market" / "ibd_distribution_day_monitor_2026-06-11_125900.json", ibd
+            )
+
+    @staticmethod
+    def _pressure_top(score=30.0, dd=6.0, ftd=False):
+        return {
+            "composite": {"composite_score": score},
+            "components": {"distribution_days": {"effective_count": dd}},
+            "follow_through_day": {"ftd_detected": ftd},
+        }
+
+    @staticmethod
+    def _ftd_report(state, ftd_date, *, invalidated=False):
+        return {
+            "market_state": {"combined_state": state},
+            "sp500": {"state": state, "ftd": {"ftd_detected": state == "FTD_CONFIRMED",
+                                              "ftd_date": ftd_date}},
+            "nasdaq": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
+            "ftd_invalidation": {"invalidated": invalidated},
+        }
+
+    def test_market_top_dd_fallback_enables_shorts(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top())
+        active, reason = ts._short_conditions()
+        assert active is True
+        assert "market_top" in reason
+
+    def test_ibd_dd_count_preferred_over_market_top(self, monkeypatch, tmp_path):
+        # market_top overstates DD (no rally invalidation); IBD says only 1.
+        ibd = {"market_distribution_state": {"index_results": [
+            {"symbol": "QQQ", "d25_count": 1}, {"symbol": "SPY", "d25_count": 0}]}}
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ibd=ibd)
+        active, reason = ts._short_conditions()
+        assert active is False
+        assert "давления нет" in reason and "[ibd]" in reason
+
+    def test_old_confirmed_ftd_does_not_block(self, monkeypatch, tmp_path):
+        ftd = self._ftd_report("FTD_CONFIRMED", _weekdays_ago(40))
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ftd=ftd)
+        active, _ = ts._short_conditions()
+        assert active is True
+
+    def test_invalidated_ftd_does_not_block(self, monkeypatch, tmp_path):
+        ftd = self._ftd_report("FTD_CONFIRMED", _weekdays_ago(2), invalidated=True)
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ftd=ftd)
+        active, _ = ts._short_conditions()
+        assert active is True
+
+    def test_fresh_confirmed_ftd_blocks(self, monkeypatch, tmp_path):
+        ftd = self._ftd_report("FTD_CONFIRMED", _weekdays_ago(2))
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ftd=ftd)
+        active, reason = ts._short_conditions()
+        assert active is False
+        assert "FTD" in reason
+
+    def test_detector_overrides_market_top_false_negative(self, monkeypatch, tmp_path):
+        # market_top hardwires ftd_detected=False below score 40; the detector
+        # knows about a fresh FTD and must win regardless of file mtimes.
+        ftd = self._ftd_report("FTD_CONFIRMED", _weekdays_ago(1))
+        self._setup(
+            monkeypatch, tmp_path, market_top=self._pressure_top(score=30.0, ftd=False), ftd=ftd
+        )
+        active, _ = ts._short_conditions()
+        assert active is False
+
+    def test_detector_no_ftd_overrides_market_top_stale_true(self, monkeypatch, tmp_path):
+        # market_top still carries a stale break-on-detect True; the detector
+        # state machine says the rally attempt has no confirmed FTD.
+        ftd = self._ftd_report("RALLY_ATTEMPT", None)
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(ftd=True), ftd=ftd)
+        active, _ = ts._short_conditions()
+        assert active is True
+
+
+# --------------------------------------------------------------------------- #
+# Auto-analyze reconcile (scheduler side; policy unified with ui reconcile.ts)
+# --------------------------------------------------------------------------- #
+_AOS_SIGNAL = {
+    "ticker": "AOS",
+    "date": "2026-06-12",
+    "direction": "long",
+    "trigger": 60.0,
+    "stop": 56.0,
+    "t1": 64.0,
+    "t2": 70.0,
+    "t3": 78.0,
+    "entry_low": 58.0,
+    "entry_high": 60.5,
+}
+
+
+class TestAutoAnalyzeReconcile:
+    def _reconcile(self, monkeypatch, tmp_path, *, candidates, signal):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "trading_profile.json",
+            {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25},
+        )
+        wl = {"date": "2026-06-11", "candidates": candidates}
+        wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
+        monkeypatch.setattr(ts, "_run_ticker_analysis", lambda ticker, args: True)
+        monkeypatch.setattr(ts, "_parse_signals_md", lambda ticker: signal)
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        return ts._auto_analyze_reconcile(wl, wl_path, "2026-06-11", args)
+
+    def test_levels_update_resizes_from_profile_with_caps(self, monkeypatch, tmp_path):
+        cand = {
+            "ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5,
+            "target": 63.0, "shares": 639, "risk_dollars": 517.59, "score": 80.3,
+        }
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
+        c = out["candidates"][0]
+        assert c["shares"] == 375  # 150000×1% / |60−56| — budget, not 517.59/4≈129
+        assert c["risk_dollars"] == 1500.0
+        assert c["worst_entry"] == 60.5  # Entry-range high, not == trigger
+        assert c["pivot"] == 60.0 and c["stop"] == 56.0
+        assert c["screener_origin"]["pivot"] == 59.0
+
+    def test_worst_entry_falls_back_to_chase_band(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {**_AOS_SIGNAL, "entry_low": None, "entry_high": None}
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        assert out["candidates"][0]["worst_entry"] == 61.2  # 60 × 1.02
+
+    def test_direction_flip_excludes_and_invalidates_thesis(self, monkeypatch, tmp_path):
+        invalidated = []
+        monkeypatch.setattr(
+            ts, "_invalidate_thesis", lambda tid, *, reason: invalidated.append(tid)
+        )
+        cand = {
+            "ticker": "AOS", "side": "short", "pivot": 58.66, "stop": 59.47,
+            "shares": 639, "thesis_id": "th_aos_pvt_20260611_ab12",
+        }
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
+        assert out["candidates"] == []
+        rej = out["rejected_by_validation"][0]
+        assert rej["source"] == "analysis-excluded"
+        assert rej["side"] == "short"  # original side kept for the audit trail
+        assert invalidated == ["th_aos_pvt_20260611_ab12"]
+
+    def test_profile_sized_shares_caps_tight_stop(self):
+        profile = {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25}
+        shares, risk = ts._profile_sized_shares(profile, 60.0, 59.9)
+        assert shares == 625  # cap 150000×25%/60, not 1500/0.1=15000
+        assert risk == 62.5
+
+
+# --------------------------------------------------------------------------- #
+# Thesis invalidation (direction-flip reconcile)
+# --------------------------------------------------------------------------- #
+def test_invalidate_thesis_uses_store_terminate(monkeypatch):
+    """The state machine forbids `transition <id> INVALIDATED` (and the CLI
+    launcher has no bare `transition` subcommand at all) — invalidation must go
+    through `store terminate --terminal-status INVALIDATED`."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append([str(c) for c in cmd])
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_run)
+    ts._invalidate_thesis("th_x1", reason="analysis direction-flip: signal=short")
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd.index("store") + 1 == cmd.index("terminate")
+    assert "th_x1" in cmd
+    assert "--terminal-status" in cmd and "INVALIDATED" in cmd
+    assert "--exit-reason" in cmd
+    assert "transition" not in cmd
+
+
+def test_open_long_signal_embeds_working_journal_commands(monkeypatch, tmp_path):
+    """The Telegram OPEN-long message embeds copy-paste journal commands: the
+    launcher needs the `store` prefix before `transition`, and BSD date has no
+    `%:z` (it would emit a literal `:z` and fail RFC3339 validation)."""
+    _patch_trading_dirs(monkeypatch, tmp_path)
+    _gate(tmp_path, "2026-06-11", "allow")
+    _watchlist_file(tmp_path, "2026-06-11", [{**_NVDA_CANDIDATE, "thesis_id": "th_abc"}])
+    _heat_file(tmp_path)
+    monkeypatch.setattr(ts.tsig, "fetch_quotes", lambda tickers, **k: {"NVDA": {"price": 156.0}})
+    sent = []
+    monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+
+    rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+    assert rc == 0
+    assert sent and "store transition th_abc ENTRY_READY" in sent[0]
+    assert "%:z" not in sent[0]
 
 
 # --------------------------------------------------------------------------- #

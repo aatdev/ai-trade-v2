@@ -10,7 +10,7 @@ metadata:
 Параметры, подтверждённые пользователем 2026-06-09 при сборке среднесрочного workflow:
 
 - Рынок: NASDAQ/NYSE; капитал $150 000 (Alpaca paper).
-- Риск на сделку: база 1.5% ($2 250), максимум 2% ($3 000) только для A-сетапов.
+- Риск на сделку: 1% ($1 500), лонг и шорт одинаково — подтверждено пользователем 2026-06-12 (раньше план заявлял 1.5%, профиль 1% — выбран 1%, профиль и trading-plan.md синхронизированы).
 - Portfolio heat ≤ 6% ($9 000) «живого» риска, ≤ 6 позиций, сектор ≤ 30%, одна позиция ≤ 25% капитала.
 - Горизонт «среднесрок»: 2 недели – 3 месяца (гибрид: свинг-вход по дневному графику, победителей держать по трейлингу EMA21→SMA50).
 - Направление: лонг; шорты только в слабом рынке (гейт restrict/cash-priority + market-top Orange или DD-кластер).
@@ -20,5 +20,5 @@ metadata:
 
 **FMP-подписки НЕТ** — пользователь требует не зависеть от FMP. Весь контур на TradingView (2026-06-09): дневной — vcp/swing-short через общий TV-слой `scripts/lib/tv_client.py`, earnings-гейт планировщика через публичный scanner.tradingview.com, MAE/MFE через `tv_price_adapter.py`; недельный (ibd/ftd/market-top/macro-regime) — тоже общий TV-слой (ключ принимается, но игнорируется; ibd больше не падает без ключа). На FMP остались только скрипты календарей (earnings-calendar `fetch_earnings_fmp.py`, economic-calendar-fetcher) — TV-замена для earnings уже есть: `vendor/tradingview-mcp/scripts/tv_earnings_calendar.mjs`. При доработках предлагать TV-альтернативы, не FMP.
 
-**Why:** дефолты скриптов (risk 0.5%, max-position 10%) не совпадают с профилем; 2%×6 позиций нарушало бы heat 6%, поэтому база 1.5%.
+**Why:** дефолты скриптов (risk 0.5%, max-position 10%) не совпадают с профилем; источник истины — `trading_profile.json` (risk_pct=1).
 **How to apply:** параметры зашиты в gitignored `trading-data/trading_profile.json` (профиль включает и earnings_gate_days 10, и time_stop_trading_days 15). С 2026-06-10 флаги `--profile/--state-dir/--output-dir` больше НЕ нужны: plan_breakout_trades.py / position_sizer.py / `trader_memory_cli.py heat` сами находят профиль и каталоги через `$TRADING_DATE_DIR` ([[trading-data-layout]]). Фактический heat перед новыми входами: `trader_memory_cli.py heat` → его JSON в `--current-exposure-json` планировщика. Скрининг — `run_tv_screener.py --filter-preset midterm-momentum` ([[use-tradingview-screener-not-finviz]]).

@@ -118,6 +118,9 @@ function mapWatchlistCandidate(c: Record<string, unknown>): WatchlistCandidate {
   };
   // Preserve reconcile-added fields when present (keeps screener candidates clean).
   if (typeof c.source === 'string') out.source = c.source;
+  // The scheduler injects thesis_id; dropping it here would strip the journal
+  // commands from the intraday OPEN signals after any UI watchlist rewrite.
+  if (typeof c.thesis_id === 'string') out.thesis_id = c.thesis_id;
   if (c.t1 !== undefined) out.t1 = numOrNull(c.t1);
   if (c.t2 !== undefined) out.t2 = numOrNull(c.t2);
   if (c.t3 !== undefined) out.t3 = numOrNull(c.t3);
@@ -169,12 +172,22 @@ export function getWatchlist(dataDir: string, date: string | null): Sourced<Watc
 }
 
 /** Read account sizing from trading_profile.json (repo root or data dir). */
-export function readProfile(dataDir: string): { account_size: number; risk_pct: number } | null {
-  const raw =
-    asRecord(readJson(path.join(dataDir, '..', 'trading_profile.json'))) ??
-    asRecord(readJson(path.join(dataDir, 'trading_profile.json')));
+export function readProfile(
+  dataDir: string,
+): { account_size: number; risk_pct: number; max_position_pct: number | null } | null {
+  // ?? must apply to readJson (null when missing), not asRecord (never null) —
+  // the old form short-circuited on `{}` and the real profile (the second
+  // path, $TRADING_DATE_DIR/trading_profile.json) was never read.
+  const raw = asRecord(
+    readJson(path.join(dataDir, '..', 'trading_profile.json')) ??
+      readJson(path.join(dataDir, 'trading_profile.json')),
+  );
   if (Object.keys(raw).length === 0) return null;
-  return { account_size: numOrNull(raw.account_size) ?? 0, risk_pct: numOrNull(raw.risk_pct) ?? 0 };
+  return {
+    account_size: numOrNull(raw.account_size) ?? 0,
+    risk_pct: numOrNull(raw.risk_pct) ?? 0,
+    max_position_pct: numOrNull(raw.max_position_pct),
+  };
 }
 
 /* ---------------- portfolio heat ---------------- */
