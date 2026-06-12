@@ -223,6 +223,14 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .modal-x { padding: 2px 9px; font-size: 15px; line-height: 1.2; background: transparent; border: 1px solid var(--border); color: var(--muted); }
 .modal-x:hover { border-color: var(--red); color: var(--red); }
 
+/* ---------- key/value rows (thesis detail) ---------- */
+.kv { display: grid; gap: 6px; margin: 8px 0 4px; }
+.kv-row { display: grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: baseline; }
+.kv-k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.kv-v { font-variant-numeric: tabular-nums; }
+.bullets { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.bullets li { line-height: 1.4; }
+
 /* ---------- analyses list ---------- */
 .analyses-list { display: grid; gap: 4px; }
 .analysis-row { display: grid; grid-template-columns: 130px 1fr; gap: 12px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--border); }
@@ -235,6 +243,8 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .joblog .system { color: var(--accent); }
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
 .field .hint { font-size: 12px; color: var(--muted); }
+.field-inline { display: inline-flex; flex-direction: column; gap: 3px; }
+.field-inline > span { font-size: 11px; letter-spacing: 0.02em; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
 /* ---------- misc ---------- */

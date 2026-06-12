@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -74,7 +74,7 @@ def compute_mae_mfe(thesis: dict, price_adapter: Any | None = None) -> dict[str,
     exit_date = thesis.get("exit", {}).get("actual_date")
     if not exit_date:
         # Use today for active theses
-        exit_date = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        exit_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
     # Normalize dates to YYYY-MM-DD
     from_date = entry_date[:10]
@@ -319,7 +319,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.command == "review-due":
-        as_of = args.as_of or datetime.utcnow().strftime("%Y-%m-%d")
+        as_of = args.as_of or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         results = thesis_store.list_review_due(Path(args.state_dir), as_of)
         print(json.dumps(results, indent=2))
     elif args.command == "postmortem":

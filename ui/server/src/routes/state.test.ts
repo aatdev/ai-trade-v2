@@ -80,6 +80,42 @@ describe('GET /api/theses', () => {
   });
 });
 
+describe('GET /api/memory', () => {
+  it('returns full theses with a computed summary', async () => {
+    const res = await request(app).get('/api/memory');
+    expect(res.status).toBe(200);
+    const aapl = res.body.theses.find((t: { ticker: string }) => t.ticker === 'AAPL');
+    expect(aapl).toBeTruthy();
+    expect(aapl.review_due).toBe(true);
+    expect(typeof aapl.thesis_statement).toBe('string');
+    // detail carries entry/exit levels parsed from the thesis yaml
+    expect(aapl.entry.target_price).toBe(315);
+    expect(aapl.exit.stop_loss).toBe(305);
+    expect(res.body.summary.byStatus.IDEA).toBeGreaterThanOrEqual(1);
+    expect(res.body.summary.reviewDue).toBeGreaterThanOrEqual(1);
+    expect(typeof res.body.today).toBe('string');
+  });
+});
+
+describe('GET /api/skill-doc/:skill', () => {
+  const docsApp = createApp({ dataDir: FIXTURE, projectRoot: FIXTURE });
+
+  it('returns SKILL.md plus reference docs', async () => {
+    const res = await request(docsApp).get('/api/skill-doc/demo-skill');
+    expect(res.status).toBe(200);
+    expect(res.body.skill).toBe('demo-skill');
+    expect(res.body.docs[0].name).toBe('SKILL.md');
+    expect(res.body.docs[0].content).toContain('Demo Skill');
+    expect(res.body.docs.some((d: { name: string }) => d.name === 'references/lifecycle.md')).toBe(true);
+  });
+
+  it('404s for an unknown skill and 400s for an invalid name', async () => {
+    expect((await request(docsApp).get('/api/skill-doc/nope-not-here')).status).toBe(404);
+    // dots/slashes are outside the slug charset → rejected before any fs access
+    expect((await request(docsApp).get('/api/skill-doc/foo.bar')).status).toBe(400);
+  });
+});
+
 describe('GET /api/analysis/tickers', () => {
   it('lists tickers that have saved analysis with their latest date', async () => {
     const res = await request(app).get('/api/analysis/tickers');

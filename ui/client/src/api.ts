@@ -10,9 +10,11 @@ import type {
   JobDetail,
   JobSummary,
   MarketResponse,
+  MemoryResponse,
   PortfolioHeat,
   ScreenersResponse,
   SignalsResponse,
+  SkillDocResponse,
   Sourced,
   StartJobResponse,
   ThesesResponse,
@@ -92,6 +94,21 @@ export const useThesis = (id: string | null) =>
     enabled: !!id,
   });
 
+export const useMemory = (refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['memory'],
+    queryFn: () => getJSON<MemoryResponse>('/api/memory'),
+    refetchInterval,
+  });
+
+export const useSkillDoc = (skill: string | null) =>
+  useQuery({
+    queryKey: ['skillDoc', skill],
+    queryFn: () => getJSON<SkillDocResponse>(`/api/skill-doc/${skill}`),
+    enabled: !!skill,
+    staleTime: 5 * 60_000,
+  });
+
 export const useSignals = (refetchInterval: Refetch = false) =>
   useQuery({
     queryKey: ['signals'],
@@ -140,6 +157,9 @@ export const runSlot = (body: { slot: string; dryRun: boolean; force: boolean; n
   postJSON<StartJobResponse>('/api/actions/run-slot', body);
 
 export const syncAlerts = () => postJSON<StartJobResponse>('/api/actions/sync-alerts', {});
+
+export const memoryOp = (body: Record<string, unknown>) =>
+  postJSON<StartJobResponse>('/api/actions/memory', body);
 
 export const analyzeTicker = (
   ticker: string,

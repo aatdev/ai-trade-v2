@@ -1478,3 +1478,39 @@ def test_cli_trim_subcommand(tmp_path: Path):
     assert t["status"] == "PARTIALLY_CLOSED"
     assert t["position"]["shares_remaining"] == 6
     assert t["status_history"][-1]["at"] == "2026-05-10T00:00:00+00:00"
+
+
+# -- Tests: delete ------------------------------------------------------------
+
+
+def test_delete_removes_file_and_index_entry(tmp_path: Path):
+    tid, _ = _register_and_get(tmp_path)
+    assert (tmp_path / f"{tid}.yaml").exists()
+
+    removed = thesis_store.delete(tmp_path, tid)
+    assert removed is True
+    assert not (tmp_path / f"{tid}.yaml").exists()
+
+    index = json.loads((tmp_path / "_index.json").read_text())
+    assert tid not in index["theses"]
+    with pytest.raises(FileNotFoundError):
+        thesis_store.get(tmp_path, tid)
+
+
+def test_delete_missing_thesis_returns_false(tmp_path: Path):
+    # Register one so _index.json exists, then delete a different id.
+    _register_and_get(tmp_path)
+    assert thesis_store.delete(tmp_path, "th_none_div_20260101_0000") is False
+
+
+def test_cli_delete_subcommand(tmp_path: Path):
+    tid, _ = _register_and_get(tmp_path)
+    sd = str(tmp_path)
+
+    rc = thesis_store.main(["--state-dir", sd, "delete", tid])
+    assert rc == 0
+    assert not (tmp_path / f"{tid}.yaml").exists()
+
+    # Deleting again → not found → rc 1.
+    rc2 = thesis_store.main(["--state-dir", sd, "delete", tid])
+    assert rc2 == 1

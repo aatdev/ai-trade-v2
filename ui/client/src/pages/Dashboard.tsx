@@ -11,15 +11,16 @@ import RegimeCard from '../components/RegimeCard';
 import ScreenersCard from '../components/ScreenersCard';
 import SignalsFeed from '../components/SignalsFeed';
 import ThemeToggle from '../components/ThemeToggle';
-import ThesesCard from '../components/ThesesCard';
+import TraderMemoryCard from '../components/TraderMemoryCard';
 import WatchlistCard from '../components/WatchlistCard';
 
-type Tab = 'overview' | 'signals' | 'analyses';
+type Tab = 'overview' | 'signals' | 'analyses' | 'memory';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Обзор' },
   { key: 'signals', label: 'Сигналы' },
   { key: 'analyses', label: 'Анализы' },
+  { key: 'memory', label: 'Память' },
 ];
 
 export default function Dashboard() {
@@ -85,7 +86,6 @@ export default function Dashboard() {
             <WatchlistCard date={date} refetch={refetch} />
             <RegimeCard date={date} refetch={refetch} />
             <ScreenersCard date={date} refetch={refetch} />
-            <ThesesCard refetch={refetch} />
             <AutopilotCard date={date} refetch={refetch} />
           </div>
         </>
@@ -100,6 +100,12 @@ export default function Dashboard() {
       {tab === 'analyses' ? (
         <div className="grid">
           <AnalysesTab refetch={refetch} />
+        </div>
+      ) : null}
+
+      {tab === 'memory' ? (
+        <div className="grid">
+          <TraderMemoryCard refetch={refetch} />
         </div>
       ) : null}
 

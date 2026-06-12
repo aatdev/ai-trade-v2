@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import sys
 import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -1352,6 +1353,37 @@ def mark_reviewed(
     return thesis
 
 
+def delete(state_dir: Path, thesis_id: str) -> bool:
+    """Delete a thesis: remove its YAML file and drop it from the index.
+
+    This is a hard delete (use ``terminate`` for the normal CLOSED/INVALIDATED
+    lifecycle exit). Removing the file and the index entry together keeps
+    ``_index.json`` consistent without a separate rebuild.
+
+    Args:
+        state_dir: Path to state/theses/.
+        thesis_id: Thesis to delete.
+
+    Returns:
+        True if a file or index entry was removed, False if the thesis was
+        absent from both (nothing to delete).
+    """
+    path = state_dir / f"{thesis_id}.yaml"
+    removed_file = False
+    if path.exists():
+        path.unlink()
+        removed_file = True
+
+    index = _load_index(state_dir)
+    removed_index = index.get("theses", {}).pop(thesis_id, None) is not None
+    if removed_index:
+        _save_index(state_dir, index)
+
+    if removed_file or removed_index:
+        logger.info("Deleted %s (file=%s, index=%s)", thesis_id, removed_file, removed_index)
+    return removed_file or removed_index
+
+
 def list_active(state_dir: Path) -> list[dict]:
     """List all ACTIVE theses from the index."""
     return query(state_dir, status="ACTIVE")
@@ -1571,6 +1603,9 @@ def main(argv: list[str] | None = None) -> int:
     tr2_p.add_argument("--event-date", default=None, help="Override ledger timestamp")
 
     # terminate (→ CLOSED or INVALIDATED)
+    del_p = sub.add_parser("delete", help="Hard-delete a thesis (file + index entry)")
+    del_p.add_argument("thesis_id", help="Thesis ID")
+
     tm_p = sub.add_parser("terminate", help="Move thesis to a terminal state")
     tm_p.add_argument("thesis_id", help="Thesis ID")
     tm_p.add_argument("--terminal-status", required=True, choices=["CLOSED", "INVALIDATED"])
@@ -1685,6 +1720,12 @@ def main(argv: list[str] | None = None) -> int:
             event_date=_coerce_dt(args.event_date),
         )
         print(f"{args.thesis_id} → {t['status']} ({args.exit_reason})")
+    elif args.command == "delete":
+        if delete(state_dir, args.thesis_id):
+            print(f"Deleted {args.thesis_id}")
+        else:
+            print(f"Thesis not found: {args.thesis_id}", file=sys.stderr)
+            return 1
     else:
         parser.print_help()
         return 1

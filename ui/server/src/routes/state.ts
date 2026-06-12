@@ -6,6 +6,7 @@ import { deleteSignal, parseSignalBlocks, signalsFile } from '../lib/signals';
 import {
   RE,
   getExposureGate,
+  getMemory,
   getPortfolio,
   getPosture,
   getRegime,
@@ -93,6 +94,10 @@ export function stateRouter(dataDir: string): Router {
     const detail = getThesisDetail(dataDir, id);
     if (!detail) return res.status(404).json({ error: 'thesis not found' });
     return res.json(detail);
+  });
+
+  r.get('/memory', (_req, res) => {
+    res.json(getMemory(dataDir));
   });
 
   r.get('/signals', (_req, res) => {

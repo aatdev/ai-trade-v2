@@ -260,6 +260,45 @@ export interface ThesisDetail {
   raw: Record<string, unknown>;
 }
 
+/* ---------------- Trader memory (trader-memory-core) ---------------- */
+
+/** A full thesis record plus the index-derived review fields. */
+export interface MemoryThesis extends ThesisDetail {
+  created_at: string | null;
+  updated_at: string | null;
+  next_review_date: string | null;
+  review_status: string | null;
+  review_due: boolean;
+}
+
+export interface MemorySummary {
+  total: number;
+  byStatus: Record<string, number>;
+  reviewDue: number;
+  active: number;
+  closed: number;
+  wins: number;
+  realizedPnl: number | null;
+}
+
+/** GET /api/memory — trader-memory-core overview. */
+export interface MemoryResponse {
+  today: string;
+  summary: MemorySummary;
+  theses: MemoryThesis[];
+}
+
+/** GET /api/skill-doc/:skill — markdown docs bundled with a skill. */
+export interface SkillDocSection {
+  name: string; // e.g. "SKILL.md", "references/thesis_lifecycle.md"
+  content: string;
+}
+
+export interface SkillDocResponse {
+  skill: string;
+  docs: SkillDocSection[];
+}
+
 /* ---------------- Signals journal ---------------- */
 
 export interface SignalBlock {

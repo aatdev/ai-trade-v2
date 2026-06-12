@@ -1,16 +1,23 @@
+import path from 'node:path';
 import { Router } from 'express';
 import { ANALYZE_MODEL, resolveMcpConfigPath } from '../config';
+import { buildMemoryArgs } from '../lib/memoryOps';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
 
 const SLOTS = new Set<SchedulerSlot>(['premarket', 'evening-prep', 'intraday', 'weekly', 'monthly']);
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
+const TRADER_MEMORY_CLI = 'skills/trader-memory-core/scripts/trader_memory_cli.py';
 
 function resolveClaudeBin(): string {
   return process.env.CLAUDE_BIN || 'claude';
 }
 
-export function actionsRouter(projectRoot: string, jobs: JobManager): Router {
+function resolvePythonBin(): string {
+  return process.env.PYTHON_BIN || 'python3';
+}
+
+export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobManager): Router {
   const r = Router();
 
   function startAndRespond(
@@ -136,6 +143,23 @@ export function actionsRouter(projectRoot: string, jobs: JobManager): Router {
       cwd: projectRoot,
       env: { TV_NO_CACHE: '1' },
       meta: { kind: 'analyze-ticker', ticker, model: ANALYZE_MODEL, createAlerts, saveToNotes },
+    });
+  });
+
+  r.post('/actions/memory', (req, res) => {
+    const stateDir = path.join(dataDir, 'journal', 'theses');
+    const built = buildMemoryArgs((req.body ?? {}) as Record<string, unknown>, stateDir);
+    if ('error' in built) {
+      const body: StartJobResponse = { ok: false, error: built.error };
+      return res.status(400).json(body);
+    }
+    return startAndRespond(res, {
+      label: built.label,
+      cmd: resolvePythonBin(),
+      args: [TRADER_MEMORY_CLI, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'memory', op: String((req.body as Record<string, unknown>)?.op ?? '') },
     });
   });
 

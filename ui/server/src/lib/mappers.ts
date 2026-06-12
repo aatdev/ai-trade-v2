@@ -4,6 +4,8 @@ import { basename, findLatest, listDir, readJson, readText } from './files';
 import type {
   ExposureGate,
   ExposurePosture,
+  MemoryResponse,
+  MemoryThesis,
   PortfolioHeat,
   Position,
   RegimeComponent,
@@ -359,5 +361,59 @@ export function getThesisDetail(dataDir: string, id: string): ThesisDetail | nul
     origin: asRecord(raw.origin),
     outcome: asRecord(raw.outcome),
     raw,
+  };
+}
+
+/** Full trader-memory-core overview: every thesis (detail) + a computed summary. */
+export function getMemory(dataDir: string): MemoryResponse {
+  const today = todayISO();
+  const index = getTheses(dataDir);
+  const theses: MemoryThesis[] = [];
+  for (const e of index) {
+    const detail = getThesisDetail(dataDir, e.id);
+    if (!detail) continue;
+    theses.push({
+      ...detail,
+      created_at: e.created_at,
+      updated_at: e.updated_at,
+      next_review_date: e.next_review_date,
+      review_status: e.review_status,
+      review_due: e.review_due,
+    });
+  }
+
+  const byStatus: Record<string, number> = {};
+  let active = 0;
+  let closed = 0;
+  let wins = 0;
+  let realized = 0;
+  let realizedSeen = false;
+  for (const t of theses) {
+    const st = t.status || 'IDEA';
+    byStatus[st] = (byStatus[st] ?? 0) + 1;
+    if (st === 'ACTIVE' || st === 'PARTIALLY_CLOSED') active += 1;
+    if (st === 'CLOSED') {
+      closed += 1;
+      const pnl = numOrNull(asRecord(t.outcome).pnl_dollars);
+      if (pnl != null) {
+        realized += pnl;
+        realizedSeen = true;
+        if (pnl > 0) wins += 1;
+      }
+    }
+  }
+
+  return {
+    today,
+    summary: {
+      total: theses.length,
+      byStatus,
+      reviewDue: theses.filter((t) => t.review_due).length,
+      active,
+      closed,
+      wins,
+      realizedPnl: realizedSeen ? realized : null,
+    },
+    theses,
   };
 }
