@@ -312,6 +312,24 @@ def resolve_claude_bin() -> str:
     return CBIN  # let run_claude surface the launch error
 
 
+def _child_claude_env() -> dict:
+    """Environment for the child ``claude``/``claude-pee`` process.
+
+    When the scheduler runs *inside* an active Claude Code session (e.g. a
+    ``/weekly`` slash command spawns ``run_trading_schedule.sh`` as a child),
+    the inherited ``CLAUDECODE`` / ``CLAUDE_CODE_*`` markers make the nested
+    ``claude`` skip producing the transcript that ``claude-pee`` polls for --
+    it then exits rc=0 with empty output and the slot silently no-ops. Strip
+    those markers so the child starts a clean session; keep ``CLAUDE_CONFIG_DIR``
+    and ``CLAUDE_BIN`` (auth / binary location) which do not match the prefix.
+    """
+    env = dict(os.environ)
+    env.pop("CLAUDECODE", None)
+    for key in [k for k in env if k.startswith("CLAUDE_CODE_")]:
+        del env[key]
+    return env
+
+
 # --------------------------------------------------------------------------- #
 # Calendar helpers
 # --------------------------------------------------------------------------- #
@@ -474,7 +492,8 @@ def _run_claude_kill_ppid(
 
     started = time.monotonic()
     try:
-        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, env=_child_claude_env(),
+                             capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         log(f"{label}: claude timed out after {timeout}s", logging.ERROR)
         return False
@@ -503,8 +522,21 @@ def _run_claude_kill_ppid(
     return False
 
 
-def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
+def run_claude(
+    prompt: str,
+    *,
+    label: str,
+    dry_run: bool,
+    timeout: int,
+    expected_output: "Path | str | None" = None,
+) -> bool:
     """Run one workflow headlessly via ``claude``. Returns success bool.
+
+    ``rc == 0`` alone is NOT treated as success: a nested ``claude-pee`` can exit
+    cleanly with no output (see :func:`_child_claude_env`). When ``expected_output``
+    is given, that file must exist and be non-empty; otherwise the run must have
+    produced non-empty stdout. This prevents a fast empty exit from silently
+    reading as DONE.
 
     Configurable via env:
       CLAUDE_BIN                        path to the claude CLI (default: PATH,
@@ -535,7 +567,8 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
 
     started = time.monotonic()
     try:
-        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, env=_child_claude_env(),
+                             capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         log(f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
             logging.ERROR)
@@ -551,6 +584,23 @@ def run_claude(prompt: str, *, label: str, dry_run: bool, timeout: int) -> bool:
         log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-1000:]}",
             logging.ERROR)
         return False
+
+    # rc==0 is not enough: a nested/failed claude-pee exits clean with no output.
+    if expected_output is not None:
+        out = Path(expected_output)
+        try:
+            produced = out.is_file() and out.stat().st_size > 0
+        except OSError:
+            produced = False
+        if not produced:
+            log(f"{label}: no expected output at {_rel(out)} (rc=0, {elapsed:.0f}s) -- "
+                "claude produced nothing", logging.ERROR)
+            return False
+    elif not (res.stdout and res.stdout.strip()):
+        log(f"{label}: claude produced no output (rc=0, {elapsed:.0f}s) -- "
+            "likely empty/failed session", logging.ERROR)
+        return False
+
     log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
     return True
 
@@ -1157,6 +1207,7 @@ def run_regime_gate(
         label=label,
         dry_run=args.dry_run,
         timeout=args.timeout,
+        expected_output=gate,
     )
     if not args.dry_run and not gate.exists():
         log(
@@ -1168,6 +1219,7 @@ def run_regime_gate(
             label=f"{label} [gate retry]",
             dry_run=False,
             timeout=args.timeout,
+            expected_output=gate,
         )
         ok = ok or ok2
 
@@ -1578,6 +1630,7 @@ def _run_chart_validation(date_str: str, candidates: list, args) -> dict | None:
         label="chart validation (technical-analyst)",
         dry_run=args.dry_run,
         timeout=args.timeout,
+        expected_output=vpath,
     )
     if not ok or args.dry_run:
         return None
@@ -2236,6 +2289,7 @@ def slot_weekly(date_str: str, args) -> int:
         label="weekly market-top + synthesis",
         dry_run=args.dry_run,
         timeout=args.timeout,
+        expected_output=summary,
     )
     data = _read_json(summary)
     notify(
@@ -2254,6 +2308,7 @@ def slot_monthly(date_str: str, args) -> int:
         label="monthly-performance-review",
         dry_run=args.dry_run,
         timeout=args.timeout,
+        expected_output=summary,
     )
     data = None
     if summary.exists():

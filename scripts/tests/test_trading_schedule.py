@@ -119,7 +119,8 @@ def test_run_claude_uses_print_flag(monkeypatch):
 
     def fake_subprocess_run(cmd, **kwargs):
         captured["cmd"] = cmd
-        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        # Non-empty stdout: rc=0 alone is no longer treated as success.
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
 
     monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
     assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=10) is True
@@ -144,6 +145,65 @@ def test_run_claude_kill_ppid_mode_does_not_use_print_flag(monkeypatch):
     assert "-p" not in captured["cmd"]
 
 
+def test_run_claude_strips_nested_session_env(monkeypatch):
+    """The child claude must NOT inherit the parent Claude Code session markers
+    (CLAUDECODE / CLAUDE_CODE_*), which make a nested claude-pee no-op; auth via
+    CLAUDE_CONFIG_DIR must survive."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc-123")
+    monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/cfg")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=10) is True
+    env = captured["env"]
+    assert env is not None, "child env must be passed explicitly"
+    assert "CLAUDECODE" not in env
+    assert "CLAUDE_CODE_SESSION_ID" not in env
+    assert "CLAUDE_CODE_CHILD_SESSION" not in env
+    assert env.get("CLAUDE_CONFIG_DIR") == "/tmp/cfg"
+
+
+def test_run_claude_empty_stdout_is_failure(monkeypatch):
+    """rc=0 with empty stdout (a nested/failed claude-pee) is NOT success."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+
+    def fake_subprocess_run(cmd, **kwargs):
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=10) is False
+
+
+def test_run_claude_requires_expected_output(monkeypatch, tmp_path):
+    """With expected_output set, rc=0 succeeds only once the file exists non-empty."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    out = tmp_path / "weekly_review.json"
+
+    def fake_subprocess_run(cmd, **kwargs):
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    # File not written -> failure even though rc=0 and stdout is non-empty.
+    assert ts.run_claude(
+        "x", label="t", dry_run=False, timeout=10, expected_output=out
+    ) is False
+    # Once the expected file exists with content -> success.
+    out.write_text(json.dumps({"ok": True}))
+    assert ts.run_claude(
+        "x", label="t", dry_run=False, timeout=10, expected_output=out
+    ) is True
+
+
 # --------------------------------------------------------------------------- #
 # Regime gate retry (headless claude can end before writing the gate)
 # --------------------------------------------------------------------------- #
@@ -152,7 +212,7 @@ def test_run_regime_gate_retries_when_gate_missing(monkeypatch, tmp_path):
     gate = ts.decision_path("2026-06-12")
     calls = []
 
-    def fake_run_claude(prompt, *, label, dry_run, timeout):
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
         calls.append(label)
         # Emulate: first pass narrates and exits without the gate; retry writes it.
         if "[gate retry]" in label:
@@ -175,7 +235,7 @@ def test_run_regime_gate_no_retry_when_first_pass_writes(monkeypatch, tmp_path):
     gate = ts.decision_path("2026-06-12")
     calls = []
 
-    def fake_run_claude(prompt, *, label, dry_run, timeout):
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
         calls.append(label)
         gate.parent.mkdir(parents=True, exist_ok=True)
         gate.write_text(json.dumps({"decision": "restrict", "rationale": "ok"}))
@@ -195,7 +255,7 @@ def test_run_regime_gate_dry_run_single_call(monkeypatch, tmp_path):
     gate = ts.decision_path("2026-06-12")
     calls = []
 
-    def fake_run_claude(prompt, *, label, dry_run, timeout):
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
         calls.append(label)
         return True
 
@@ -229,7 +289,7 @@ def test_evening_prep_dry_run_runs_without_network(monkeypatch):
     claude or Telegram."""
     calls = {"claude": 0, "notify": 0}
 
-    def fake_run_claude(prompt, *, label, dry_run, timeout):
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
         calls["claude"] += 1
         return True
 
@@ -254,7 +314,7 @@ def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path / "journal")
     monkeypatch.setattr(ts, "LOCK_FILE", tmp_path / "schedule.lock")
 
-    def fake_run_claude(prompt, *, label, dry_run, timeout):
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
         if "market-regime-daily" in label:
             # emulate the regime workflow writing the gate file
             gate = ts.decision_path("2026-06-02")
@@ -695,7 +755,7 @@ class TestEveningHybrid:
                 return short_path
             return None
 
-        def fake_run_claude(prompt, *, label, dry_run, timeout):
+        def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
             if "market-regime-daily" in label:
                 _gate(tmp_path, "2026-06-11", decision)
             if "validation" in label and validation is not None:
@@ -1360,7 +1420,7 @@ class TestWeeklySlot:
             lambda cmd, *, label, dry_run, timeout, output_glob=None: calls.append(label),
         )
 
-        def fake_run_claude(prompt, *, label, dry_run, timeout):
+        def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
             _write_json(
                 tmp_path / "schedule" / "weekly_review_2026-06-13.json",
                 {"top_risk_score": 51.5, "macro_regime": "Contraction"},
