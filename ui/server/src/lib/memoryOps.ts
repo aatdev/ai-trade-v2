@@ -291,3 +291,37 @@ export function buildMemoryArgs(body: Record<string, unknown>, stateDir: string)
       return { error: `unknown op: ${op || '(none)'}` };
   }
 }
+
+/** Statuses whose theses may be hard-deleted in bulk from the UI. Position-backed
+ * (ACTIVE / PARTIALLY_CLOSED) and CLOSED theses are never bulk-deletable. */
+export const DELETABLE_STATES = new Set(['IDEA', 'ENTRY_READY', 'INVALIDATED']);
+
+/**
+ * Validate a bulk thesis-delete request and build the `store delete <ids...>`
+ * argv. `statusById` is the authoritative current status of each thesis (read
+ * from the index by the caller) — a request may only delete ids that exist AND
+ * are in a {@link DELETABLE_STATES} state, so a crafted body can never remove a
+ * position-backed or closed thesis.
+ */
+export function buildDeleteThesesArgs(
+  ids: unknown,
+  statusById: Record<string, string>,
+  stateDir: string,
+): BuiltMemoryArgs {
+  if (!Array.isArray(ids) || ids.length === 0) return { error: 'ids must be a non-empty array' };
+  const uniq: string[] = [];
+  for (const raw of ids) {
+    const id = str(raw);
+    if (!THESIS_ID_RE.test(id)) return { error: `invalid thesisId: ${String(raw)}` };
+    const status = String(statusById[id] ?? '').toUpperCase();
+    if (!status) return { error: `unknown thesis: ${id}` };
+    if (!DELETABLE_STATES.has(status)) {
+      return { error: `cannot delete ${id}: status ${status} (only IDEA / ENTRY_READY / INVALIDATED)` };
+    }
+    if (!uniq.includes(id)) uniq.push(id);
+  }
+  return {
+    args: ['store', '--state-dir', stateDir, 'delete', ...uniq],
+    label: `memory: delete ${uniq.length} thesis/theses`,
+  };
+}

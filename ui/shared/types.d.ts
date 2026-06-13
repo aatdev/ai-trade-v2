@@ -247,6 +247,11 @@ export interface ThesesResponse {
   theses: ThesisIndexEntry[];
 }
 
+/** Bulk hard-delete request: thesis ids must currently be IDEA / ENTRY_READY / INVALIDATED. */
+export interface DeleteThesesRequest {
+  ids: string[];
+}
+
 export interface ThesisDetail {
   id: string;
   ticker: string;

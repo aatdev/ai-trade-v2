@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { MemoryThesis } from '@shared/types';
-import { useMemory, type Refetch } from '../api';
+import { useMemory, deleteTheses, type Refetch } from '../api';
+import { useMemoryOp } from '../lib/useMemoryOp';
 import { fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
 import { MemoryOpsModal, ThesisOps } from './MemoryOps';
 import SkillDocModal from './SkillDocModal';
@@ -37,6 +38,8 @@ const STATUS_ORDER: Record<string, number> = {
   CLOSED: 4,
   INVALIDATED: 5,
 };
+// States whose theses may be bulk-deleted from the table (never positions/closed).
+const DELETABLE = new Set(['IDEA', 'ENTRY_READY', 'INVALIDATED']);
 
 function StatusBadge({ status }: { status: string }) {
   return (
@@ -255,6 +258,25 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
   const [sel, setSel] = useState<MemoryThesis | null>(null);
   const [docsOpen, setDocsOpen] = useState(false);
   const [opsOpen, setOpsOpen] = useState(false);
+  const [selIds, setSelIds] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+
+  // Bulk delete reuses the memory job runner (SSE + ['memory']/['theses'] refresh).
+  const del = useMemoryOp(
+    () => {
+      setSelIds(new Set());
+      setConfirming(false);
+    },
+    (body) => deleteTheses((body.ids as string[]) ?? []),
+  );
+
+  const toggleId = (id: string, on: boolean) =>
+    setSelIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   const theses = useMemo(() => {
     let list = [...(data?.theses ?? [])];
@@ -267,6 +289,13 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
     });
     return list;
   }, [data, status, q]);
+
+  const deletableVisible = useMemo(
+    () => theses.filter((t) => DELETABLE.has(t.status)).map((t) => t.id),
+    [theses],
+  );
+  const allDeletableSelected =
+    deletableVisible.length > 0 && deletableVisible.every((id) => selIds.has(id));
 
   const headerBtns = (
     <div className="btn-row">
@@ -363,10 +392,60 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
             ) : null}
           </div>
 
+          {deletableVisible.length > 0 ? (
+            <div className="control" style={{ marginBottom: 10, gap: 12 }}>
+              {!confirming ? (
+                <button
+                  className="link-btn"
+                  disabled={selIds.size === 0 || del.state === 'running'}
+                  onClick={() => setConfirming(true)}
+                  title="Удалить выбранные тезисы (только IDEA / ENTRY_READY / INVALIDATED)"
+                >
+                  🗑 Удалить выбранные ({selIds.size})
+                </button>
+              ) : (
+                <>
+                  <span>Удалить {selIds.size} тезис(ов) безвозвратно?</span>
+                  <button
+                    className="link-btn"
+                    style={{ color: 'var(--red)' }}
+                    disabled={del.state === 'running'}
+                    onClick={() => void del.run({ ids: [...selIds] })}
+                  >
+                    Да, удалить
+                  </button>
+                  <button className="link-btn" onClick={() => setConfirming(false)}>
+                    Отмена
+                  </button>
+                </>
+              )}
+              {del.state === 'running' ? <span className="muted">удаление…</span> : null}
+              {del.state === 'error' ? <span style={{ color: 'var(--red)' }}>{del.error}</span> : null}
+            </div>
+          ) : null}
+
           <div className="scroll-x">
             <table className="rows-clickable">
               <thead>
                 <tr>
+                  <th style={{ width: 28 }}>
+                    <input
+                      type="checkbox"
+                      aria-label="выбрать все удаляемые"
+                      disabled={deletableVisible.length === 0}
+                      checked={allDeletableSelected}
+                      onChange={(e) =>
+                        setSelIds((prev) => {
+                          const next = new Set(prev);
+                          for (const id of deletableVisible) {
+                            if (e.target.checked) next.add(id);
+                            else next.delete(id);
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                  </th>
                   <th>Тикер</th>
                   <th style={{ textAlign: 'left' }}>Статус</th>
                   <th style={{ textAlign: 'left' }}>Тип</th>
@@ -385,6 +464,16 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                   const pnl = num(out.pnl_dollars);
                   return (
                     <tr key={t.id} onClick={() => setSel(t)}>
+                      <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'center' }}>
+                        {DELETABLE.has(t.status) ? (
+                          <input
+                            type="checkbox"
+                            aria-label={`выбрать ${t.ticker}`}
+                            checked={selIds.has(t.id)}
+                            onChange={(e) => toggleId(t.id, e.target.checked)}
+                          />
+                        ) : null}
+                      </td>
                       <td className="sym">
                         <Link to={`/ticker/${t.ticker}`} onClick={(e) => e.stopPropagation()}>
                           {t.ticker}

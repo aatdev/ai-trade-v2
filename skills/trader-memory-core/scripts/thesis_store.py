@@ -1623,8 +1623,8 @@ def main(argv: list[str] | None = None) -> int:
     tr2_p.add_argument("--event-date", default=None, help="Override ledger timestamp")
 
     # terminate (→ CLOSED or INVALIDATED)
-    del_p = sub.add_parser("delete", help="Hard-delete a thesis (file + index entry)")
-    del_p.add_argument("thesis_id", help="Thesis ID")
+    del_p = sub.add_parser("delete", help="Hard-delete one or more theses (file + index entry)")
+    del_p.add_argument("thesis_id", nargs="+", help="Thesis ID(s) to delete")
 
     tm_p = sub.add_parser("terminate", help="Move thesis to a terminal state")
     tm_p.add_argument("thesis_id", help="Thesis ID")
@@ -1750,10 +1750,14 @@ def main(argv: list[str] | None = None) -> int:
         t = update(state_dir, args.thesis_id, {"exit": {"stop_loss": args.stop}})
         print(f"{args.thesis_id} → exit.stop_loss {args.stop} (status {t['status']})")
     elif args.command == "delete":
-        if delete(state_dir, args.thesis_id):
-            print(f"Deleted {args.thesis_id}")
-        else:
-            print(f"Thesis not found: {args.thesis_id}", file=sys.stderr)
+        ids = args.thesis_id  # nargs="+" -> always a list
+        removed, missing = [], []
+        for tid in ids:
+            (removed if delete(state_dir, tid) else missing).append(tid)
+        print(f"Deleted {len(removed)}/{len(ids)} theses"
+              + (f"; not found: {', '.join(missing)}" if missing else ""))
+        if not removed:
+            print(f"No theses deleted: {', '.join(missing)}", file=sys.stderr)
             return 1
     else:
         parser.print_help()

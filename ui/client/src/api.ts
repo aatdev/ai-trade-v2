@@ -165,6 +165,9 @@ export const syncAlerts = () => postJSON<StartJobResponse>('/api/actions/sync-al
 export const memoryOp = (body: Record<string, unknown>) =>
   postJSON<StartJobResponse>('/api/actions/memory', body);
 
+export const deleteTheses = (ids: string[]) =>
+  postJSON<StartJobResponse>('/api/actions/delete-theses', { ids });
+
 export const analyzeTicker = (
   ticker: string,
   opts?: { createAlerts?: boolean; saveToNotes?: boolean },

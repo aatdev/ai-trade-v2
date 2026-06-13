@@ -2,7 +2,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../app';
-import { buildMemoryArgs } from '../lib/memoryOps';
+import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
 const app = createApp({ dataDir: FIXTURE, projectRoot: path.resolve(process.cwd()) });
@@ -40,6 +40,63 @@ describe('POST /api/actions/memory', () => {
   it('rejects an invalid thesis id for delete', async () => {
     const res = await request(app).post('/api/actions/memory').send({ op: 'delete', thesisId: 'not!an!id' });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /api/actions/delete-theses', () => {
+  it('rejects an empty id list', async () => {
+    const res = await request(app).post('/api/actions/delete-theses').send({ ids: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-deletable (OPEN) thesis from the index', async () => {
+    // th_googl_pvt_20260602_8f12 is OPEN in the fixture index — not bulk-deletable.
+    const res = await request(app)
+      .post('/api/actions/delete-theses')
+      .send({ ids: ['th_googl_pvt_20260602_8f12'] });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('rejects a bad-format and an unknown id before spawning', async () => {
+    expect((await request(app).post('/api/actions/delete-theses').send({ ids: ['not!an!id'] })).status).toBe(400);
+    expect(
+      (await request(app).post('/api/actions/delete-theses').send({ ids: ['th_zzz_x_20260101_0000'] })).status,
+    ).toBe(400);
+  });
+});
+
+describe('buildDeleteThesesArgs', () => {
+  const SD = '/data/journal/theses';
+  const STATUS: Record<string, string> = {
+    th_a_x_20260101_0001: 'IDEA',
+    th_b_x_20260101_0002: 'INVALIDATED',
+    th_c_x_20260101_0003: 'ENTRY_READY',
+    th_open_x_20260101_0004: 'ACTIVE',
+  };
+
+  it('builds a multi-id delete for deletable statuses', () => {
+    expect(
+      buildDeleteThesesArgs(['th_a_x_20260101_0001', 'th_b_x_20260101_0002', 'th_c_x_20260101_0003'], STATUS, SD),
+    ).toEqual({
+      args: ['store', '--state-dir', SD, 'delete', 'th_a_x_20260101_0001', 'th_b_x_20260101_0002', 'th_c_x_20260101_0003'],
+      label: 'memory: delete 3 thesis/theses',
+    });
+  });
+
+  it('de-duplicates repeated ids', () => {
+    expect(buildDeleteThesesArgs(['th_a_x_20260101_0001', 'th_a_x_20260101_0001'], STATUS, SD)).toEqual({
+      args: ['store', '--state-dir', SD, 'delete', 'th_a_x_20260101_0001'],
+      label: 'memory: delete 1 thesis/theses',
+    });
+  });
+
+  it('rejects empty, bad-format, unknown, and non-deletable (ACTIVE) ids', () => {
+    expect('error' in buildDeleteThesesArgs([], STATUS, SD)).toBe(true);
+    expect('error' in buildDeleteThesesArgs('nope', STATUS, SD)).toBe(true);
+    expect('error' in buildDeleteThesesArgs(['not!an!id'], STATUS, SD)).toBe(true);
+    expect('error' in buildDeleteThesesArgs(['th_missing_x_20260101_9999'], STATUS, SD)).toBe(true);
+    expect('error' in buildDeleteThesesArgs(['th_open_x_20260101_0004'], STATUS, SD)).toBe(true);
   });
 });
 

@@ -1549,3 +1549,24 @@ def test_cli_delete_subcommand(tmp_path: Path):
     # Deleting again → not found → rc 1.
     rc2 = thesis_store.main(["--state-dir", sd, "delete", tid])
     assert rc2 == 1
+
+
+def test_cli_delete_multiple_ids(tmp_path: Path):
+    t1 = thesis_store.register(tmp_path, _make_thesis_data(ticker="AAPL"))
+    t2 = thesis_store.register(tmp_path, _make_thesis_data(ticker="MSFT"))
+    t3 = thesis_store.register(tmp_path, _make_thesis_data(ticker="NVDA"))
+
+    rc = thesis_store.main(["--state-dir", str(tmp_path), "delete", t1, t2])
+    assert rc == 0
+    remaining = {e["thesis_id"] for e in thesis_store.query(tmp_path)}
+    assert remaining == {t3}
+    assert not (tmp_path / f"{t1}.yaml").exists()
+    assert not (tmp_path / f"{t2}.yaml").exists()
+
+
+def test_cli_delete_mixed_present_and_missing(tmp_path: Path):
+    # A missing id among present ones still deletes the present and is not fatal.
+    t1 = thesis_store.register(tmp_path, _make_thesis_data(ticker="AAPL"))
+    rc = thesis_store.main(["--state-dir", str(tmp_path), "delete", t1, "th_ghost_x_20260101_0000"])
+    assert rc == 0
+    assert thesis_store.query(tmp_path) == []

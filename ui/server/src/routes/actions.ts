@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { Router } from 'express';
 import { ANALYZE_MODEL, resolveMcpConfigPath } from '../config';
-import { buildMemoryArgs } from '../lib/memoryOps';
+import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
+import { getTheses } from '../lib/mappers';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
 
@@ -170,6 +171,28 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'memory', op: String((req.body as Record<string, unknown>)?.op ?? '') },
+    });
+  });
+
+  r.post('/actions/delete-theses', (req, res) => {
+    const stateDir = path.join(dataDir, 'journal', 'theses');
+    // Authoritative current status per thesis (from the index) — the client's
+    // claimed status is never trusted: only IDEA / ENTRY_READY / INVALIDATED delete.
+    const statusById: Record<string, string> = {};
+    for (const t of getTheses(dataDir)) statusById[t.id] = t.status;
+    const ids = (req.body as Record<string, unknown>)?.ids;
+    const built = buildDeleteThesesArgs(ids, statusById, stateDir);
+    if ('error' in built) {
+      const body: StartJobResponse = { ok: false, error: built.error };
+      return res.status(400).json(body);
+    }
+    return startAndRespond(res, {
+      label: built.label,
+      cmd: resolvePythonBin(),
+      args: [TRADER_MEMORY_CLI, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'delete-theses' },
     });
   });
 
