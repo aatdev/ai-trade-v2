@@ -1493,6 +1493,75 @@ def _invalidate_thesis(thesis_id: str, *, reason: str) -> None:
         log(f"thesis invalidate {thesis_id}: {exc}", logging.WARNING)
 
 
+# Pre-position thesis states (registered but not yet an open position). Theses in
+# these states are safe to invalidate on a regime flip; ACTIVE / PARTIALLY_CLOSED
+# back real positions and are never auto-terminated here.
+NON_OPEN_THESIS_STATES = ("IDEA", "ENTRY_READY")
+
+
+def _list_theses() -> list[dict]:
+    """Current theses (thesis_id / ticker / side / status / ...) via the
+    trader-memory `store list` JSON output. Empty list on any failure."""
+    cmd = [sys.executable, str(TRADER_MEMORY_CLI), "store", "list"]
+    try:
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=120)
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"thesis list failed: {exc}", logging.WARNING)
+        return []
+    if res.returncode != 0:
+        log(f"thesis list: rc={res.returncode} {(res.stderr or '').strip()[:200]}", logging.WARNING)
+        return []
+    try:
+        data = json.loads(res.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _terminate_offside_theses(dec: dict, args) -> list[str]:
+    """Regime-flip hygiene: INVALIDATE non-open (IDEA / ENTRY_READY) theses whose
+    side is opposite the current regime -- pending SHORT ideas when the gate is
+    ``allow``, pending LONG ideas when it is restrict / cash-priority. Open
+    positions (ACTIVE / PARTIALLY_CLOSED) and already-terminal theses are never
+    touched. Skipped on a degraded fail-safe gate (regime unknown) and, for the
+    actual writes, on dry-run (lists + logs only). Returns the thesis_ids that
+    were (or, in dry-run, would be) invalidated."""
+    if dec.get("degraded"):
+        return []
+    decision = dec.get("decision")
+    regime = "long" if decision == "allow" else "short"
+    wrong_side = "short" if decision == "allow" else "long"
+    offside = [
+        t for t in _list_theses()
+        if str(t.get("status", "")).upper() in NON_OPEN_THESIS_STATES
+        and str(t.get("side") or "long").lower() == wrong_side
+        and t.get("thesis_id")
+    ]
+    if not offside:
+        return []
+    ids = [t["thesis_id"] for t in offside]
+    if args.dry_run:
+        log(f"(dry-run) would invalidate {len(ids)} off-side ({wrong_side}) non-open "
+            f"thesis/theses on {regime} regime: " + ", ".join(ids))
+        return ids
+    for t in offside:
+        _invalidate_thesis(
+            t["thesis_id"],
+            reason=f"regime -> {regime} ({decision}): off-side {wrong_side} thesis, not yet a position",
+        )
+    log(f"regime-flip hygiene: invalidated {len(ids)} off-side ({wrong_side}) non-open "
+        f"thesis/theses on {regime} regime: " + ", ".join(ids))
+    return ids
+
+
+def _offside_note(terminated: list[str] | None) -> str:
+    """One-line Telegram note summarising regime-flip thesis invalidation."""
+    if not terminated:
+        return ""
+    return (f"♻️ Смена режима: инвалидировано {len(terminated)} непозиционных "
+            "тезисов другого направления (IDEA/ENTRY_READY).")
+
+
 def _profile_sized_shares(profile: dict, pivot, stop) -> tuple[int | None, float | None]:
     """Risk-budget sizing for an analysis-updated candidate (mirrors the UI's
     reconcile.ts): shares = account x risk% / |pivot - stop|, capped at
@@ -2025,11 +2094,17 @@ def _filter_shorts_on_earnings(shorts: list, args) -> tuple[list, str]:
     return kept, ""
 
 
-def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) -> int:
+def _evening_short_branch(
+    date_str: str, dec: dict, args, *, regime_ok: bool,
+    terminated_offside: list[str] | None = None,
+) -> int:
     rc = 0 if regime_ok or args.dry_run else 1
+    offside_note = _offside_note(terminated_offside)
     active, reason = _short_conditions()
     if not active:
         msg = build_evening_closed_msg(date_str, dec, extra=f"Шорт-ветка: {reason}.")
+        if offside_note:
+            msg += f"\n\n{offside_note}"
         msg += _care_block(args)
         notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
         return rc
@@ -2097,6 +2172,8 @@ def _evening_short_branch(date_str: str, dec: dict, args, *, regime_ok: bool) ->
     val_note = _validation_note(wl, validation)
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"
+    if offside_note:
+        msg += f"\n\n{offside_note}"
     msg += _care_block(args)
     alert_line = _sync_tv_alerts(wl, args)
     if alert_line:
@@ -2121,8 +2198,14 @@ def slot_evening_prep(date_str: str, args) -> int:
         logging.WARNING if dec.get("degraded") else logging.INFO,
     )
 
+    # Regime-flip hygiene: drop pending (non-position) theses of the now-wrong
+    # side before screening/ingesting this evening's same-side candidates.
+    terminated_offside = _terminate_offside_theses(dec, args)
+
     if dec["decision"] != "allow":
-        return _evening_short_branch(date_str, dec, args, regime_ok=ok)
+        return _evening_short_branch(
+            date_str, dec, args, regime_ok=ok, terminated_offside=terminated_offside
+        )
 
     # The long pipeline reads LIVE chart data (cache off) and ends with TV
     # alert sync — both need TradingView Desktop. Notify IMMEDIATELY when down.
@@ -2143,6 +2226,9 @@ def slot_evening_prep(date_str: str, args) -> int:
     msg = build_evening_allow_msg(date_str, dec, wl_rel, candidates)
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"
+    offside_note = _offside_note(terminated_offside)
+    if offside_note:
+        msg += f"\n\n{offside_note}"
     msg += _care_block(args)
     alert_line = _sync_tv_alerts(wl, args)
     if alert_line:

@@ -270,6 +270,59 @@ def test_run_regime_gate_dry_run_single_call(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# Regime-flip thesis hygiene (_terminate_offside_theses)
+# --------------------------------------------------------------------------- #
+def _patch_theses(monkeypatch, theses):
+    killed = []
+    monkeypatch.setattr(ts, "_list_theses", lambda: theses)
+    monkeypatch.setattr(ts, "_invalidate_thesis", lambda tid, *, reason: killed.append(tid))
+    return killed
+
+
+def test_terminate_offside_long_regime_kills_only_nonopen_shorts(monkeypatch):
+    theses = [
+        {"thesis_id": "s_idea", "side": "short", "status": "IDEA"},
+        {"thesis_id": "s_ready", "side": "short", "status": "ENTRY_READY"},
+        {"thesis_id": "s_active", "side": "short", "status": "ACTIVE"},        # open position
+        {"thesis_id": "s_term", "side": "short", "status": "INVALIDATED"},     # terminal
+        {"thesis_id": "l_idea", "side": "long", "status": "IDEA"},             # right side
+    ]
+    killed = _patch_theses(monkeypatch, theses)
+    out = ts._terminate_offside_theses({"decision": "allow"}, types.SimpleNamespace(dry_run=False))
+    assert sorted(out) == ["s_idea", "s_ready"]
+    assert sorted(killed) == ["s_idea", "s_ready"]
+
+
+def test_terminate_offside_short_regime_kills_only_nonopen_longs(monkeypatch):
+    theses = [
+        {"thesis_id": "l_idea", "side": "long", "status": "IDEA"},
+        {"thesis_id": "l_ready", "side": "long", "status": "ENTRY_READY"},
+        {"thesis_id": "l_active", "side": "long", "status": "PARTIALLY_CLOSED"},  # open position
+        {"thesis_id": "nul_idea", "status": "IDEA"},                              # null side -> long
+        {"thesis_id": "s_idea", "side": "short", "status": "IDEA"},               # right side
+    ]
+    killed = _patch_theses(monkeypatch, theses)
+    out = ts._terminate_offside_theses({"decision": "restrict"}, types.SimpleNamespace(dry_run=False))
+    assert sorted(out) == ["l_idea", "l_ready", "nul_idea"]
+    assert sorted(killed) == ["l_idea", "l_ready", "nul_idea"]
+
+
+def test_terminate_offside_degraded_gate_is_noop(monkeypatch):
+    killed = _patch_theses(monkeypatch, [{"thesis_id": "l_idea", "side": "long", "status": "IDEA"}])
+    out = ts._terminate_offside_theses(
+        {"decision": "restrict", "degraded": True}, types.SimpleNamespace(dry_run=False)
+    )
+    assert out == [] and killed == []
+
+
+def test_terminate_offside_dry_run_lists_without_terminating(monkeypatch):
+    killed = _patch_theses(monkeypatch, [{"thesis_id": "s_idea", "side": "short", "status": "IDEA"}])
+    out = ts._terminate_offside_theses({"decision": "allow"}, types.SimpleNamespace(dry_run=True))
+    assert out == ["s_idea"]  # reported as "would invalidate"
+    assert killed == []       # but not actually terminated
+
+
+# --------------------------------------------------------------------------- #
 # Slot dispatch / CLI gating (dry-run, no network)
 # --------------------------------------------------------------------------- #
 def test_premarket_skips_on_non_trading_day(monkeypatch, capsys):
@@ -298,6 +351,7 @@ def test_evening_prep_dry_run_runs_without_network(monkeypatch):
 
     monkeypatch.setattr(ts, "run_claude", fake_run_claude)
     monkeypatch.setattr(ts, "notify", fake_notify)
+    monkeypatch.setattr(ts, "_list_theses", lambda: [])  # no real trader-memory CLI
     rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-02", "--dry-run", "--no-telegram"])
     assert rc == 0
     # regime gate is fail-safe restrict (no gate file written by the fake), so
@@ -328,6 +382,7 @@ def test_evening_prep_runs_opportunity_when_gate_allows(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "tv_available", lambda **k: True)
     monkeypatch.setattr(ts, "_sync_tv_alerts", lambda wl, args: "")
     monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+    monkeypatch.setattr(ts, "_list_theses", lambda: [])  # no real trader-memory CLI
     rc = ts.main(["--slot", "evening-prep", "--date", "2026-06-02", "--no-telegram"])
     assert rc == 0
     assert sent and "ALLOW" in sent[0]
