@@ -434,3 +434,20 @@ export interface StartJobResponse {
 export interface TradingPlanResponse {
   content: string;
 }
+
+/** One entry in the Documentation modal sidebar. */
+export interface DocSectionMeta {
+  id: string; // url-safe slug, e.g. "ftd-detector"
+  title: string; // RU title shown in the sidebar
+  group: string; // RU group label used to cluster sidebar entries
+}
+
+/** GET /api/docs — ordered sections (no content) for the sidebar. */
+export interface DocsIndexResponse {
+  sections: DocSectionMeta[];
+}
+
+/** GET /api/docs/:id — one section's rendered markdown. */
+export interface DocSectionResponse extends DocSectionMeta {
+  content: string;
+}

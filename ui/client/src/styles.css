@@ -216,7 +216,7 @@ table.rows-clickable tbody tr { cursor: pointer; }
 
 /* ---------- job log / actions ---------- */
 .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: flex-start; justify-content: center; padding: 60px 16px; z-index: 50; }
-.modal-backdrop.modal-backdrop-full { align-items: stretch; padding: 10vh 10%; }
+.modal-backdrop.modal-backdrop-full { align-items: stretch; padding: 1% 10%; }
 .modal { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; width: min(840px, 100%); max-height: 80vh; overflow-y: auto; padding: 20px; }
 .modal.modal-full { width: 100%; max-width: none; max-height: none; height: 100%; display: flex; flex-direction: column; }
 .modal.modal-full .md { flex: 1; overflow-y: auto; }
@@ -225,6 +225,17 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .modal-head h3 { margin: 0; }
 .modal-x { padding: 2px 9px; font-size: 15px; line-height: 1.2; background: transparent; border: 1px solid var(--border); color: var(--muted); }
 .modal-x:hover { border-color: var(--red); color: var(--red); }
+
+/* ---------- documentation modal: section sidebar + content ---------- */
+.docs-layout { display: flex; gap: 16px; flex: 1; min-height: 0; }
+.docs-nav { width: 250px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid var(--border); padding-right: 8px; }
+.docs-nav-group { margin-bottom: 14px; }
+.docs-nav-group-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 4px 8px; }
+.docs-nav-item { display: block; width: 100%; text-align: left; padding: 6px 8px; border-radius: 6px; background: transparent; border: 1px solid transparent; color: var(--text); font-size: 13px; white-space: normal; }
+.docs-nav-item:hover { background: var(--bg-elev2); }
+.docs-nav-item.active { background: var(--bg-elev2); border-color: var(--accent); }
+.docs-body { flex: 1; min-width: 0; overflow-y: auto; }
+.docs-body .md { padding-right: 8px; }
 
 /* ---------- key/value rows (thesis detail) ---------- */
 .kv { display: grid; gap: 6px; margin: 8px 0 4px; }

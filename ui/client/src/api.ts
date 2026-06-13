@@ -5,6 +5,8 @@ import type {
   AutopilotResponse,
   DatesResponse,
   DeleteSignalResponse,
+  DocsIndexResponse,
+  DocSectionResponse,
   ReconcileResult,
   ExposureResponse,
   JobDetail,
@@ -21,7 +23,6 @@ import type {
   ThesisDetail,
   TickerAnalysisResponse,
   TickerDatesResponse,
-  TradingPlanResponse,
   TradingProfile,
   Watchlist,
 } from '@shared/types';
@@ -120,8 +121,20 @@ export const useSignals = (refetchInterval: Refetch = false) =>
 export const useProfile = () =>
   useQuery({ queryKey: ['profile'], queryFn: () => getJSON<TradingProfile | null>('/api/profile') });
 
-export const useTradingPlan = () =>
-  useQuery({ queryKey: ['tradingPlan'], queryFn: () => getJSON<TradingPlanResponse>('/api/trading-plan'), staleTime: 60_000 });
+export const useDocsIndex = () =>
+  useQuery({
+    queryKey: ['docsIndex'],
+    queryFn: () => getJSON<DocsIndexResponse>('/api/docs'),
+    staleTime: 5 * 60_000,
+  });
+
+export const useDocSection = (id: string | null) =>
+  useQuery({
+    queryKey: ['docSection', id],
+    queryFn: () => getJSON<DocSectionResponse>(`/api/docs/${id}`),
+    enabled: !!id,
+    staleTime: 5 * 60_000,
+  });
 
 export const useAutopilot = (date: string | null, refetchInterval: Refetch = false) =>
   useQuery({

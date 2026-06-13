@@ -11,8 +11,8 @@ import RegimeCard from '../components/RegimeCard';
 import ScreenersCard from '../components/ScreenersCard';
 import SignalsFeed from '../components/SignalsFeed';
 import ThemeToggle from '../components/ThemeToggle';
+import DocsModal from '../components/DocsModal';
 import TraderMemoryCard from '../components/TraderMemoryCard';
-import TradingPlanModal from '../components/TradingPlanModal';
 import WatchlistCard from '../components/WatchlistCard';
 
 type Tab = 'overview' | 'signals' | 'analyses' | 'memory';
@@ -28,7 +28,7 @@ export default function Dashboard() {
   const [date, setDate] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [planOpen, setPlanOpen] = useState(false);
+  const [docsOpen, setDocsOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
   const qc = useQueryClient();
 
@@ -63,7 +63,7 @@ export default function Dashboard() {
         <span style={{ flex: 1 }} />
         <AnalyzeDialog date={date} />
         <ThemeToggle />
-        <button onClick={() => setPlanOpen(true)}>📋 План</button>
+        <button onClick={() => setDocsOpen(true)}>📚 Документация</button>
         <button className="primary" onClick={() => setActionsOpen(true)}>
           ⚡ Actions
         </button>
@@ -112,7 +112,7 @@ export default function Dashboard() {
         </div>
       ) : null}
 
-      {planOpen ? <TradingPlanModal onClose={() => setPlanOpen(false)} /> : null}
+      {docsOpen ? <DocsModal onClose={() => setDocsOpen(false)} /> : null}
       {actionsOpen ? <ActionsPanel onClose={() => setActionsOpen(false)} /> : null}
     </div>
   );
