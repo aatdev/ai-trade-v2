@@ -697,8 +697,8 @@ def read_decision(path: Path) -> dict:
     """Read the machine-readable exposure gate. Fail safe to ``restrict``."""
     fallback = {
         "decision": "restrict",
-        "rationale": "exposure_decision gate file missing or unreadable; "
-        "defaulting to restrict (fail-safe -- no new risk).",
+        "rationale": "Файл-гейт exposure_decision отсутствует или не читается; "
+        "по умолчанию restrict (fail-safe — новый риск не открываем).",
         "degraded": True,
     }
     if not path.exists():
@@ -706,12 +706,12 @@ def read_decision(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        fallback["rationale"] = f"could not parse {path.name} ({exc}); fail-safe restrict."
+        fallback["rationale"] = f"не удалось разобрать {path.name} ({exc}); fail-safe restrict."
         return fallback
     decision = str(data.get("decision", "")).strip().lower()
     if decision not in VALID_DECISIONS:
         fallback["rationale"] = (
-            f"exposure_decision='{data.get('decision')}' not one of {VALID_DECISIONS}; "
+            f"exposure_decision='{data.get('decision')}' не входит в {VALID_DECISIONS}; "
             "fail-safe restrict."
         )
         return fallback
@@ -747,12 +747,16 @@ as a single JSON object:
   "date": "{date_str}",
   "decision": "allow" | "restrict" | "cash-priority",
   "net_exposure_ceiling_pct": <number or null>,
-  "rationale": "<= 2 sentences",
-  "key_signals": ["short bullet", "..."]
+  "rationale": "<= 2 предложения, НА РУССКОМ ЯЗЫКЕ",
+  "key_signals": ["короткие пункты НА РУССКОМ ЯЗЫКЕ", "..."]
 }}
 `decision` MUST be exactly one of allow / restrict / cash-priority -- the
-exposure-coach posture. Write the file even on partial data; choose the most
-defensive posture the evidence supports. Do NOT place any trades.
+exposure-coach posture (keep this enum value in English -- it is machine-read).
+LANGUAGE: the free-text fields `rationale` and `key_signals` MUST be written in
+Russian. Translate any English skill output into Russian for these two fields;
+keep ticker symbols, skill names and numeric metrics as-is. Write the file even
+on partial data; choose the most defensive posture the evidence supports. Do NOT
+place any trades.
 
 EXECUTION RULES (unattended headless run -- you must finish autonomously):
 - Perform EVERY step with tool calls. Never end your reply with prose that only
@@ -1177,9 +1181,11 @@ as a single JSON object:
   "date": "{date_str}",
   "decision": "allow" | "restrict" | "cash-priority",
   "net_exposure_ceiling_pct": <number or null>,
-  "rationale": "<= 2 sentences",
-  "key_signals": ["short bullet", "..."]
+  "rationale": "<= 2 предложения, НА РУССКОМ ЯЗЫКЕ",
+  "key_signals": ["короткие пункты НА РУССКОМ ЯЗЫКЕ", "..."]
 }}
+The `decision` value stays in English (machine-read enum); the free-text fields
+`rationale` and `key_signals` MUST be written in Russian.
 Reuse any regime artifacts already saved under {_rel(MARKET_DIR)}/ (market_breadth,
 uptrend, market_top, exposure_posture). If a needed input is missing, run that one
 skill quickly (market-breadth-analyzer / uptrend-analyzer / exposure-coach) with
@@ -1227,7 +1233,7 @@ def run_regime_gate(
         return ok, read_decision(gate)
     return ok, {
         "decision": "restrict",
-        "rationale": "regime workflow did not complete; fail-safe.",
+        "rationale": "workflow market-regime-daily не завершился; fail-safe.",
         "degraded": True,
     }
 
