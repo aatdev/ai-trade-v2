@@ -175,6 +175,33 @@ def ensure_runtime_path() -> None:
         os.environ["PATH"] = os.pathsep.join([*missing, *parts])
 
 
+def ensure_venv_interpreter() -> None:
+    """Re-exec under the project virtualenv when started with a bare interpreter.
+
+    The scheduler launches every skill script via ``sys.executable``. When it is
+    invoked directly with a system/Homebrew python (cron, manual ``python3
+    scripts/run_trading_schedule.py``) that lacks the project's declared deps --
+    e.g. ``pyyaml`` for ibd-distribution-day-monitor -- those subprocesses die
+    with ModuleNotFoundError. The ``.venv`` has the full dependency set, so
+    re-exec once into ``.venv/bin/python`` to give the whole process tree the
+    provisioned environment. No-op when already inside the venv or it is absent.
+    The .sh launcher does the same selection up front; this self-heals the paths
+    that bypass it.
+    """
+    if os.environ.get("_TRADING_SCHED_VENV_REEXEC") == "1":
+        return  # guard against an exec loop
+    venv_py = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if not venv_py.exists():
+        return
+    try:
+        if venv_py.resolve() == Path(sys.executable).resolve():
+            return  # already running the venv interpreter
+    except OSError:
+        return
+    os.environ["_TRADING_SCHED_VENV_REEXEC"] = "1"
+    os.execv(str(venv_py), [str(venv_py), *sys.argv])
+
+
 # --------------------------------------------------------------------------- #
 # Trading data layout ($TRADING_DATE_DIR)
 #
@@ -2312,6 +2339,7 @@ def release_lock(path: Path) -> None:
 # Main
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
+    ensure_venv_interpreter()  # self-heal cron/manual runs under a bare python
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
