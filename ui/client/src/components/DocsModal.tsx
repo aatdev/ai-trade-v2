@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { DocSectionMeta } from '@shared/types';
@@ -8,6 +8,27 @@ import { ErrorNote, Loading, Modal } from './ui';
 /** Strip YAML frontmatter so the rendered doc starts at the first heading. */
 function stripFrontmatter(md: string): string {
   return md.replace(/^---\n[\s\S]*?\n---\n/, '');
+}
+
+/** localStorage key for the per-section scroll positions (`{ sectionId: scrollTop }`). */
+const SCROLL_STORAGE_KEY = 'docsModal.scrollPositions';
+
+function loadScrollPositions(): Record<string, number> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCROLL_STORAGE_KEY) ?? 'null');
+    if (parsed && typeof parsed === 'object') return parsed as Record<string, number>;
+  } catch {
+    // Ignore unavailable (private mode) or corrupt storage; start fresh.
+  }
+  return {};
+}
+
+function saveScrollPositions(positions: Record<string, number>): void {
+  try {
+    localStorage.setItem(SCROLL_STORAGE_KEY, JSON.stringify(positions));
+  } catch {
+    // Ignore write failures (quota exceeded / storage disabled).
+  }
 }
 
 /** Group sections by their `group` label, preserving first-seen order. */
@@ -39,12 +60,46 @@ export default function DocsModal({ onClose }: { onClose: () => void }) {
 
   const { data: doc, isLoading: docLoading, error: docError } = useDocSection(activeId);
 
+  // Remember the scroll position of each section so navigating back to a
+  // previously-viewed section restores where the reader left off. Persisted to
+  // localStorage so positions survive closing/reopening the modal and reloads.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const scrollPositions = useRef<Record<string, number>>();
+  if (scrollPositions.current === undefined) {
+    scrollPositions.current = loadScrollPositions();
+  }
+
+  function rememberScroll() {
+    if (bodyRef.current && activeId) {
+      scrollPositions.current![activeId] = bodyRef.current.scrollTop;
+      saveScrollPositions(scrollPositions.current!);
+    }
+  }
+
+  function selectSection(id: string) {
+    rememberScroll();
+    setActive(id);
+  }
+
+  function handleClose() {
+    rememberScroll();
+    onClose();
+  }
+
+  // Restore the saved scroll position once the selected section's content is
+  // rendered (default to the top for sections not visited yet).
+  useLayoutEffect(() => {
+    if (bodyRef.current && activeId && !docLoading && doc) {
+      bodyRef.current.scrollTop = scrollPositions.current![activeId] ?? 0;
+    }
+  }, [activeId, doc, docLoading]);
+
   return (
     <Modal
       title="📚 Документация"
-      onClose={onClose}
+      onClose={handleClose}
       fullscreen
-      footer={<button onClick={onClose}>Закрыть</button>}
+      footer={<button onClick={handleClose}>Закрыть</button>}
     >
       {isLoading ? (
         <Loading />
@@ -60,7 +115,7 @@ export default function DocsModal({ onClose }: { onClose: () => void }) {
                   <button
                     key={s.id}
                     className={`docs-nav-item ${s.id === activeId ? 'active' : ''}`}
-                    onClick={() => setActive(s.id)}
+                    onClick={() => selectSection(s.id)}
                     title={s.title}
                   >
                     {s.title}
@@ -69,7 +124,7 @@ export default function DocsModal({ onClose }: { onClose: () => void }) {
               </div>
             ))}
           </nav>
-          <div className="docs-body">
+          <div className="docs-body" ref={bodyRef}>
             {docLoading ? (
               <Loading />
             ) : docError ? (

@@ -234,8 +234,12 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .docs-nav-item { display: block; width: 100%; text-align: left; padding: 6px 8px; border-radius: 6px; background: transparent; border: 1px solid transparent; color: var(--text); font-size: 13px; white-space: normal; }
 .docs-nav-item:hover { background: var(--bg-elev2); }
 .docs-nav-item.active { background: var(--bg-elev2); border-color: var(--accent); }
-.docs-body { flex: 1; min-width: 0; overflow-y: auto; }
-.docs-body .md { padding-right: 8px; }
+.docs-body { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; }
+/* Fit doc content to the pane width so nothing scrolls horizontally. */
+.docs-body .md { padding-right: 8px; overflow-wrap: break-word; font-size: 1.2em }
+.docs-body .md pre { white-space: pre-wrap; word-break: break-word; overflow-x: visible; }
+.docs-body .md th, .docs-body .md td { white-space: normal; word-break: break-word; }
+.docs-body .md img { max-width: 100%; height: auto; }
 
 /* ---------- key/value rows (thesis detail) ---------- */
 .kv { display: grid; gap: 6px; margin: 8px 0 4px; }
