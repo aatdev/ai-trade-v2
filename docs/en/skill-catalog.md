@@ -94,6 +94,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Skill | Description | API Requirements |
 |-------|-------------|-----------------|
 | **Portfolio Manager** | Portfolio analysis with Alpaca MCP Server integration. Asset allocation, sector diversification, risk metrics, HOLD/ADD/TRIM/SELL recommendations, rebalancing plans | <span class="badge badge-api">Alpaca Required</span> |
+| **[IB Portfolio Manager]({{ '/en/skills/ib-portfolio-manager/' | relative_url }})** | Same analysis for Interactive Brokers accounts via the `interactive-brokers-mcp` server (bundled IB Gateway). Multi-asset / multi-currency aware, read-only by design (analysis only). IB-broker counterpart of Portfolio Manager | <span class="badge badge-api">IBKR Required</span> |
 | **[Trader Memory Core]({{ '/en/skills/trader-memory-core/' | relative_url }})** | Persistent thesis lifecycle tracker: register screener outputs as IDEA, manage state transitions through ENTRY_READY → ACTIVE → CLOSED, attach position sizing, schedule reviews, and generate postmortem reports with MAE/MFE (prices via the TradingView data layer) | <span class="badge badge-free">No API</span> |
 | **[Trade Performance Coach]({{ '/en/skills/trade-performance-coach/' | relative_url }})** | Post-trade coach: reviews closed trades, partial exits, and monthly aggregates across 5 axes (process, risk, execution, behavior patterns, review quality), emits OK/WARN/REVIEW_REQUIRED/RULE_VIOLATION/COOL_DOWN verdict and next-session operating rules with human decision gate. Beta. | <span class="badge badge-free">No API</span> |
 | **[Position Sizer]({{ '/en/skills/position-sizer/' | relative_url }})** | Risk-based position sizing using Fixed Fractional, ATR-based, and Kelly Criterion methods. Portfolio constraints (max position %, max sector %). Works offline | <span class="badge badge-free">No API</span> |
@@ -175,6 +176,7 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 ### I want to manage my portfolio
 
 - **Portfolio Manager** -- Real-time holdings analysis and rebalancing with Alpaca integration
+- **[IB Portfolio Manager]({{ '/en/skills/ib-portfolio-manager/' | relative_url }})** -- Same analysis for Interactive Brokers accounts (via interactive-brokers-mcp)
 - **[Position Sizer]({{ '/en/skills/position-sizer/' | relative_url }})** -- Risk-based position sizing with portfolio constraints
 - **[Trader Memory Core]({{ '/en/skills/trader-memory-core/' | relative_url }})** -- Track theses from idea to postmortem with persistent state
 
@@ -264,5 +266,6 @@ A comprehensive catalog of all 55 Claude Trading Skills organized by category. B
 | Ticker Analysis | -- | -- | -- |
 | Tradingview Screener | -- | -- | -- |
 | Save Note | -- | -- | -- |
+| IB Portfolio Manager | -- | -- | -- |
 
 "--" means not required. "Optional" means functionality is enhanced but the skill works without it.

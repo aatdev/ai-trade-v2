@@ -3,7 +3,7 @@ layout: default
 title: "Swing Short Screener"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 53
+nav_order: 54
 lang_peer: /en/skills/swing-short-screener/
 permalink: /ja/skills/swing-short-screener/
 generated: true

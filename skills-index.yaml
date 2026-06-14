@@ -428,6 +428,28 @@ skills:
   outputs:
   - ftd_signal_report
   workflows: []
+- id: ib-portfolio-manager
+  display_name: IB Portfolio Manager
+  category: core-portfolio
+  status: production
+  summary: Comprehensive portfolio analysis using the Interactive Brokers MCP Server (interactive-brokers-mcp
+    / bundled IB Gateway) to fetch live holdings, balances, and orders, then analyze asset allocation, risk
+    metrics, individual positions, diversification, and generate rebalancing recommendations. IB-broker
+    counterpart of portfolio-manager (Alpaca).
+  timeframe: weekly
+  difficulty: intermediate
+  integrations:
+  - id: interactive_brokers
+    type: broker
+    requirement: required
+    note: Interactive Brokers account via interactive-brokers-mcp (bundled IB Gateway); IB_READ_ONLY_MODE
+      recommended for analysis; IB_FLEX_TOKEN optional for historical performance
+  inputs:
+  - ib_holdings
+  outputs:
+  - allocation_report
+  - rebalance_actions
+  workflows: []
 - id: ibd-distribution-day-monitor
   display_name: IBD Distribution Day Monitor
   category: market-regime

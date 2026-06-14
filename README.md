@@ -155,6 +155,7 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 | Skill | Summary | Integrations | Status |
 |---|---|---|---|
 | **Dividend Growth Pullback Screener** (`dividend-growth-pullback-screener`) | Use this skill to find high-quality dividend growth stocks (12%+ annual dividend growth, 1.5%+ yield) that are experiencing temporary pullbacks, identified by RSI oversold conditions (RSI ≤40). | `tradingview` **required**, `finviz` optional | production |
+| **IB Portfolio Manager** (`ib-portfolio-manager`) | Comprehensive portfolio analysis using the Interactive Brokers MCP Server (interactive-brokers-mcp / bundled IB Gateway) to fetch live holdings, balances, and orders, then analyze asset allocation, risk metrics, individual positions, diversification, and generate rebalancing recommendations. IB-broker counterpart of portfolio-manager (Alpaca). | `interactive_brokers` **required** | production |
 | **Kanchi Dividend Review Monitor** (`kanchi-dividend-review-monitor`) | Monitor dividend portfolios with Kanchi-style forced-review triggers (T1-T5) and convert anomalies into OK/WARN/REVIEW states without auto-selling. | `fmp` _recommended_ | production |
 | **Kanchi Dividend SOP** (`kanchi-dividend-sop`) | Convert Kanchi-style dividend investing into a repeatable US-stock operating procedure. | `fmp` _recommended_ | production |
 | **Kanchi Dividend US Tax Accounting** (`kanchi-dividend-us-tax-accounting`) | Provide US dividend tax and account-location workflow for Kanchi-style income portfolios. | `local_calculation` — | production |
@@ -475,6 +476,7 @@ Several skills require API keys for data access:
 | **Pair Trade Screener** | ✅ Required | ❌ Not used | ❌ Not used | Statistical arbitrage analysis |
 | **Options Strategy Advisor** | 🟡 Optional | ❌ Not used | ❌ Not used | FMP for stock data; theoretical pricing works without |
 | **Portfolio Manager** | ❌ Not used | ❌ Not used | ✅ Required | Real-time holdings via Alpaca MCP |
+| **IB Portfolio Manager** | ❌ Not used | ❌ Not used | ❌ Not used | Live holdings via Interactive Brokers MCP (`interactive-brokers-mcp`, bundled IB Gateway); IBKR account required — see API Setup below |
 | **CANSLIM Stock Screener** | ✅ Required | ❌ Not used | ❌ Not used | Phase 3.1 (7 components, multi-period RS); free tier sufficient for 35 stocks; Finviz web scraping for institutional data |
 | **VCP Screener** | ✅ Required | ❌ Not used | ❌ Not used | Stage 2 + VCP pattern screening; free tier sufficient |
 | **Swing Short Screener** | ✅ Required | ❌ Not used | ❌ Not used | Stage 4 weakness screening (short side); free tier sufficient for custom universe; offline `--fixture` mode needs no key |
@@ -511,7 +513,7 @@ Several skills require API keys for data access:
 - Set environment variable: `export FINVIZ_API_KEY=your_key_here`
 - Provides fast pre-screening for dividend screeners
 
-**Alpaca Trading API:**
+**Alpaca Trading API:** (used by **Portfolio Manager**)
 - Free paper trading account available
 - Sign up: https://alpaca.markets/
 - Requires Alpaca MCP Server configuration
@@ -521,6 +523,23 @@ Several skills require API keys for data access:
   export ALPACA_SECRET_KEY="your_secret_key"
   export ALPACA_PAPER="true"  # or "false" for live trading
   ```
+
+**Interactive Brokers (IBKR):** (used by **IB Portfolio Manager**)
+- Free paper trading account available; sign up: https://www.interactivebrokers.com/
+- Uses the unofficial [`interactive-brokers-mcp`](https://github.com/code-rabi/interactive-brokers-mcp) MCP server (Node.js 18+, bundled IB Gateway — no separate Gateway install)
+- Add to your Claude MCP config and run read-only for analysis:
+  ```json
+  {
+    "mcpServers": {
+      "interactive-brokers": {
+        "command": "npx",
+        "args": ["-y", "interactive-brokers-mcp"],
+        "env": { "IB_PAPER_TRADING": "true", "IB_READ_ONLY_MODE": "true" }
+      }
+    }
+  }
+  ```
+- `IB_FLEX_TOKEN` is optional (enables historical performance via Flex Queries). Full setup: `skills/ib-portfolio-manager/references/ib-mcp-setup.md`
 
 ## Support & Further Reading
 - Claude Skills launch overview: https://www.anthropic.com/news/skills

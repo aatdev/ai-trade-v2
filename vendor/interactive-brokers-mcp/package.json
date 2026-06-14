@@ -1,0 +1,60 @@
+{
+  "name": "interactive-brokers-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP server for Interactive Brokers API integration (vendored & security-hardened fork — see VENDORING.md / SECURITY.md)",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "ib-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "install/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc && echo '#!/usr/bin/env node' | cat - dist/index.js > temp && mv temp dist/index.js && chmod +x dist/index.js",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "lint": "oxlint src/ --config=./.oxlintrc.json",
+    "lint:fix": "oxlint src/ --config=./.oxlintrc.json --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "mcp",
+    "interactive-brokers",
+    "trading",
+    "api"
+  ],
+  "author": "Nitay Rabinovich",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/code-rabi/interactive-brokers-mcp.git"
+  },
+  "homepage": "https://github.com/code-rabi/interactive-brokers-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.0",
+    "open": "^10.2.0",
+    "playwright-core": "^1.54.2",
+    "xml2js": "^0.6.2",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.22",
+    "@types/xml2js": "^0.4.14",
+    "@vitest/coverage-v8": "^3.2.4",
+    "oxlint": "^1.66.0",
+    "tsx": "^4.6.0",
+    "typescript": "^5.3.0",
+    "vitest": "^3.2.4"
+  }
+}

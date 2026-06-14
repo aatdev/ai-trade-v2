@@ -3,7 +3,7 @@ layout: default
 title: "Save Note"
 grand_parent: English
 parent: Skill Guides
-nav_order: 42
+nav_order: 43
 lang_peer: /ja/skills/save-note/
 permalink: /en/skills/save-note/
 generated: true

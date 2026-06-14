@@ -138,6 +138,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | **Exposure Coach** | ❌ Not used | ❌ Not used | ❌ Not used | Synthesizes signals from other skills; pure calculation |
 | **FTD Detector** | ❌ Not used | ❌ Not used | ❌ Not used | Daily S&P 500 / QQQ OHLCV via the shared TradingView data layer; no API key |
 | **Finviz Screener** | ❌ Not used | 🟡 Optional | ❌ Not used | FINVIZ Elite API |
+| **IB Portfolio Manager** | ❌ Not used | ❌ Not used | ❌ Not used | Interactive Brokers account via interactive-brokers-mcp (bundled IB Gateway); IB_READ_ONLY_MODE recommended for analysis; IB_FLEX_TOKEN optional for historical performance |
 | **IBD Distribution Day Monitor** | ❌ Not used | ❌ Not used | ❌ Not used | Daily QQQ/SPY OHLCV via the shared TradingView data layer; no API key |
 | **Institutional Flow Tracker** | ✅ Required | ❌ Not used | ❌ Not used | Financial Modeling Prep API |
 | **Kanchi Dividend Review Monitor** | 🟡 Optional (Recommended) | ❌ Not used | ❌ Not used | Dividend / price monitoring via FMP |

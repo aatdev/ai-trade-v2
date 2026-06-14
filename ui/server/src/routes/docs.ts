@@ -70,6 +70,7 @@ const DOC_SECTIONS: DocManifestEntry[] = [
 
   // Execution + alerts.
   { id: 'portfolio-manager', title: 'Portfolio Manager (Alpaca)', group: 'Исполнение и алерты', file: 'portfolio-manager.ru.md' },
+  { id: 'ib-portfolio-manager', title: 'IB Portfolio Manager (Interactive Brokers)', group: 'Исполнение и алерты', file: 'ib-portfolio-manager.ru.md' },
   { id: 'signals-alerts', title: 'Signals Alerts (TradingView)', group: 'Исполнение и алерты', file: 'signals-alerts.ru.md' },
 ];
 

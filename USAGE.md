@@ -40,6 +40,7 @@
 | **FMP (Financial Modeling Prep)** | Фундаментальные данные, OHLCV, календари | Free 250 вызовов/день; Starter $29.99/мес |
 | **FINVIZ Elite** | Расширенные скринеры, реал-тайм данные | $39.50/мес или ~$24.96/мес при годовой оплате |
 | **Alpaca** | Брокерский счёт, портфель, ордера | Бесплатно (paper и live trading) |
+| **Interactive Brokers** | Брокерский счёт, портфель (только анализ) через `interactive-brokers-mcp` | Бесплатно (paper и live trading) |
 
 ---
 
@@ -130,6 +131,12 @@
 **Кейсы использования:**
 - «Проанализируй мой портфель и предложи ребалансировку.»
 - Мониторинг распределения активов и концентрации рисков.
+
+#### IB Portfolio Manager 🟡 (требует **Interactive Brokers ✅**)
+**Описание:** IB-версия Portfolio Manager — тот же фреймворк анализа, но данные берутся из Interactive Brokers через `interactive-brokers-mcp` (со встроенным IB Gateway). Только анализ, ордера не отправляет (рекомендуется `IB_READ_ONLY_MODE=true`). Поддерживает мультиактивные/мультивалютные счета IBKR.
+**Кейсы использования:**
+- «Проанализируй мой портфель в Interactive Brokers и предложи ребалансировку.»
+- Обзор аллокации и рисков для счёта IBKR (без исполнения ордеров).
 
 #### Value Dividend Screener 🟡 (требует **FMP ✅**, FINVIZ 🟡)
 **Описание:** Скрининг акций США по дивидендам с фильтрами стоимости (P/E < 20, P/B < 2), привлекательной доходности (≥3%) и стабильного роста (дивиденды/выручка/EPS растут 3 года).
@@ -478,6 +485,22 @@ export ALPACA_PAPER="true"   # или "false" для реальной торго
 ```
 Регистрация: https://alpaca.markets/
 Настройка MCP-сервера: см. `portfolio-manager/references/alpaca-mcp-setup.md`
+
+### Interactive Brokers (IB Portfolio Manager)
+MCP-сервер `interactive-brokers` через `npx` (Node.js 18+, IB Gateway в комплекте), запуск в режиме только-чтение для анализа:
+```json
+{
+  "mcpServers": {
+    "interactive-brokers": {
+      "command": "npx",
+      "args": ["-y", "interactive-brokers-mcp"],
+      "env": { "IB_PAPER_TRADING": "true", "IB_READ_ONLY_MODE": "true" }
+    }
+  }
+}
+```
+Регистрация: https://www.interactivebrokers.com/
+Настройка MCP-сервера: см. `ib-portfolio-manager/references/ib-mcp-setup.md`
 
 ---
 

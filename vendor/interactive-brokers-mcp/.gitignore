@@ -1,0 +1,24 @@
+# Vendored interactive-brokers-mcp — commit SOURCE only.
+# Installed deps and build output are reproducible via `npm install && npm run build`.
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Bring-your-own runtime: the IB Gateway distribution and the per-platform JRE
+# are large third-party binaries and are NOT committed (see VENDORING.md).
+ib-gateway/
+runtime/
+
+# Secrets & runtime state
+.env
+.env.*
+*.log
+**/.vertx/
+*.jts
+
+# OS / tmp
+.DS_Store
+temp-*
+*.tgz
+*.tar.gz

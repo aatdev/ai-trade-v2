@@ -158,6 +158,7 @@ cd ui && npm install && npm run dev   # → http://localhost:5173
 | スキル | サマリ | 依存 | ステータス |
 |---|---|---|---|
 | **Dividend Growth Pullback Screener** (`dividend-growth-pullback-screener`) | Use this skill to find high-quality dividend growth stocks (12%+ annual dividend growth, 1.5%+ yield) that are experiencing temporary pullbacks, identified by RSI oversold conditions (RSI ≤40). | `tradingview` **required**, `finviz` optional | production |
+| **IB Portfolio Manager** (`ib-portfolio-manager`) | Comprehensive portfolio analysis using the Interactive Brokers MCP Server (interactive-brokers-mcp / bundled IB Gateway) to fetch live holdings, balances, and orders, then analyze asset allocation, risk metrics, individual positions, diversification, and generate rebalancing recommendations. IB-broker counterpart of portfolio-manager (Alpaca). | `interactive_brokers` **required** | production |
 | **Kanchi Dividend Review Monitor** (`kanchi-dividend-review-monitor`) | Monitor dividend portfolios with Kanchi-style forced-review triggers (T1-T5) and convert anomalies into OK/WARN/REVIEW states without auto-selling. | `fmp` _recommended_ | production |
 | **Kanchi Dividend SOP** (`kanchi-dividend-sop`) | Convert Kanchi-style dividend investing into a repeatable US-stock operating procedure. | `fmp` _recommended_ | production |
 | **Kanchi Dividend US Tax Accounting** (`kanchi-dividend-us-tax-accounting`) | Provide US dividend tax and account-location workflow for Kanchi-style income portfolios. | `local_calculation` — | production |
@@ -452,6 +453,7 @@ launchctl start com.trade-analysis.skill-generation-daily
 - **Trader Memory Core** (`trader-memory-core`): 🟡 オプション — FMPはポストモーテムのMAE/MFEのみ使用。コア機能はオフラインで動作
 - **エクスポージャーコーチ** (`exposure-coach`): 🟡 オプション — FMPはinstitutional-flow-trackerデータ利用時のみ必要
 - **シグナルポストモーテム** (`signal-postmortem`): 🟡 オプション — FMPは実現リターン取得用。手動価格入力にも対応
+- **IB Portfolio Manager** (`ib-portfolio-manager`): FMP/FINVIZ APIキー不要。Interactive Brokers アカウントと [`interactive-brokers-mcp`](https://github.com/code-rabi/interactive-brokers-mcp)（Node.js 18+、IB Gateway 同梱）が必要。分析用途では `IB_READ_ONLY_MODE=true` を推奨し、`IB_FLEX_TOKEN` は履歴パフォーマンス用（任意）。`portfolio-manager`（Alpaca）の IB 版。詳細: `skills/ib-portfolio-manager/references/ib-mcp-setup.md`
 
 ## 参考リンク
 - Claude Skillsローンチ概要: https://www.anthropic.com/news/skills

@@ -835,6 +835,7 @@ def _title_case(slug: str) -> str:
     """Convert slug to title case, preserving known acronyms."""
     acronyms = {
         "us": "US",
+        "ib": "IB",
         "vcp": "VCP",
         "canslim": "CANSLIM",
         "pead": "PEAD",

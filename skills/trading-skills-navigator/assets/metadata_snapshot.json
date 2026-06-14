@@ -348,6 +348,22 @@
       "timeframe": "daily"
     },
     {
+      "category": "core-portfolio",
+      "difficulty": "intermediate",
+      "display_name": "IB Portfolio Manager",
+      "id": "ib-portfolio-manager",
+      "integrations": [
+        {
+          "id": "interactive_brokers",
+          "requirement": "required",
+          "type": "broker"
+        }
+      ],
+      "status": "production",
+      "summary": "Comprehensive portfolio analysis using the Interactive Brokers MCP Server (interactive-brokers-mcp / bundled IB Gateway) to fetch live holdings, balances, and orders, then analyze asset allocation, risk metrics, individual positions, diversification, and generate rebalancing recommendations. IB-broker counterpart of portfolio-manager (Alpaca).",
+      "timeframe": "weekly"
+    },
+    {
       "category": "market-regime",
       "difficulty": "intermediate",
       "display_name": "IBD Distribution Day Monitor",
