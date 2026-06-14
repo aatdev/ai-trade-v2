@@ -39,7 +39,7 @@ permalink: /ja/skillsets/
 
 **対象ユーザー:** `long-term-investor`, `dividend-investor`
 
-**必須スキル:** `portfolio-manager`, `trader-memory-core`
+**必須スキル:** `ib-portfolio-manager`, `trader-memory-core`
 
 **推奨スキル:** `kanchi-dividend-review-monitor`, `value-dividend-screener`, `kanchi-dividend-us-tax-accounting`
 

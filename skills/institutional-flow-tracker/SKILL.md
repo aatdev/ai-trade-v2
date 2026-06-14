@@ -346,9 +346,9 @@ Shared utility module used by both `track_institutional_flow.py` and `analyze_si
 3. If institutions are selling, investigate why
 ```
 
-**Portfolio Manager + Institutional Flow:**
+**IB Portfolio Manager + Institutional Flow:**
 ```
-1. Fetch current portfolio via Alpaca
+1. Fetch current portfolio via Interactive Brokers
 2. Run institutional analysis on each holding
 3. Flag positions with deteriorating institutional support
 4. Consider rebalancing away from distribution

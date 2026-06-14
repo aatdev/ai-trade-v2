@@ -116,17 +116,18 @@ drop `swing-opportunity-daily`'s `vcp-screener`. Honest gap → all-empty
 
 ## The `--no-api` credential rule
 
-A workflow needs a paid key if **either**:
+A workflow needs external credentials (a paid key, or a broker account +
+gateway login) if **either**:
 
 - `api_profile ∈ {fmp-required, finviz-required, alpaca-required}`, **or**
 - any entry in its `required_skills` has an integration with
-  `id ∈ {fmp, finviz, alpaca}` **and** `requirement == required`.
+  `id ∈ {fmp, finviz, alpaca, interactive_brokers}` **and** `requirement == required`.
 
 `api_profile: mixed` is **never** trusted on its own — the required-skill
 credentials are always inspected. Consequences:
 
-- `core-portfolio-weekly` is `mixed` but its required `portfolio-manager`
-  needs Alpaca (`required`) → excluded under `--no-api`.
+- `core-portfolio-weekly` is `mixed` but its required `ib-portfolio-manager`
+  needs Interactive Brokers (`required`) → excluded under `--no-api`.
 - `swing-opportunity-daily` is `fmp-required` → excluded.
 - `market-regime-daily` is `no-api-basic`; its required skills use
   `public_csv` at `required` — **not a paid key** → kept.

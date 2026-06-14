@@ -389,6 +389,29 @@ class TestGeneratePlans:
         assert order["order_templates"]["pre_place"]["type"] == "stop_limit"
         assert order["order_templates"]["post_confirm"]["type"] == "limit"
 
+    def test_default_broker_both_includes_ib_templates(self):
+        # Default broker (absent attr -> "both") emits IB templates alongside Alpaca.
+        result = _make_vcp_result(score=85.0)
+        plans = generate_plans(_make_input_data([result]), _make_args())
+        tmpl = plans["actionable_orders"][0]["order_templates"]
+        assert "pre_place" in tmpl and "post_confirm" in tmpl  # Alpaca preserved
+        assert "pre_place_ib" in tmpl and "post_confirm_ib" in tmpl
+        assert tmpl["pre_place_ib"]["broker"] == "interactive_brokers"
+        entry = next(leg for leg in tmpl["pre_place_ib"]["legs"] if leg["role"] == "entry")
+        assert entry["orderType"] == "STP" and entry["stopPrice"] == tmpl["pre_place"]["stop_price"]
+
+    def test_broker_ib_only_omits_alpaca_templates(self):
+        plans = generate_plans(_make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="ib"))
+        tmpl = plans["actionable_orders"][0]["order_templates"]
+        assert "pre_place_ib" in tmpl and "post_confirm_ib" in tmpl
+        assert "pre_place" not in tmpl and "post_confirm" not in tmpl
+
+    def test_broker_alpaca_only_omits_ib_templates(self):
+        plans = generate_plans(_make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="alpaca"))
+        tmpl = plans["actionable_orders"][0]["order_templates"]
+        assert "pre_place" in tmpl and "post_confirm" in tmpl
+        assert "pre_place_ib" not in tmpl and "post_confirm_ib" not in tmpl
+
     def test_input_metadata_populated(self):
         data = _make_input_data([_make_vcp_result()])
         args = _make_args()

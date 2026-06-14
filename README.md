@@ -43,9 +43,9 @@ New users should start with one of these operational workflows. Each link points
 | Goal | Workflow | Anchor Skills | API Profile |
 | --- | --- | --- | --- |
 | 15-minute daily market check | [`market-regime-daily`](workflows/market-regime-daily.yaml) | market-breadth-analyzer, uptrend-analyzer, exposure-coach | No API for basic path |
-| Weekly long-term portfolio review | [`core-portfolio-weekly`](workflows/core-portfolio-weekly.yaml) | portfolio-manager, kanchi-dividend-review-monitor, trader-memory-core | Alpaca required; manual CSV is a degraded fallback |
+| Weekly long-term portfolio review | [`core-portfolio-weekly`](workflows/core-portfolio-weekly.yaml) | ib-portfolio-manager, kanchi-dividend-review-monitor, trader-memory-core | Interactive Brokers (IB Gateway) required; manual CSV is a degraded fallback |
 | Find swing candidates only when risk is allowed | [`swing-opportunity-daily`](workflows/swing-opportunity-daily.yaml) | vcp-screener, technical-analyst, position-sizer | FMP for screeners |
-| Find swing-short candidates when the market is weak | [`short-opportunity-daily`](workflows/short-opportunity-daily.yaml) | market-top-detector, exposure-coach, swing-short-screener, technical-analyst, position-sizer | FMP for screener; Alpaca optional |
+| Find swing-short candidates when the market is weak | [`short-opportunity-daily`](workflows/short-opportunity-daily.yaml) | market-top-detector, exposure-coach, swing-short-screener, technical-analyst, position-sizer | FMP for screener; Interactive Brokers optional |
 | Record and learn from every closed trade | [`trade-memory-loop`](workflows/trade-memory-loop.yaml) | trader-memory-core, signal-postmortem | No API for manual path |
 | Review monthly performance and adjust rules | [`monthly-performance-review`](workflows/monthly-performance-review.yaml) | trader-memory-core, signal-postmortem, backtest-expert | No API for manual path |
 
@@ -118,7 +118,7 @@ This repository contains skills across the following areas:
 | Area | Example Skills |
 | --- | --- |
 | Market Regime | `market-breadth-analyzer`, `uptrend-analyzer`, `exposure-coach` |
-| Core Portfolio | `portfolio-manager`, `value-dividend-screener`, `kanchi-dividend-sop` |
+| Core Portfolio | `ib-portfolio-manager`, `value-dividend-screener`, `kanchi-dividend-sop` |
 | Swing Opportunities | `vcp-screener`, `canslim-screener`, `breakout-trade-planner` |
 | Trade Planning | `position-sizer`, `technical-analyst` |
 | Trade Memory | `trader-memory-core`, `signal-postmortem` |
@@ -166,7 +166,7 @@ The detailed catalog below is **auto-generated** from `skills-index.yaml` by `sc
 
 | Skill | Summary | Integrations | Status |
 |---|---|---|---|
-| **Breakout Trade Planner** (`breakout-trade-planner`) | Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and Alpaca-compatible order templates (stop-limit bracket for pre-placement, limit bracket for post-confi... | `local_calculation` —, `tradingview` — | production |
+| **Breakout Trade Planner** (`breakout-trade-planner`) | Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus Interactive Brokers MCP place_order leg sequences — for pre-placement and post-confirmation. | `local_calculation` —, `tradingview` — | production |
 | **CANSLIM Screener** (`canslim-screener`) | Screen US stocks using William O'Neil's CANSLIM growth stock methodology. | `fmp` **required** | production |
 | **Finviz Screener** (`finviz-screener`) | Build and open FinViz screener URLs from natural language requests. | `finviz` optional | production |
 | **Swing Short Screener** (`swing-short-screener`) | Screen S&P 500 (or a custom universe) for Stage 4 downtrend weakness using a 5-factor weighted weakness score, and emit a graded A/B/C/D short-side watchlist. | `tradingview` — | production |
@@ -293,7 +293,7 @@ The main Core + Satellite starting path is described above. The examples below s
 5. Review Greeks and P/L scenarios to select optimal strategy (covered calls, spreads, straddles, etc.)
 
 ### Portfolio Review & Rebalancing
-1. Use **Portfolio Manager** to fetch current holdings via Alpaca MCP and analyze portfolio health
+1. Use **IB Portfolio Manager** to fetch current holdings via the Interactive Brokers MCP and analyze portfolio health
 2. Review asset allocation, sector diversification, and risk metrics (beta, volatility, concentration)
 3. Review position-level flags (HOLD/ADD/TRIM/SELL candidates) based on thesis validation
 4. Use **Market Environment Analysis** and **US Market Bubble Detector** to assess macro conditions

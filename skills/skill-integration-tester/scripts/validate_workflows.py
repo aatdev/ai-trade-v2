@@ -31,6 +31,7 @@ _DISPLAY_MAP: dict[str, str] = {
     "backtest expert": "backtest-expert",
     "options strategy advisor": "options-strategy-advisor",
     "portfolio manager": "portfolio-manager",
+    "ib portfolio manager": "ib-portfolio-manager",
     "earnings trade analyzer": "earnings-trade-analyzer",
     "pead screener": "pead-screener",
     "pair trade screener": "pair-trade-screener",

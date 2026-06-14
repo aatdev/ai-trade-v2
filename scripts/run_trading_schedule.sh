@@ -35,7 +35,7 @@ else
     PYTHON="python3"
 fi
 
-# Load secrets (FMP / ALPACA / TELEGRAM) and any project env. Both files are
+# Load secrets (FMP / IB / TELEGRAM) and any project env. Both files are
 # gitignored. .env uses `export VAR=...`; .envrc is direnv-managed.
 if [ -f .env ]; then
     set -a

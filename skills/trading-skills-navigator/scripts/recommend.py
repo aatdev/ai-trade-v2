@@ -28,10 +28,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Paid-API integration ids. A workflow is "needs a paid key" if its
-# api_profile says so OR any required skill has one of these integrations
-# at requirement == "required". (public_csv "required" is NOT paid.)
-PAID_INTEGRATION_IDS = frozenset({"fmp", "finviz", "alpaca"})
+# Credentialed integration ids. A workflow "needs external credentials" if its
+# api_profile says so OR any required skill has one of these integrations at
+# requirement == "required". These break the "no-API" path because they need a
+# paid key (fmp/finviz/alpaca) or a broker account + gateway login
+# (interactive_brokers). (public_csv "required" is NOT credentialed.)
+PAID_INTEGRATION_IDS = frozenset({"fmp", "finviz", "alpaca", "interactive_brokers"})
 API_REQUIRED_PROFILES = frozenset({"fmp-required", "finviz-required", "alpaca-required"})
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]

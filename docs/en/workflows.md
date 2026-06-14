@@ -27,6 +27,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 | [`swing-execution-manage`](#swing-execution-manage) — Swing Execution & Management | daily | 20 | mixed | intermediate |
 | [`swing-opportunity-daily`](#swing-opportunity-daily) — Swing Opportunity Daily | daily | 30 | fmp-required | intermediate |
 | [`trade-memory-loop`](#trade-memory-loop) — Trade Memory Loop | ad-hoc | 30 | no-api-basic | beginner |
+| [`value-research-buy-weekly`](#value-research-buy-weekly) — Value Research & Buy Recommendation (Weekly) | weekly | 75 | mixed | intermediate |
 
 ---
 
@@ -38,7 +39,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **When NOT to run:** Do not run as a daily routine. Daily portfolio churn defeats the long-term framing of this workflow.
 
-**Required skills:** `portfolio-manager`, `trader-memory-core`
+**Required skills:** `ib-portfolio-manager`, `trader-memory-core`
 
 **Optional skills:** `kanchi-dividend-review-monitor`, `value-dividend-screener`, `kanchi-dividend-us-tax-accounting`
 
@@ -54,11 +55,11 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **Steps:**
 
-**Step 1: Fetch holdings snapshot** → `portfolio-manager`
+**Step 1: Fetch holdings snapshot** → `ib-portfolio-manager`
 
 - produces: `holdings_snapshot`
 
-**Step 2: Review allocation and concentration** (decision gate) → `portfolio-manager`
+**Step 2: Review allocation and concentration** (decision gate) → `ib-portfolio-manager`
 
 - consumes: `holdings_snapshot`
 - produces: `allocation_report`
@@ -69,7 +70,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - consumes: `holdings_snapshot`
 - produces: `dividend_review_findings`
 
-**Step 4: Decide rebalance actions** (decision gate) → `portfolio-manager`
+**Step 4: Decide rebalance actions** (decision gate) → `ib-portfolio-manager`
 
 - consumes: `allocation_report`, `dividend_review_findings`
 - produces: `rebalance_actions`
@@ -82,7 +83,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **Manual review:**
 
-- Confirm holdings snapshot reflects the actual brokerage state (Alpaca or CSV).
+- Confirm holdings snapshot reflects the actual brokerage state (Interactive Brokers or CSV).
 - Confirm rebalance actions are entered manually at the broker, not auto-executed.
 - If dividend_review_findings flags T1-T5 issues, defer additional buys until resolved.
 
@@ -234,7 +235,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **Required skills:** `market-top-detector`, `exposure-coach`, `swing-short-screener`, `technical-analyst`, `position-sizer`, `trader-memory-core`
 
-**Optional skills:** `ibd-distribution-day-monitor`, `macro-regime-detector`, `ftd-detector`, `downtrend-duration-analyzer`, `market-news-analyst`, `parabolic-short-trade-planner`, `portfolio-manager`
+**Optional skills:** `ibd-distribution-day-monitor`, `macro-regime-detector`, `ftd-detector`, `downtrend-duration-analyzer`, `market-news-analyst`, `parabolic-short-trade-planner`, `ib-portfolio-manager`
 
 **Prerequisite workflows (informational):**
 
@@ -313,7 +314,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - consumes: `validated_short_setups`, `position_sizing`
 - produces: `short_trade_plans`
 
-**Step 12: Verify borrow availability and SSR** (optional) → `portfolio-manager`
+**Step 12: Verify borrow availability and SSR** (optional) → `ib-portfolio-manager`
 
 - consumes: `short_trade_plans`
 - produces: `borrow_inventory_check`
@@ -345,7 +346,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 
 **When NOT to run:** Do not run without a registered thesis and entry plan from swing-opportunity-daily. Do not run on a cash-priority / restrictive regime day from market-regime-daily. Do not use to discover new candidates — this workflow only executes plans that already passed the validation and sizing gates.
 
-**Required skills:** `trader-memory-core`, `portfolio-manager`
+**Required skills:** `trader-memory-core`, `ib-portfolio-manager`
 
 **Optional skills:** `position-sizer`
 
@@ -378,13 +379,13 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - produces: `active_thesis`
 - **Decision:** Has the regime gate (market-regime-daily) and the entry plan held since planning? Transition the thesis ENTRY_READY -> ACTIVE only if the setup and risk per trade are still valid at the current price.
 
-**Step 3: Place entry bracket order** (decision gate) → `portfolio-manager`
+**Step 3: Place entry bracket order** (decision gate) → `ib-portfolio-manager`
 
 - consumes: `active_thesis`
 - produces: `entry_order_confirmation`
 - **Decision:** Do the bracket parameters (entry/pivot, stop at base low, 2R target) match the plan, and is total portfolio heat within budget? Place the order manually; confirm the fill and update the thesis with actual price/date.
 
-**Step 4: Monitor open position and re-check regime** → `portfolio-manager`
+**Step 4: Monitor open position and re-check regime** → `ib-portfolio-manager`
 
 - consumes: `entry_order_confirmation`
 - produces: `position_monitor_report`
@@ -395,7 +396,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - produces: `position_adjustments`
 - **Decision:** At +2R, trim partial and trail the stop to breakeven? If the regime broke (SEVERE distribution / market-top signal) or the setup failed, reduce exposure ahead of the planned exit?
 
-**Step 6: Execute planned exit** (decision gate) → `portfolio-manager`
+**Step 6: Execute planned exit** (decision gate) → `ib-portfolio-manager`
 
 - consumes: `position_adjustments`, `position_monitor_report`
 - produces: `exit_execution`
@@ -549,6 +550,114 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - Be honest about whether the win was thesis-driven or lucky.
 - Be honest about whether the loss was thesis-flawed or executed poorly.
 - Don't rationalize randomness as either skill or failure.
+
+**Journal destination:** `trader-memory-core`
+
+---
+
+## Value Research & Buy Recommendation (Weekly) {#value-research-buy-weekly}
+
+**`value-research-buy-weekly`** · weekly · ~75 min · mixed · intermediate
+
+**When to run:** Weekly, to build a researched long-side buy list from undervalued / quality dividend / growth candidates. Stage 1 screens (fast server-side scan via tradingview-screener; specialized screeners optional), Stage 2 deep-dives each name (fundamentals + valuation + peer comparison + technicals), Stage 3 produces a professional buy recommendation, sizes it, and journals the thesis. Best run after market-regime-daily confirms new long risk is allowed.
+
+**When NOT to run:** Do not treat the output as an auto-buy signal — every recommendation is a decision gate for human judgement. Skip the enrichment steps that need data sources you cannot reach (they are optional and degrade gracefully).
+
+**Required skills:** `tradingview-screener`, `us-stock-analysis`, `position-sizer`, `trader-memory-core`
+
+**Optional skills:** `value-dividend-screener`, `dividend-growth-pullback-screener`, `canslim-screener`, `earnings-calendar`, `institutional-flow-tracker`, `technical-analyst`
+
+**Prerequisite workflows (informational):**
+
+- `market-regime-daily` expects `exposure_decision` — Adding new long-side risk should follow a non-restrictive exposure decision. Run market-regime-daily first on cash-priority days.
+
+**Artifacts:**
+
+| Artifact | Produced by step | Required | Downstream hints |
+|---|---|---|---|
+| `screened_candidates` | 1 | yes | — |
+| `value_candidates` | 2 | no | — |
+| `dividend_growth_candidates` | 3 | no | — |
+| `canslim_candidates` | 4 | no | — |
+| `earnings_proximity` | 5 | no | — |
+| `deep_research_reports` | 6 | yes | — |
+| `peer_comparison` | 7 | yes | — |
+| `smart_money_confirmation` | 8 | no | — |
+| `entry_timing` | 9 | no | — |
+| `buy_recommendations` | 10 | yes | `swing-execution-manage`, `trade-memory-loop` |
+| `position_sizing` | 11 | yes | — |
+| `thesis_journal` | 12 | yes | `trade-memory-loop` |
+
+**Steps:**
+
+**Step 1: Screen the universe (fast server-side scan)** → `tradingview-screener`
+
+- produces: `screened_candidates`
+
+**Step 2: Optional specialized value/dividend re-screen** (optional) → `value-dividend-screener`
+
+- consumes: `screened_candidates`
+- produces: `value_candidates`
+
+**Step 3: Optional dividend-growth pullback screen** (optional) → `dividend-growth-pullback-screener`
+
+- produces: `dividend_growth_candidates`
+
+**Step 4: Optional CANSLIM growth screen** (optional) → `canslim-screener`
+
+- produces: `canslim_candidates`
+
+**Step 5: Flag earnings proximity for candidates** (optional) → `earnings-calendar`
+
+- consumes: `screened_candidates`, `value_candidates`, `dividend_growth_candidates`, `canslim_candidates`
+- produces: `earnings_proximity`
+
+**Step 6: Deep-dive each candidate (fundamentals + valuation + technicals)** → `us-stock-analysis`
+
+- consumes: `screened_candidates`, `value_candidates`, `dividend_growth_candidates`, `canslim_candidates`, `earnings_proximity`
+- produces: `deep_research_reports`
+
+**Step 7: Compare each candidate against same-industry peers** → `us-stock-analysis`
+
+- consumes: `deep_research_reports`
+- produces: `peer_comparison`
+
+**Step 8: Confirm institutional accumulation (13F)** (optional) → `institutional-flow-tracker`
+
+- consumes: `deep_research_reports`
+- produces: `smart_money_confirmation`
+
+**Step 9: Confirm weekly-chart entry timing** (optional) → `technical-analyst`
+
+- consumes: `deep_research_reports`
+- produces: `entry_timing`
+
+**Step 10: Synthesize professional buy recommendation** (decision gate) → `us-stock-analysis`
+
+- consumes: `deep_research_reports`, `peer_comparison`, `smart_money_confirmation`, `entry_timing`, `earnings_proximity`
+- produces: `buy_recommendations`
+- **Decision:** For each researched name, is the thesis a BUY now? Confirm it is genuinely undervalued vs intrinsic value AND vs same-industry peers, the fundamentals are durable, smart-money flow is not distributing, no earnings event is imminent, and the chart is not breaking down. Reject anything that fails — a passed screen is not a buy.
+
+**Step 11: Size the position by risk** → `position-sizer`
+
+- consumes: `buy_recommendations`
+- produces: `position_sizing`
+
+**Step 12: Register thesis in journal** (decision gate) → `trader-memory-core`
+
+- consumes: `buy_recommendations`, `position_sizing`
+- produces: `thesis_journal`
+- **Decision:** For each BUY that survived the recommendation gate, register the thesis with entry / stop / target / intrinsic-value note. Confirm risk per trade matches position-sizer output and total portfolio heat stays within budget.
+
+**Manual review:**
+
+- Confirm market-regime-daily exposure_decision allows new long risk before buying.
+- Reject any name where the valuation case is unclear, even if it passed a screen.
+- Normalize EPS before judging valuation — a screener P/E can be distorted by one-time items in TTM earnings; verify against company guidance / a multi-year average.
+- Read the peer comparison before judging valuation — a multiple is only cheap/expensive relative to industry peers.
+- When enrichment steps (earnings/13F/technical) were skipped, note the missing context.
+- Verify total portfolio heat is within budget before placing any order.
+- All orders are placed manually at the broker; no auto-execution.
 
 **Journal destination:** `trader-memory-core`
 

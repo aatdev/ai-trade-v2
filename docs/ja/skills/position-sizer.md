@@ -320,7 +320,7 @@ python3 skills/position-sizer/scripts/position_sizer.py \
 ```
 1. CANSLIM / VCP / Dividend Screener: 候補銘柄を特定
 2. Position Sizer: エントリー/ストップに基づく適切な株数を計算
-3. Portfolio Manager: Alpaca経由で発注・ポジション管理
+3. IB Portfolio Manager: Interactive Brokers でポジション分析・リバランス（発注は interactive-brokers MCP 経由）
 ```
 
 ### Backtest Expert → Position Sizer

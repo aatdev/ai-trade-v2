@@ -11,7 +11,7 @@ permalink: /en/skills/breakout-trade-planner/
 # Breakout Trade Planner
 {: .no_toc }
 
-Generate Minervini-style breakout trade plans from VCP screener output. Calculates entry, stop-loss, and target prices using worst-case risk analysis, with Alpaca-compatible bracket order templates.
+Generate Minervini-style breakout trade plans from VCP screener output. Calculates entry, stop-loss, and target prices using worst-case risk analysis, with broker order templates — Alpaca-shaped bracket JSON and/or Interactive Brokers MCP `place_order` leg sequences (`--broker alpaca|ib|both`).
 {: .fs-6 .fw-300 }
 
 <span class="badge badge-free">No API</span>
@@ -240,7 +240,7 @@ A typical actionable order in the JSON output (pivot=$100, last_low=$95):
 - **stop_loss_price** ($94.05): Last contraction low $95 minus 1% buffer
 - **risk_pct_worst** (7.79%): (102.00 - 94.05) / 102.00 -- passes 8% Gate
 - **target_price** ($117.90): worst_entry + 2R = 102.00 + 2 * (102.00 - 94.05)
-- **Two order templates**: Choose pre_place (set-and-forget) or post_confirm (wait for 5-min confirmation)
+- **Two order templates**: Choose pre_place (set-and-forget) or post_confirm (wait for 5-min confirmation); pick the broker output format with `--broker alpaca|ib|both`
 
 ---
 
@@ -290,6 +290,10 @@ Human-readable summary with tables for actionable orders, revalidation candidate
 **Order template selection:**
 - **pre_place** (stop-limit): Best for busy traders. Place the order before market open, it auto-triggers if price hits the pivot. Risk: may trigger on low-volume fake breakouts
 - **post_confirm** (limit after 5-min check): Best for active traders with the upcoming breakout-monitor. Waits for close above pivot + volume confirmation on 5-min bars. Lower false-positive rate
+
+**Broker output format (`--broker alpaca|ib|both`, default `both`):**
+- **alpaca** — `order_templates.pre_place` / `post_confirm`: a single bracket order (`order_class: bracket` with nested `take_profit` / `stop_loss`), ready for Alpaca's order API.
+- **ib** — `order_templates.pre_place_ib` / `post_confirm_ib`: an ordered leg sequence (`entry` → `stop_loss` → `take_profit`), each leg a standalone `place_order` payload for the interactive-brokers MCP. The IB MCP has no native bracket / OCA / stop-limit, so place the entry first and attach the two exits as a manual OCO after the fill. In `pre_place_ib` the entry is a stop-market (`STP`) and `max_fill_price` (= worst_entry) is advisory only — a gap can fill above it.
 
 **When no candidates are actionable:**
 - This is normal and expected. The Gate is intentionally strict

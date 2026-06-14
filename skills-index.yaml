@@ -53,15 +53,15 @@ skills:
   category: swing-opportunity
   status: production
   summary: Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk
-    calculation, portfolio heat management, and Alpaca-compatible order templates (stop-limit bracket
-    for pre-placement, limit bracket for post-confi...
+    calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus
+    Interactive Brokers MCP place_order leg sequences — for pre-placement and post-confirmation.
   timeframe: event-driven
   difficulty: intermediate
   integrations:
   - id: local_calculation
     type: calculation
     requirement: not_required
-    note: Consumes VCP screener output; pure calculation + Alpaca order templates
+    note: Consumes VCP screener output; pure calculation + Alpaca-shaped and Interactive Brokers order templates
   - id: tradingview
     type: market_data
     requirement: not_required
@@ -72,6 +72,7 @@ skills:
   outputs:
   - entry_plan
   - alpaca_order_template
+  - ib_order_template
   workflows:
   - swing-opportunity-daily
 - id: canslim-screener
@@ -449,7 +450,9 @@ skills:
   outputs:
   - allocation_report
   - rebalance_actions
-  workflows: []
+  workflows:
+  - core-portfolio-weekly
+  - swing-execution-manage
 - id: ibd-distribution-day-monitor
   display_name: IBD Distribution Day Monitor
   category: market-regime
@@ -758,8 +761,7 @@ skills:
   outputs:
   - allocation_report
   - rebalance_actions
-  workflows:
-  - core-portfolio-weekly
+  workflows: []
 - id: position-sizer
   display_name: Position Sizer
   category: trade-planning

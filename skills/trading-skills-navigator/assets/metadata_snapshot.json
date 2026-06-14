@@ -51,7 +51,7 @@
         }
       ],
       "status": "production",
-      "summary": "Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and Alpaca-compatible order templates (stop-limit bracket for pre-placement, limit bracket for post-confi...",
+      "summary": "Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus Interactive Brokers MCP place_order leg sequences — for pre-placement and post-confirmation.",
       "timeframe": "event-driven"
     },
     {
@@ -1075,7 +1075,7 @@
         "core-portfolio-weekly"
       ],
       "required_skills": [
-        "portfolio-manager",
+        "ib-portfolio-manager",
         "trader-memory-core"
       ],
       "target_users": [
@@ -1188,7 +1188,7 @@
       ],
       "prerequisite_workflows": [],
       "required_skills": [
-        "portfolio-manager",
+        "ib-portfolio-manager",
         "trader-memory-core"
       ],
       "target_users": [
@@ -1256,7 +1256,7 @@
         "downtrend-duration-analyzer",
         "market-news-analyst",
         "parabolic-short-trade-planner",
-        "portfolio-manager"
+        "ib-portfolio-manager"
       ],
       "prerequisite_workflows": [
         "market-regime-daily"
@@ -1289,7 +1289,7 @@
       ],
       "required_skills": [
         "trader-memory-core",
-        "portfolio-manager"
+        "ib-portfolio-manager"
       ],
       "target_users": [
         "part-time-swing-trader"

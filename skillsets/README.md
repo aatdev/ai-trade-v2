@@ -21,7 +21,7 @@ For the full schema, error codes, and validator rules, see
 | Skillset | API profile | Related workflow(s) | Required skills |
 |---|---|---|---|
 | [`market-regime.yaml`](market-regime.yaml) | no-api-basic | market-regime-daily | market-breadth-analyzer, uptrend-analyzer, exposure-coach |
-| [`core-portfolio.yaml`](core-portfolio.yaml) | mixed | core-portfolio-weekly | portfolio-manager, trader-memory-core |
+| [`core-portfolio.yaml`](core-portfolio.yaml) | mixed | core-portfolio-weekly | ib-portfolio-manager, trader-memory-core |
 | [`swing-opportunity.yaml`](swing-opportunity.yaml) | fmp-required | swing-opportunity-daily | vcp-screener, technical-analyst, position-sizer, trader-memory-core |
 | [`trade-memory.yaml`](trade-memory.yaml) | no-api-basic | trade-memory-loop, monthly-performance-review | trader-memory-core, signal-postmortem |
 

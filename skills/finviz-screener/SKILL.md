@@ -36,7 +36,7 @@ Translate natural-language stock screening requests into FinViz screener filter 
 
 **When NOT to Use:**
 - Deep fundamental analysis of a specific stock (use us-stock-analysis)
-- Portfolio review with holdings (use portfolio-manager)
+- Portfolio review with holdings (use ib-portfolio-manager)
 - Chart pattern analysis on images (use technical-analyst)
 - Earnings-based screening (use earnings-trade-analyzer or pead-screener)
 

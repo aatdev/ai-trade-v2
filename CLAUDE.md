@@ -119,7 +119,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 |-------|---------|--------------|--------|-------|
 | **Backtest Expert** | ❌ Not used | ❌ Not used | ❌ Not used | User provides strategy parameters |
 | **Breadth Chart Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
-| **Breakout Trade Planner** | ❌ Not used | ❌ Not used | ❌ Not used | Consumes VCP screener output; pure calculation + Alpaca order templates; Optional earnings-date gate (--earnings-gate-days) via public scanner.tradingview.com; no API key |
+| **Breakout Trade Planner** | ❌ Not used | ❌ Not used | ❌ Not used | Consumes VCP screener output; pure calculation + Alpaca-shaped and Interactive Brokers order templates; Optional earnings-date gate (--earnings-gate-days) via public scanner.tradingview.com; no API key |
 | **CANSLIM Screener** | ✅ Required | ❌ Not used | ❌ Not used | US stock fundamentals via FMP |
 | **Data Quality Checker** | ❌ Not used | ❌ Not used | ❌ Not used | Local markdown validation; works offline |
 | **Dividend Growth Pullback Screener** | ❌ Not used | 🟡 Optional | ❌ Not used | FINVIZ Elite pre-screen widens universe beyond S&P 500 |
@@ -251,7 +251,7 @@ Key conventions: the server binds to `127.0.0.1` only and resolves the data dir 
 | Workflow | Cadence | Required skills |
 |---|---|---|
 | [`market-regime-daily`](workflows/market-regime-daily.yaml) | daily | market-breadth-analyzer, uptrend-analyzer, exposure-coach |
-| [`core-portfolio-weekly`](workflows/core-portfolio-weekly.yaml) | weekly | portfolio-manager, trader-memory-core |
+| [`core-portfolio-weekly`](workflows/core-portfolio-weekly.yaml) | weekly | ib-portfolio-manager, trader-memory-core |
 | [`swing-opportunity-daily`](workflows/swing-opportunity-daily.yaml) | daily | vcp-screener, technical-analyst, position-sizer, trader-memory-core |
 | [`trade-memory-loop`](workflows/trade-memory-loop.yaml) | per closed trade | trader-memory-core, signal-postmortem |
 | [`monthly-performance-review`](workflows/monthly-performance-review.yaml) | monthly | trader-memory-core, signal-postmortem |
@@ -299,13 +299,13 @@ Informal chains for skills not yet covered by a YAML manifest. Details (modes, f
 1. Value Dividend Screener → High-yield opportunities
 2. Dividend Growth Pullback Screener → Growth stocks at pullbacks
 3. US Stock Analysis → Deep-dive analysis
-4. Portfolio Manager → Monitor and rebalance
+4. IB Portfolio Manager → Monitor and rebalance
 
 **Trade Execution Planning:**
 1. Screener skills (VCP, CANSLIM, Dividend, Earnings) → Identify candidates
 2. Position Sizer → Risk-based share count with portfolio constraints
 3. Data Quality Checker → Validate analysis document
-4. Portfolio Manager → Execute and monitor positions
+4. IB Portfolio Manager → Execute and monitor positions
 
 **Kanchi Dividend Workflow (US stocks):**
 1. kanchi-dividend-sop → Kanchi 5-step screening and pullback entry planning
@@ -328,7 +328,7 @@ Informal chains for skills not yet covered by a YAML manifest. Details (modes, f
 3. US Stock Analysis → Deep-dive validation (or Technical Analyst), link report
 4. Trader Memory Core (transition) → IDEA → ENTRY_READY → ACTIVE
 5. Position Sizer → Risk-based sizing, attach position
-6. Portfolio Manager → Execute entry, record actual price/date
+6. IB Portfolio Manager → Execute entry, record actual price/date
 7. Trader Memory Core (review) → Periodic review-due checks
 8. Trader Memory Core (close + postmortem) → Exit record + journal entry with MAE/MFE
 

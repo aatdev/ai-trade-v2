@@ -11,7 +11,7 @@ permalink: /ja/skills/breakout-trade-planner/
 # Breakout Trade Planner
 {: .no_toc }
 
-Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and Alpaca-compatible order templates (stop-limit bracket for pre-placement, limit bracket for post-confirmation). Use when user has VCP screener results and wants actionable trade plans with entry/stop/target levels and position sizing.
+Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus Interactive Brokers MCP place_order leg sequences (stop-limit/limit for pre-placement/post-confirmation). Use when user has VCP screener results and wants actionable trade plans with entry/stop/target levels and position sizing.
 {: .fs-6 .fw-300 }
 
 <span class="badge badge-optional">FMP任意</span>

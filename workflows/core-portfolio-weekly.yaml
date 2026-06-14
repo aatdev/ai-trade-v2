@@ -17,7 +17,7 @@ when_not_to_run: >-
   framing of this workflow.
 
 required_skills:
-  - portfolio-manager
+  - ib-portfolio-manager
   - trader-memory-core
 optional_skills:
   - kanchi-dividend-review-monitor
@@ -46,14 +46,14 @@ artifacts:
 steps:
   - step: 1
     name: Fetch holdings snapshot
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     produces:
       - holdings_snapshot
     decision_gate: false
 
   - step: 2
     name: Review allocation and concentration
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     consumes:
       - holdings_snapshot
     produces:
@@ -75,7 +75,7 @@ steps:
 
   - step: 4
     name: Decide rebalance actions
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     consumes:
       - allocation_report
       - dividend_review_findings
@@ -96,7 +96,7 @@ steps:
     decision_gate: false
 
 manual_review:
-  - Confirm holdings snapshot reflects the actual brokerage state (Alpaca or CSV).
+  - Confirm holdings snapshot reflects the actual brokerage state (Interactive Brokers or CSV).
   - Confirm rebalance actions are entered manually at the broker, not auto-executed.
   - If dividend_review_findings flags T1-T5 issues, defer additional buys until resolved.
 

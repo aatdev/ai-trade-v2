@@ -29,6 +29,7 @@ permalink: /ja/workflows/
 | [`swing-execution-manage`](#swing-execution-manage) — Swing Execution & Management | daily | 20 | mixed | intermediate |
 | [`swing-opportunity-daily`](#swing-opportunity-daily) — Swing Opportunity Daily | daily | 30 | fmp-required | intermediate |
 | [`trade-memory-loop`](#trade-memory-loop) — Trade Memory Loop | ad-hoc | 30 | no-api-basic | beginner |
+| [`value-research-buy-weekly`](#value-research-buy-weekly) — Value Research & Buy Recommendation (Weekly) | weekly | 75 | mixed | intermediate |
 
 ---
 
@@ -40,7 +41,7 @@ permalink: /ja/workflows/
 
 **実行してはいけないとき:** Do not run as a daily routine. Daily portfolio churn defeats the long-term framing of this workflow.
 
-**必須スキル:** `portfolio-manager`, `trader-memory-core`
+**必須スキル:** `ib-portfolio-manager`, `trader-memory-core`
 
 **任意スキル:** `kanchi-dividend-review-monitor`, `value-dividend-screener`, `kanchi-dividend-us-tax-accounting`
 
@@ -56,11 +57,11 @@ permalink: /ja/workflows/
 
 **ステップ:**
 
-**ステップ 1: Fetch holdings snapshot** → `portfolio-manager`
+**ステップ 1: Fetch holdings snapshot** → `ib-portfolio-manager`
 
 - produces: `holdings_snapshot`
 
-**ステップ 2: Review allocation and concentration** （判断ゲート） → `portfolio-manager`
+**ステップ 2: Review allocation and concentration** （判断ゲート） → `ib-portfolio-manager`
 
 - consumes: `holdings_snapshot`
 - produces: `allocation_report`
@@ -71,7 +72,7 @@ permalink: /ja/workflows/
 - consumes: `holdings_snapshot`
 - produces: `dividend_review_findings`
 
-**ステップ 4: Decide rebalance actions** （判断ゲート） → `portfolio-manager`
+**ステップ 4: Decide rebalance actions** （判断ゲート） → `ib-portfolio-manager`
 
 - consumes: `allocation_report`, `dividend_review_findings`
 - produces: `rebalance_actions`
@@ -84,7 +85,7 @@ permalink: /ja/workflows/
 
 **手動レビュー:**
 
-- Confirm holdings snapshot reflects the actual brokerage state (Alpaca or CSV).
+- Confirm holdings snapshot reflects the actual brokerage state (Interactive Brokers or CSV).
 - Confirm rebalance actions are entered manually at the broker, not auto-executed.
 - If dividend_review_findings flags T1-T5 issues, defer additional buys until resolved.
 
@@ -236,7 +237,7 @@ permalink: /ja/workflows/
 
 **必須スキル:** `market-top-detector`, `exposure-coach`, `swing-short-screener`, `technical-analyst`, `position-sizer`, `trader-memory-core`
 
-**任意スキル:** `ibd-distribution-day-monitor`, `macro-regime-detector`, `ftd-detector`, `downtrend-duration-analyzer`, `market-news-analyst`, `parabolic-short-trade-planner`, `portfolio-manager`
+**任意スキル:** `ibd-distribution-day-monitor`, `macro-regime-detector`, `ftd-detector`, `downtrend-duration-analyzer`, `market-news-analyst`, `parabolic-short-trade-planner`, `ib-portfolio-manager`
 
 **前提ワークフロー（informational）:**
 
@@ -315,7 +316,7 @@ permalink: /ja/workflows/
 - consumes: `validated_short_setups`, `position_sizing`
 - produces: `short_trade_plans`
 
-**ステップ 12: Verify borrow availability and SSR** （任意） → `portfolio-manager`
+**ステップ 12: Verify borrow availability and SSR** （任意） → `ib-portfolio-manager`
 
 - consumes: `short_trade_plans`
 - produces: `borrow_inventory_check`
@@ -347,7 +348,7 @@ permalink: /ja/workflows/
 
 **実行してはいけないとき:** Do not run without a registered thesis and entry plan from swing-opportunity-daily. Do not run on a cash-priority / restrictive regime day from market-regime-daily. Do not use to discover new candidates — this workflow only executes plans that already passed the validation and sizing gates.
 
-**必須スキル:** `trader-memory-core`, `portfolio-manager`
+**必須スキル:** `trader-memory-core`, `ib-portfolio-manager`
 
 **任意スキル:** `position-sizer`
 
@@ -380,13 +381,13 @@ permalink: /ja/workflows/
 - produces: `active_thesis`
 - **判断:** Has the regime gate (market-regime-daily) and the entry plan held since planning? Transition the thesis ENTRY_READY -> ACTIVE only if the setup and risk per trade are still valid at the current price.
 
-**ステップ 3: Place entry bracket order** （判断ゲート） → `portfolio-manager`
+**ステップ 3: Place entry bracket order** （判断ゲート） → `ib-portfolio-manager`
 
 - consumes: `active_thesis`
 - produces: `entry_order_confirmation`
 - **判断:** Do the bracket parameters (entry/pivot, stop at base low, 2R target) match the plan, and is total portfolio heat within budget? Place the order manually; confirm the fill and update the thesis with actual price/date.
 
-**ステップ 4: Monitor open position and re-check regime** → `portfolio-manager`
+**ステップ 4: Monitor open position and re-check regime** → `ib-portfolio-manager`
 
 - consumes: `entry_order_confirmation`
 - produces: `position_monitor_report`
@@ -397,7 +398,7 @@ permalink: /ja/workflows/
 - produces: `position_adjustments`
 - **判断:** At +2R, trim partial and trail the stop to breakeven? If the regime broke (SEVERE distribution / market-top signal) or the setup failed, reduce exposure ahead of the planned exit?
 
-**ステップ 6: Execute planned exit** （判断ゲート） → `portfolio-manager`
+**ステップ 6: Execute planned exit** （判断ゲート） → `ib-portfolio-manager`
 
 - consumes: `position_adjustments`, `position_monitor_report`
 - produces: `exit_execution`
@@ -551,6 +552,114 @@ permalink: /ja/workflows/
 - Be honest about whether the win was thesis-driven or lucky.
 - Be honest about whether the loss was thesis-flawed or executed poorly.
 - Don't rationalize randomness as either skill or failure.
+
+**Journal 出力先:** `trader-memory-core`
+
+---
+
+## Value Research & Buy Recommendation (Weekly) {#value-research-buy-weekly}
+
+**`value-research-buy-weekly`** · weekly · ~75 min · mixed · intermediate
+
+**実行タイミング:** Weekly, to build a researched long-side buy list from undervalued / quality dividend / growth candidates. Stage 1 screens (fast server-side scan via tradingview-screener; specialized screeners optional), Stage 2 deep-dives each name (fundamentals + valuation + peer comparison + technicals), Stage 3 produces a professional buy recommendation, sizes it, and journals the thesis. Best run after market-regime-daily confirms new long risk is allowed.
+
+**実行してはいけないとき:** Do not treat the output as an auto-buy signal — every recommendation is a decision gate for human judgement. Skip the enrichment steps that need data sources you cannot reach (they are optional and degrade gracefully).
+
+**必須スキル:** `tradingview-screener`, `us-stock-analysis`, `position-sizer`, `trader-memory-core`
+
+**任意スキル:** `value-dividend-screener`, `dividend-growth-pullback-screener`, `canslim-screener`, `earnings-calendar`, `institutional-flow-tracker`, `technical-analyst`
+
+**前提ワークフロー（informational）:**
+
+- `market-regime-daily` が期待する artifact `exposure_decision` — Adding new long-side risk should follow a non-restrictive exposure decision. Run market-regime-daily first on cash-priority days.
+
+**artifact 一覧:**
+
+| Artifact | 生成ステップ | 必須 | 下流ヒント |
+|---|---|---|---|
+| `screened_candidates` | 1 | あり | — |
+| `value_candidates` | 2 | なし | — |
+| `dividend_growth_candidates` | 3 | なし | — |
+| `canslim_candidates` | 4 | なし | — |
+| `earnings_proximity` | 5 | なし | — |
+| `deep_research_reports` | 6 | あり | — |
+| `peer_comparison` | 7 | あり | — |
+| `smart_money_confirmation` | 8 | なし | — |
+| `entry_timing` | 9 | なし | — |
+| `buy_recommendations` | 10 | あり | `swing-execution-manage`, `trade-memory-loop` |
+| `position_sizing` | 11 | あり | — |
+| `thesis_journal` | 12 | あり | `trade-memory-loop` |
+
+**ステップ:**
+
+**ステップ 1: Screen the universe (fast server-side scan)** → `tradingview-screener`
+
+- produces: `screened_candidates`
+
+**ステップ 2: Optional specialized value/dividend re-screen** （任意） → `value-dividend-screener`
+
+- consumes: `screened_candidates`
+- produces: `value_candidates`
+
+**ステップ 3: Optional dividend-growth pullback screen** （任意） → `dividend-growth-pullback-screener`
+
+- produces: `dividend_growth_candidates`
+
+**ステップ 4: Optional CANSLIM growth screen** （任意） → `canslim-screener`
+
+- produces: `canslim_candidates`
+
+**ステップ 5: Flag earnings proximity for candidates** （任意） → `earnings-calendar`
+
+- consumes: `screened_candidates`, `value_candidates`, `dividend_growth_candidates`, `canslim_candidates`
+- produces: `earnings_proximity`
+
+**ステップ 6: Deep-dive each candidate (fundamentals + valuation + technicals)** → `us-stock-analysis`
+
+- consumes: `screened_candidates`, `value_candidates`, `dividend_growth_candidates`, `canslim_candidates`, `earnings_proximity`
+- produces: `deep_research_reports`
+
+**ステップ 7: Compare each candidate against same-industry peers** → `us-stock-analysis`
+
+- consumes: `deep_research_reports`
+- produces: `peer_comparison`
+
+**ステップ 8: Confirm institutional accumulation (13F)** （任意） → `institutional-flow-tracker`
+
+- consumes: `deep_research_reports`
+- produces: `smart_money_confirmation`
+
+**ステップ 9: Confirm weekly-chart entry timing** （任意） → `technical-analyst`
+
+- consumes: `deep_research_reports`
+- produces: `entry_timing`
+
+**ステップ 10: Synthesize professional buy recommendation** （判断ゲート） → `us-stock-analysis`
+
+- consumes: `deep_research_reports`, `peer_comparison`, `smart_money_confirmation`, `entry_timing`, `earnings_proximity`
+- produces: `buy_recommendations`
+- **判断:** For each researched name, is the thesis a BUY now? Confirm it is genuinely undervalued vs intrinsic value AND vs same-industry peers, the fundamentals are durable, smart-money flow is not distributing, no earnings event is imminent, and the chart is not breaking down. Reject anything that fails — a passed screen is not a buy.
+
+**ステップ 11: Size the position by risk** → `position-sizer`
+
+- consumes: `buy_recommendations`
+- produces: `position_sizing`
+
+**ステップ 12: Register thesis in journal** （判断ゲート） → `trader-memory-core`
+
+- consumes: `buy_recommendations`, `position_sizing`
+- produces: `thesis_journal`
+- **判断:** For each BUY that survived the recommendation gate, register the thesis with entry / stop / target / intrinsic-value note. Confirm risk per trade matches position-sizer output and total portfolio heat stays within budget.
+
+**手動レビュー:**
+
+- Confirm market-regime-daily exposure_decision allows new long risk before buying.
+- Reject any name where the valuation case is unclear, even if it passed a screen.
+- Normalize EPS before judging valuation — a screener P/E can be distorted by one-time items in TTM earnings; verify against company guidance / a multi-year average.
+- Read the peer comparison before judging valuation — a multiple is only cheap/expensive relative to industry peers.
+- When enrichment steps (earnings/13F/technical) were skipped, note the missing context.
+- Verify total portfolio heat is within budget before placing any order.
+- All orders are placed manually at the broker; no auto-execution.
 
 **Journal 出力先:** `trader-memory-core`
 

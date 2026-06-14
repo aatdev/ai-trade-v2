@@ -22,7 +22,7 @@ when_not_to_run: >-
 
 required_skills:
   - trader-memory-core
-  - portfolio-manager
+  - ib-portfolio-manager
 optional_skills:
   - position-sizer
 
@@ -94,7 +94,7 @@ steps:
 
   - step: 3
     name: Place entry bracket order
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     consumes:
       - active_thesis
     produces:
@@ -107,7 +107,7 @@ steps:
 
   - step: 4
     name: Monitor open position and re-check regime
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     consumes:
       - entry_order_confirmation
     produces:
@@ -130,7 +130,7 @@ steps:
 
   - step: 6
     name: Execute planned exit
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     consumes:
       - position_adjustments
       - position_monitor_report

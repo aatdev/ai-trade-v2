@@ -74,8 +74,11 @@ package.
    ```bash
    export FMP_API_KEY=...        # FMP-backed skills
    export FINVIZ_API_KEY=...     # FINVIZ Elite (optional accelerator)
-   export ALPACA_API_KEY=...     # portfolio-manager (Alpaca)
-   export ALPACA_SECRET_KEY=...
+   # ib-portfolio-manager (Interactive Brokers): no API key — run the
+   # interactive-brokers-mcp server + IB Gateway login. IB_READ_ONLY_MODE=true
+   # is recommended for analysis. Setup:
+   # skills/ib-portfolio-manager/references/ib-mcp-setup.md
+   export IB_READ_ONLY_MODE=true
    ```
 
 4. Run the recommended workflow's skills in the order the workflow manifest
@@ -88,6 +91,7 @@ If the user has no paid keys, the safe starting path is **`market-regime-daily`*
 (`api_profile: no-api-basic`): `market-breadth-analyzer` → `uptrend-analyzer`
 → `exposure-coach`. Add the journaling loop (`trade-memory-loop`,
 `monthly-performance-review`, both no-API) to close the
-Plan → Trade → Record → Review → Improve loop. Upgrade to FMP/Alpaca-backed
-workflows (`swing-opportunity-daily`, `core-portfolio-weekly`) only when the
-user is ready to add paid data.
+Plan → Trade → Record → Review → Improve loop. Upgrade to FMP- and
+broker-backed workflows (`swing-opportunity-daily`,
+`core-portfolio-weekly`) only when the user is ready to add paid data or
+connect a broker (Interactive Brokers via interactive-brokers-mcp).

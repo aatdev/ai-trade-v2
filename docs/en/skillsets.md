@@ -37,7 +37,7 @@ Purpose-specific skillset bundles for the solo-trader OS. A skillset is a catego
 
 **Target users:** `long-term-investor`, `dividend-investor`
 
-**Required skills:** `portfolio-manager`, `trader-memory-core`
+**Required skills:** `ib-portfolio-manager`, `trader-memory-core`
 
 **Recommended skills:** `kanchi-dividend-review-monitor`, `value-dividend-screener`, `kanchi-dividend-us-tax-accounting`
 

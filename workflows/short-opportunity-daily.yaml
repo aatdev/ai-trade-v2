@@ -35,7 +35,7 @@ optional_skills:
   - downtrend-duration-analyzer
   - market-news-analyst
   - parabolic-short-trade-planner
-  - portfolio-manager
+  - ib-portfolio-manager
 
 # Informational only — validator does NOT enforce inter-workflow ordering.
 # See docs/dev/metadata-and-workflow-schema.md § 2.4.
@@ -212,7 +212,7 @@ steps:
 
   - step: 12
     name: Verify borrow availability and SSR
-    skill: portfolio-manager
+    skill: ib-portfolio-manager
     optional: true
     consumes:
       - short_trade_plans

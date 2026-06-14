@@ -191,8 +191,8 @@
 - «Какие темы / нарративы сейчас в моде на рынке?»
 - Поиск горячих секторов и связанных акций.
 
-#### Breakout Trade Planner 🟡 (расчёт + Alpaca-шаблоны)
-**Описание:** Генерация торговых планов брейкаута в стиле Минервини из вывода VCP-скринера: расчёт риска по worst-case, управление «теплом» портфеля, шаблоны ордеров Alpaca (stop-limit для предразмещения, limit для входа после подтверждения).
+#### Breakout Trade Planner 🟡 (расчёт + шаблоны ордеров Alpaca/IB)
+**Описание:** Генерация торговых планов брейкаута в стиле Минервини из вывода VCP-скринера: расчёт риска по worst-case, управление «теплом» портфеля, шаблоны ордеров под брокера (`--broker alpaca|ib|both`) — Alpaca-формат (stop-limit для предразмещения, limit для входа после подтверждения) и/или последовательность ног `place_order` для interactive-brokers MCP.
 **Кейсы использования:**
 - «Подготовь план входа для кандидата из VCP-скринера.»
 - Готовый шаблон ордера для брокера.
@@ -418,7 +418,7 @@
 | Сценарий | Периодичность | Навыки |
 |----------|---------------|--------|
 | **market-regime-daily** | ежедневно | market-breadth-analyzer, uptrend-analyzer, exposure-coach (+ market-top-detector, macro-regime-detector) |
-| **core-portfolio-weekly** | еженедельно | portfolio-manager, trader-memory-core (+ value-dividend-screener, kanchi-*) |
+| **core-portfolio-weekly** | еженедельно | ib-portfolio-manager, trader-memory-core (+ value-dividend-screener, kanchi-*) |
 | **swing-opportunity-daily** | ежедневно | vcp-screener, technical-analyst, position-sizer, trader-memory-core (+ theme-detector, breakout-trade-planner) |
 | **trade-memory-loop** | по каждой закрытой сделке | trader-memory-core, signal-postmortem, trade-performance-coach |
 | **monthly-performance-review** | ежемесячно | trader-memory-core, signal-postmortem, trade-performance-coach, dual-axis-skill-reviewer |

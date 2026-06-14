@@ -44,7 +44,7 @@ VALID_DIFFICULTIES = frozenset({"beginner", "intermediate", "advanced"})
 VALID_API_PROFILES = frozenset({"no-api-basic", "fmp-required", "alpaca-required", "mixed"})
 
 # Mirrors recommend.py:PAID_INTEGRATION_IDS — keep in lockstep.
-PAID_INTEGRATION_IDS = frozenset({"fmp", "finviz", "alpaca"})
+PAID_INTEGRATION_IDS = frozenset({"fmp", "finviz", "alpaca", "interactive_brokers"})
 
 SUPPORTED_SCHEMA_VERSION = 1
 

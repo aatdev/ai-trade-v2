@@ -251,9 +251,9 @@ python3 institutional-flow-tracker/scripts/track_institution_portfolio.py \
 3. If institutions selling despite strong fundamentals: investigate discrepancy
 ```
 
-**Portfolio Manager + Institutional Flow:**
+**IB Portfolio Manager + Institutional Flow:**
 ```
-1. Fetch current portfolio via Alpaca
+1. Fetch current portfolio via Interactive Brokers
 2. Run institutional analysis on each holding quarterly
 3. Flag positions with deteriorating institutional support
 4. Rebalance away from Strong Sell signals

@@ -3,7 +3,9 @@
 
 Reads VCP screener JSON, applies a strict Minervini Gate, calculates position
 sizes using worst-case entry prices, and outputs actionable trade plans with
-Alpaca order templates (pre_place and post_confirm modes).
+broker order templates (pre_place and post_confirm modes). --broker selects the
+output format: Alpaca-shaped bracket JSON, Interactive Brokers MCP leg sequences,
+or both (default).
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ from earnings_gate import (
 )
 from order_builder import (
     build_entry_condition,
+    build_ib_post_confirm_template,
+    build_ib_pre_place_template,
     build_post_confirm_template,
     build_pre_place_template,
     build_revalidation_advisory,
@@ -435,23 +439,44 @@ def _build_actionable(
         max_chase_pct=args.max_chase_pct,
     )
 
-    pre_place = build_pre_place_template(
-        symbol=base["symbol"],
-        qty=sizing["shares"],
-        signal_entry=signal_entry,
-        worst_entry=worst_entry,
-        stop_loss=stop_loss,
-        take_profit=tp_worst,
-    )
-
-    post_confirm = build_post_confirm_template(
-        symbol=base["symbol"],
-        qty=sizing["shares"],
-        worst_entry=worst_entry,
-        stop_loss=stop_loss,
-        take_profit=tp_worst,
-        entry_condition=entry_cond,
-    )
+    # Broker output selection: emit Alpaca-shaped templates, IB leg sequences, or
+    # both. Default "both" so the Alpaca format is never silently dropped.
+    broker = getattr(args, "broker", "both")
+    order_templates: dict = {}
+    if broker in ("alpaca", "both"):
+        order_templates["pre_place"] = build_pre_place_template(
+            symbol=base["symbol"],
+            qty=sizing["shares"],
+            signal_entry=signal_entry,
+            worst_entry=worst_entry,
+            stop_loss=stop_loss,
+            take_profit=tp_worst,
+        )
+        order_templates["post_confirm"] = build_post_confirm_template(
+            symbol=base["symbol"],
+            qty=sizing["shares"],
+            worst_entry=worst_entry,
+            stop_loss=stop_loss,
+            take_profit=tp_worst,
+            entry_condition=entry_cond,
+        )
+    if broker in ("ib", "both"):
+        order_templates["pre_place_ib"] = build_ib_pre_place_template(
+            symbol=base["symbol"],
+            qty=sizing["shares"],
+            signal_entry=signal_entry,
+            worst_entry=worst_entry,
+            stop_loss=stop_loss,
+            take_profit=tp_worst,
+        )
+        order_templates["post_confirm_ib"] = build_ib_post_confirm_template(
+            symbol=base["symbol"],
+            qty=sizing["shares"],
+            worst_entry=worst_entry,
+            stop_loss=stop_loss,
+            take_profit=tp_worst,
+            entry_condition=entry_cond,
+        )
 
     # Valid for today if market is open (weekday), otherwise next trading day
     today = datetime.now().date()
@@ -487,10 +512,7 @@ def _build_actionable(
             "cumulative_risk_pct": round(new_cumulative, 2),
             "binding_constraint": sizing["binding_constraint"],
         },
-        "order_templates": {
-            "pre_place": pre_place,
-            "post_confirm": post_confirm,
-        },
+        "order_templates": order_templates,
     }
 
     time_stop_days = int(getattr(args, "time_stop_trading_days", 0) or 0)
@@ -643,6 +665,7 @@ def generate_plans(
             "pivot_buffer_pct": args.pivot_buffer_pct,
             "earnings_gate_days": gate_days,
             "time_stop_trading_days": int(getattr(args, "time_stop_trading_days", 0) or 0),
+            "broker": getattr(args, "broker", "both"),
             "current_exposure": exposure,
         },
         "input_metadata": {
@@ -813,6 +836,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Annotate each plan with a time-stop rule: exit if < +1R after N "
             "trading days from entry. 0 = disabled."
+        ),
+    )
+    parser.add_argument(
+        "--broker",
+        choices=["alpaca", "ib", "both"],
+        default="both",
+        help=(
+            "Order-template format to emit per actionable plan: 'alpaca' "
+            "(stop-limit/limit bracket JSON), 'ib' (interactive-brokers MCP "
+            "place_order leg sequences), or 'both' (default)."
         ),
     )
     parser.add_argument("--current-exposure-json", default=None)

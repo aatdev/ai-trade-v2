@@ -1,17 +1,17 @@
 ---
 name: breakout-trade-planner
-description: Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and Alpaca-compatible order templates (stop-limit bracket for pre-placement, limit bracket for post-confirmation). Use when user has VCP screener results and wants actionable trade plans with entry/stop/target levels and position sizing.
+description: Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus Interactive Brokers MCP place_order leg sequences (stop-limit/limit for pre-placement/post-confirmation). Use when user has VCP screener results and wants actionable trade plans with entry/stop/target levels and position sizing.
 ---
 
 # Breakout Trade Planner
 
-Generate trade plans from VCP screener output following Mark Minervini's breakout methodology. Calculate position sizes using worst-case entry prices, enforce portfolio risk limits, and output Alpaca API-compatible order templates.
+Generate trade plans from VCP screener output following Mark Minervini's breakout methodology. Calculate position sizes using worst-case entry prices, enforce portfolio risk limits, and output broker order templates — Alpaca-shaped bracket JSON and/or Interactive Brokers MCP `place_order` leg sequences (select with `--broker alpaca|ib|both`).
 
 ## When to Use
 
 - User has VCP screener JSON output and wants trade plans
 - User asks for breakout entry/stop/target calculation
-- User wants Alpaca order templates for VCP breakout candidates
+- User wants broker-ready order templates (Alpaca or Interactive Brokers) for VCP breakout candidates
 - User needs position sizing with portfolio heat management
 
 ## Prerequisites
@@ -63,6 +63,7 @@ For each actionable order, explain:
 - Entry levels (signal vs worst-case) and stop-loss placement
 - R-multiple targets and reward-risk ratio
 - Two execution modes: pre_place (stop-limit) vs post_confirm (limit after 5min confirmation)
+- Broker output (`--broker alpaca|ib|both`, default both): Alpaca bracket JSON (`pre_place`/`post_confirm`) and/or Interactive Brokers MCP `place_order` leg sequences (`pre_place_ib`/`post_confirm_ib`: entry → stop_loss → take_profit, placed as a manual OCO since the IB MCP has no native bracket/OCA/stop-limit)
 - Portfolio risk contribution and cumulative heat
 
 ## Minervini Gate (Filtering Criteria)

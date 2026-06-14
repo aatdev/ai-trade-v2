@@ -45,7 +45,7 @@ This skill detects and ranks trending market themes by analyzing cross-sector mo
 **When NOT to Use:**
 - Individual stock analysis (use us-stock-analysis instead)
 - Specific sector deep-dive with chart reading (use sector-analyst instead)
-- Portfolio rebalancing (use portfolio-manager instead)
+- Portfolio rebalancing (use ib-portfolio-manager instead)
 - Dividend/income investing (use value-dividend-screener instead)
 
 ---

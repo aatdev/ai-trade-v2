@@ -290,7 +290,7 @@ After execution, the script produces a JSON and Markdown report containing:
 | **Breadth-adjusted risk** | Use Market Breadth Analyzer to determine the health zone, then adjust risk percentage: 1.0-1.5% in Strong zone, 0.5% in Weakening zone |
 | **Backtest validation** | After Backtest Expert confirms a strategy's edge, use the win rate and payoff ratio as Kelly Criterion inputs for optimal capital allocation |
 | **Technical entry planning** | Use Technical Analyst to identify the stop level (support, moving average, prior low), then feed it into Position Sizer for the share count |
-| **Portfolio rebalancing** | After Portfolio Manager reviews current holdings, use Position Sizer with sector constraints to size new additions without exceeding concentration limits |
+| **Portfolio rebalancing** | After IB Portfolio Manager reviews current holdings, use Position Sizer with sector constraints to size new additions without exceeding concentration limits |
 
 ---
 

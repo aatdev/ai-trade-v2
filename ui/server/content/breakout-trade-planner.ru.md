@@ -44,12 +44,14 @@
 
 > Базовый `--risk-pct` по умолчанию **0.5%**, но из профиля (`trading_profile.json`) подтягивается личное значение (в плане — 1% = $1500). Явный CLI-флаг всегда перебивает профиль.
 
-### Два режима исполнения (шаблоны ордеров Alpaca)
+### Два режима исполнения и формат под брокера
 
 - **`pre_place`** — `stop_limit` bracket: ставится заранее, авто-триггерится buy-stop'ом на `signal_entry`, limit на `worst_entry` (не даёт гнаться). Это шаблон для предпостановки ордеров с вечера.
 - **`post_confirm`** — `limit` bracket: отправляется **после** подтверждения пробоя на 5-мин баре (`close > pivot`, close_loc ≥ 0.60, RVOL ≥ 1.5). limit на `worst_entry`.
 
-Оба — `order_class: bracket` с ногами `take_profit.limit_price` и `stop_loss.stop_price`. Breakout-кандидаты (уже пробившие pivot) ордер-шаблон не получают — только `revalidation`-памятку «подтвердить вживую перед ордером».
+Alpaca-шаблоны — `order_class: bracket` с ногами `take_profit.limit_price` и `stop_loss.stop_price`. Breakout-кандидаты (уже пробившие pivot) ордер-шаблон не получают — только `revalidation`-памятку «подтвердить вживую перед ордером».
+
+**Формат под брокера (`--broker alpaca|ib|both`, по умолчанию `both`).** Помимо Alpaca-шаблонов (`pre_place` / `post_confirm`) планировщик отдаёт IB-версии (`pre_place_ib` / `post_confirm_ib`) — последовательность ног (`entry` → `stop_loss` → `take_profit`) под `place_order` interactive-brokers MCP. У этого MCP нет нативного bracket / OCA / stop-limit, поэтому: входную ногу ставят первой, после фила `stop_loss` и `take_profit` оформляют как ручной OCO; в `pre_place_ib` вход — stop-market (`STP`), так что `max_fill_price` (= `worst_entry`) лишь ориентир — на гэпе может налить выше.
 
 ### Earnings-гейт
 

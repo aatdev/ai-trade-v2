@@ -13,7 +13,7 @@ across DST, keeping the slots anchored to the US open/close.
 | `scripts/lib/trading_signals.py` | Auto-mode signal engine (stdlib-only): headless quotes via the public TradingView scanner, watchlist builder, OPEN/CLOSE signal evaluation, once-per-day dedup state. |
 | `scripts/lib/tv_alerts.py` | TV alert bridge: CDP availability probe, watchlist → alert plan (`[WL]`-tagged Trigger/Stop/T1), sync/purge via the signals-alerts Node scripts. Manual signals.md alerts are never touched (`--message-contains [WL]`). |
 | `scripts/run_trading_autopilot.py` | Self-dispatching cron wrapper (`*/15 * * * *`): picks the due slot, retries, state, important-only Telegram. |
-| `scripts/run_trading_schedule.sh` | Thin launcher for `launchd`; sources `.env` (FMP / ALPACA / TELEGRAM) and `.envrc`. |
+| `scripts/run_trading_schedule.sh` | Thin launcher for `launchd`; sources `.env` (FMP / IB / TELEGRAM) and `.envrc`. |
 | `launchd/com.trade-analysis.trading-premarket.plist` | ~15:00 CET, Mon–Fri |
 | `launchd/com.trade-analysis.trading-evening-prep.plist` | ~22:15 CET, Mon–Fri |
 | `launchd/com.trade-analysis.trading-monthly.plist` | Sundays 11:00 (script keeps only the 1st Sunday) |
@@ -66,7 +66,7 @@ non-first-Sundays (monthly) are skipped automatically.
 ## Install
 
 ```bash
-# Make sure .env holds FMP_API_KEY / ALPACA_* / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+# Make sure .env holds FMP_API_KEY / IB_* (IB_READ_ONLY_MODE, IB_FLEX_TOKEN) / TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
 for s in premarket evening-prep monthly; do
   sed "s|\$HOME|$HOME|g; s|\$PROJECT_DIR|$(pwd)|g" \
     "launchd/com.trade-analysis.trading-$s.plist" \

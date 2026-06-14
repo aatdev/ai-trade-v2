@@ -69,7 +69,7 @@ CONTRACT: list[tuple[int, str, str | None, set[str], str, bool, bool | None, str
         {"core-portfolio-weekly"},
         "market-regime",
         False,
-        False,  # path includes alpaca-required core-portfolio-weekly
+        False,  # path includes broker-required (IB) core-portfolio-weekly
         "active",
     ),
     (
@@ -79,7 +79,7 @@ CONTRACT: list[tuple[int, str, str | None, set[str], str, bool, bool | None, str
         set(),
         "core-portfolio",
         False,
-        False,  # core-portfolio-weekly → portfolio-manager needs Alpaca
+        False,  # core-portfolio-weekly → ib-portfolio-manager needs Interactive Brokers
         "active",
     ),
     (
@@ -259,15 +259,15 @@ def test_no_api_excludes_fmp_required_swing(repo_metadata: dict[str, Any]) -> No
     assert any("swing-opportunity-daily" in x and "excluded" in x for x in r["rationale"])
 
 
-def test_no_api_excludes_alpaca_required_core_portfolio(
+def test_no_api_excludes_ib_required_core_portfolio(
     repo_metadata: dict[str, Any],
 ) -> None:
     # core-portfolio-weekly is api_profile: mixed, but its required
-    # portfolio-manager needs Alpaca (required) -> must be excluded.
+    # ib-portfolio-manager needs Interactive Brokers (required) -> must be excluded.
     r = recommend("I want to review holdings this week", repo_metadata, no_api=True)
     assert r["primary_workflow"]["id"] == "market-regime-daily"
     assert any(
-        "core-portfolio-weekly" in x and "portfolio-manager" in x and "alpaca" in x
+        "core-portfolio-weekly" in x and "ib-portfolio-manager" in x and "interactive_brokers" in x
         for x in r["rationale"]
     )
 
