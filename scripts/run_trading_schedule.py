@@ -274,8 +274,15 @@ SHORT_DD_MIN = 3
 FTD_FRESH_WEEKDAYS = 10
 # market_top / ftd reports older than this are treated as absent (fail-safe).
 MARKET_REPORT_MAX_AGE_DAYS = 7
-# How many top watchlist candidates get the auto ticker-analysis + reconcile pass.
-AUTO_ANALYZE_TOP_N = 3
+# How many watchlist candidates get the full auto ticker-analysis + reconcile
+# pass each evening. Option C: only the single best *fresh* candidate gets the
+# deep news+fundamental+technical dive; every other candidate's levels come
+# from the chart-validation step (technical-analyst), which is authoritative.
+AUTO_ANALYZE_TOP_N = 1
+# A candidate with a report.md under analysis/<TICKER>/<date>/ dated within this
+# many weekdays is "fresh": skip its deep dive and spend the single-analysis
+# budget on the next, not-recently-analyzed candidate instead.
+FRESH_ANALYSIS_WEEKDAYS = 5
 # Model for ticker-analysis (mirrors ui/server/src/config.ts ANALYZE_MODEL).
 TICKER_ANALYSIS_MODEL = "claude-opus-4-8"
 # Per-ticker timeout cap so one slow analysis doesn't block the whole slot.
@@ -796,16 +803,27 @@ This is review only -- do NOT place any trades. Keep narration short."""
 
 def validation_prompt(date_str: str, candidates: list, validation_path: Path) -> str:
     lines = "\n".join(
-        f"- {c.get('ticker')} ({c.get('side')}): вход {c.get('pivot')}, стоп {c.get('stop')}"
+        f"- {c.get('ticker')} ({c.get('side')}): план вход {c.get('pivot')}, стоп {c.get('stop')}"
         for c in candidates
     )
     return f"""Hybrid auto-mode chart validation for {date_str} (US equities, swing horizon).
 
 For EACH candidate below, apply the technical-analyst skill on the daily AND
 weekly chart (TradingView Desktop MCP if running, otherwise the skill's data
-layer). Judge ONLY structural integrity: base intact, not climactic or
+layer). Judge structural integrity: base intact, not climactic or
 over-extended, support not broken, volume consistent with the setup. Reject
 ONLY on clear structural damage — when in doubt, pass.
+
+For every candidate you PASS, ALSO return refined structural levels read off the
+chart. These become the AUTHORITATIVE entry/stop/target for the watchlist
+(position size is recomputed downstream from the risk profile, so return prices
+only). Use the planner numbers above only as a starting reference and correct
+them to the real chart structure:
+  - "entry"  — breakout/trigger price (long) or breakdown trigger (short)
+  - "stop"   — invalidation just beyond the structural low (long) / high (short)
+  - "target" — first measured-move / next resistance (long) or support (short)
+Geometry MUST hold: long → stop < entry < target; short → target < entry < stop.
+For a "reject" verdict omit the levels (set them null).
 
 Candidates:
 {lines}
@@ -814,7 +832,8 @@ Write EXACTLY this JSON file to: {validation_path}
 {{
   "date": "{date_str}",
   "verdicts": [
-    {{"ticker": "XXX", "verdict": "pass" | "reject", "note": "<= 1 sentence"}}
+    {{"ticker": "XXX", "verdict": "pass" | "reject", "note": "<= 1 sentence",
+      "entry": <num or null>, "stop": <num or null>, "target": <num or null>}}
   ]
 }}
 One verdict per candidate. Do NOT place any trades. Keep narration short."""
@@ -1591,27 +1610,153 @@ def _profile_sized_shares(profile: dict, pivot, stop) -> tuple[int | None, float
     return shares, round(shares * dist, 2)
 
 
-def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dict:
-    """Run ticker-analysis for top AUTO_ANALYZE_TOP_N watchlist candidates, then reconcile.
+def _coerce_price(x) -> float | None:
+    """Positive float or None (validation levels may arrive as str / None / 0)."""
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
 
+
+def _recently_analyzed(ticker: str, n_weekdays: int) -> bool:
+    """True when a full ticker-analysis report.md for ``ticker`` exists under
+    analysis/<TICKER>/<date>/ dated within the last ``n_weekdays`` weekdays.
+    Lets the deep dive skip a name we already analyzed this week and spend the
+    single-analysis budget on the next, not-recently-analyzed candidate."""
+    adir = TRADING_DATA_DIR / "analysis" / ticker.upper()
+    if not adir.is_dir():
+        return False
+    for sub in adir.iterdir():
+        if not sub.is_dir() or not (sub / "report.md").exists():
+            continue
+        ws = _weekdays_since(sub.name)
+        if ws is not None and ws <= n_weekdays:
+            return True
+    return False
+
+
+def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, args) -> dict:
+    """Option C: make the technical-analyst chart-validation step authoritative
+    for entry/stop/target. For every surviving candidate validation PASSED *with*
+    structural levels, override the planner's mechanical pivot/stop/target with
+    the chart levels and re-size from the risk profile (planner sizing math on the
+    new stop). The planner's original numbers are preserved under
+    ``screener_origin``; the candidate is tagged ``source="chart-validation"``.
+    Candidates with no levels (or a reject / bad geometry) keep the planner
+    numbers untouched. Writes the watchlist in-place; returns wl."""
+    verdicts = {
+        str(v.get("ticker", "")).upper(): v
+        for v in (validation or {}).get("verdicts") or []
+        if isinstance(v, dict) and v.get("ticker")
+    }
+    if not verdicts:
+        return wl
+    profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    account = float(profile.get("account_size") or 0)
+    chase = tsig.DEFAULT_CHASE_PCT / 100
+    candidates = list(wl.get("candidates") or [])
+    changed = False
+
+    for i, cand in enumerate(candidates):
+        ticker = str(cand.get("ticker", "")).upper()
+        v = verdicts.get(ticker)
+        if not v or str(v.get("verdict", "")).lower() != "pass":
+            continue
+        entry, stop = _coerce_price(v.get("entry")), _coerce_price(v.get("stop"))
+        if entry is None or stop is None:
+            continue
+        target = _coerce_price(v.get("target"))
+        side = str(cand.get("side", "long")).lower()
+
+        if side == "short":
+            if stop <= entry or (target is not None and target >= entry):
+                log(f"chart-validation: {ticker} bad short geometry "
+                    f"(entry={entry}, stop={stop}, target={target}) — keeping planner levels",
+                    logging.WARNING)
+                continue
+            worst = round(entry * (1 - chase), 2)
+            shares = tsig.size_short(account, entry, stop) or None
+            risk_dollars = round(shares * (stop - entry), 2) if shares else None
+        else:
+            if stop >= entry or (target is not None and target <= entry):
+                log(f"chart-validation: {ticker} bad long geometry "
+                    f"(entry={entry}, stop={stop}, target={target}) — keeping planner levels",
+                    logging.WARNING)
+                continue
+            worst = round(entry * (1 + chase), 2)
+            shares, risk_dollars = _profile_sized_shares(profile, entry, stop)
+            if shares is None:
+                shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
+
+        screener_origin = cand.get("screener_origin") or {
+            "side": cand.get("side"),
+            "pivot": cand.get("pivot"),
+            "stop": cand.get("stop"),
+            "target": cand.get("target"),
+            "shares": cand.get("shares"),
+            "score": cand.get("score"),
+            "source_plan": wl.get("source_plan"),
+        }
+        base_note = (cand.get("validation_note") or "").strip()
+        note = (f"{base_note} · уровни из chart-validation"
+                if base_note else "уровни из chart-validation")
+        candidates[i] = {
+            **cand,
+            "pivot": entry,
+            "worst_entry": worst,
+            "stop": stop,
+            "target": target if target is not None else cand.get("target"),
+            "shares": shares,
+            "risk_dollars": risk_dollars,
+            "validation_note": note,
+            "validated": True,
+            "source": "chart-validation",
+            "screener_origin": screener_origin,
+        }
+        changed = True
+        log(f"chart-validation: {ticker} levels-authoritative entry={entry} stop={stop}"
+            + (f" target={target}" if target is not None else ""))
+
+    if changed:
+        wl["candidates"] = candidates
+        if not args.dry_run:
+            _atomic_write_json(wl_path, wl)
+            log(f"chart-validation: watchlist saved → {_rel(wl_path)}")
+    return wl
+
+
+def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dict:
+    """Deep ticker-analysis + reconcile for up to AUTO_ANALYZE_TOP_N (=1) of the
+    best *fresh* watchlist candidates — the single deepest news+fundamental pass.
+
+    Walks candidates in rank order, skipping any analyzed within
+    FRESH_ANALYSIS_WEEKDAYS, and deep-dives the first not-fresh one(s) up to the
+    budget. For each analyzed name:
     - direction match  → update pivot/stop/target/shares from analysis signal
     - direction-flip   → remove from candidates (→ rejected_by_validation), invalidate thesis
     - no signal parsed → keep as-is (log warning)
 
-    Writes the updated watchlist in-place and returns the mutated wl dict.
-    """
+    Every other candidate keeps its chart-validation levels. Writes the watchlist
+    in-place and returns the mutated wl dict."""
     candidates = list(wl.get("candidates") or [])
-    top_n = candidates[:AUTO_ANALYZE_TOP_N]
-    if not top_n:
+    if not candidates:
         return wl
 
-    log(f"auto-analyze: ticker-analysis for top {len(top_n)} candidates: "
-        + ", ".join(str(c.get("ticker", "?")) for c in top_n))
-
-    for cand in top_n:
+    runs = 0
+    for cand in list(candidates):
+        if runs >= AUTO_ANALYZE_TOP_N:
+            break
         ticker = str(cand.get("ticker", "")).upper()
         if not ticker:
             continue
+        if _recently_analyzed(ticker, FRESH_ANALYSIS_WEEKDAYS):
+            log(f"auto-analyze: {ticker} analyzed within {FRESH_ANALYSIS_WEEKDAYS} weekdays "
+                "— keeping chart-validation levels, skipping deep dive")
+            continue
+        runs += 1
+        log(f"auto-analyze: deep ticker-analysis for {ticker} "
+            f"(budget {runs}/{AUTO_ANALYZE_TOP_N})")
 
         ok = _run_ticker_analysis(ticker, args)
         if not ok and not args.dry_run:
@@ -1859,6 +2004,9 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
     wl_path = _write_watchlist(wl, date_str, args)
     if vcp and not args.dry_run:
         _ingest_theses("vcp-screener", vcp, wl, wl_path, date_str, args, plan_path=plan_path)
+    # Chart-validation levels are authoritative for every passed candidate;
+    # the single deep ticker-analysis then refines / flips at most one of them.
+    wl = _apply_validation_levels(wl, wl_path, validation, args)
     wl = _auto_analyze_reconcile(wl, wl_path, date_str, args)
     return wl_path, wl, _validation_note(wl, validation)
 
@@ -2172,6 +2320,9 @@ def _evening_short_branch(
     wl_path = _write_watchlist(wl, date_str, args)
     if short_path and not args.dry_run:
         _ingest_theses("swing-short-screener", short_path, wl, wl_path, date_str, args)
+    # Chart-validation levels are authoritative for the short watchlist too
+    # (no deep ticker-analysis on the short branch — detection-only).
+    wl = _apply_validation_levels(wl, wl_path, validation, args)
     msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
     if earnings_note:
         msg += f"\n\n{earnings_note}"

@@ -1382,6 +1382,129 @@ class TestAutoAnalyzeReconcile:
         assert shares == 625  # cap 150000×25%/60, not 1500/0.1=15000
         assert risk == 62.5
 
+    def test_top_n_is_one(self):
+        # Option C: at most one full ticker-analysis per evening.
+        assert ts.AUTO_ANALYZE_TOP_N == 1
+
+    def test_caps_at_one_and_skips_fresh(self, monkeypatch, tmp_path):
+        # AOS analyzed today (fresh) → skipped; BBB is the first not-fresh
+        # candidate → gets the single deep dive; the cap of 1 leaves CCC alone.
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "trading_profile.json",
+            {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25},
+        )
+        today = dt.date.today().isoformat()
+        fresh = tmp_path / "analysis" / "AOS" / today
+        fresh.mkdir(parents=True)
+        (fresh / "report.md").write_text("x", encoding="utf-8")
+        analyzed: list[str] = []
+        monkeypatch.setattr(
+            ts, "_run_ticker_analysis", lambda ticker, args: analyzed.append(ticker) or True
+        )
+        monkeypatch.setattr(
+            ts, "_parse_signals_md", lambda ticker: {**_AOS_SIGNAL, "ticker": ticker}
+        )
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        wl = {
+            "date": "2026-06-11",
+            "candidates": [
+                {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100},
+                {"ticker": "BBB", "side": "long", "pivot": 40.0, "stop": 38.0, "shares": 100},
+                {"ticker": "CCC", "side": "long", "pivot": 30.0, "stop": 28.0, "shares": 100},
+            ],
+        }
+        wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
+        ts._auto_analyze_reconcile(wl, wl_path, "2026-06-11", args)
+        assert analyzed == ["BBB"]
+
+
+# --------------------------------------------------------------------------- #
+# Chart-validation authoritative levels (Option C)
+# --------------------------------------------------------------------------- #
+class TestApplyValidationLevels:
+    def _apply(self, monkeypatch, tmp_path, *, candidates, verdicts, profile=None):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "trading_profile.json",
+            profile or {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25},
+        )
+        wl = {"date": "2026-06-11", "candidates": candidates, "source_plan": "plans/p.json"}
+        wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
+        validation = {"date": "2026-06-11", "verdicts": verdicts}
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        return ts._apply_validation_levels(wl, wl_path, validation, args)
+
+    def test_long_pass_overrides_levels_and_resizes(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5,
+                "target": 63.0, "shares": 100, "score": 80.3}
+        v = [{"ticker": "AOS", "verdict": "pass", "note": "base ok",
+              "entry": 60.0, "stop": 56.0, "target": 66.0}]
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        c = out["candidates"][0]
+        assert c["pivot"] == 60.0 and c["stop"] == 56.0 and c["target"] == 66.0
+        assert c["source"] == "chart-validation"
+        assert c["shares"] == 375  # 150000×1% / |60−56| risk budget
+        assert c["risk_dollars"] == 1500.0
+        assert c["worst_entry"] == 61.2  # 60 × 1.02 chase band
+        assert c["screener_origin"]["pivot"] == 59.0  # planner number preserved
+
+    def test_pass_without_levels_keeps_planner(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        v = [{"ticker": "AOS", "verdict": "pass", "note": "ok"}]
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        c = out["candidates"][0]
+        assert c["pivot"] == 59.0 and c.get("source") != "chart-validation"
+
+    def test_bad_long_geometry_keeps_planner(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        v = [{"ticker": "AOS", "verdict": "pass", "entry": 56.0, "stop": 60.0}]  # stop>entry
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        assert out["candidates"][0]["pivot"] == 59.0
+
+    def test_reject_verdict_with_levels_is_ignored(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        v = [{"ticker": "AOS", "verdict": "reject", "entry": 60.0, "stop": 56.0}]
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        assert out["candidates"][0]["pivot"] == 59.0
+
+    def test_short_pass_overrides_and_sizes_short(self, monkeypatch, tmp_path):
+        cand = {"ticker": "WBA", "side": "short", "pivot": 20.0, "stop": 21.0, "shares": 100}
+        v = [{"ticker": "WBA", "verdict": "pass", "entry": 19.5, "stop": 20.6, "target": 17.3}]
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        c = out["candidates"][0]
+        assert c["pivot"] == 19.5 and c["stop"] == 20.6 and c["target"] == 17.3
+        assert c["source"] == "chart-validation"
+        assert c["shares"] and c["shares"] > 0
+        assert c["worst_entry"] == 19.11  # 19.5 × 0.98 chase band
+
+    def test_no_verdict_for_candidate_is_untouched(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        v = [{"ticker": "OTHER", "verdict": "pass", "entry": 10.0, "stop": 9.0}]
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
+        assert out["candidates"][0]["pivot"] == 59.0
+
+
+class TestRecentlyAnalyzed:
+    def test_recent_report_is_fresh(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        d = tmp_path / "analysis" / "AOS" / dt.date.today().isoformat()
+        d.mkdir(parents=True)
+        (d / "report.md").write_text("x", encoding="utf-8")
+        assert ts._recently_analyzed("AOS", 5) is True
+
+    def test_old_report_not_fresh(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        old = (dt.date.today() - dt.timedelta(days=30)).isoformat()
+        d = tmp_path / "analysis" / "AOS" / old
+        d.mkdir(parents=True)
+        (d / "report.md").write_text("x", encoding="utf-8")
+        assert ts._recently_analyzed("AOS", 5) is False
+
+    def test_no_analysis_dir_not_fresh(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        assert ts._recently_analyzed("ZZZ", 5) is False
+
 
 # --------------------------------------------------------------------------- #
 # Thesis invalidation (direction-flip reconcile)
@@ -1502,6 +1625,10 @@ def test_validation_prompt_lists_candidates_and_path():
     assert "NVDA" in prompt
     assert "/tmp/v.json" in prompt
     assert '"pass" | "reject"' in prompt
+    # Option C: validation must also request authoritative structural levels.
+    assert '"entry"' in prompt
+    assert '"stop"' in prompt
+    assert '"target"' in prompt
 
 
 def test_weekly_prompt_contains_summary_path():

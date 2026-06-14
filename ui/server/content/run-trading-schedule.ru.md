@@ -39,7 +39,7 @@
 | Слот | Логика |
 | --- | --- |
 | `premarket` | Обновляет heat (открытые позиции) → `run_regime_gate` (быстрый режим, пишет гейт) → Telegram-вердикт. Предупреждает, если watchlist устарел или TV Desktop недоступен. |
-| `evening-prep` | Полный режим + гейт. Чистит непозиционные тезисы противоположной стороны (regime-flip hygiene). На `allow`: heat → vcp-screener (top 10) → breakout-trade-planner → claude-валидация графиков top-3 → watchlist + ingest тезисов → авто-анализ top-3 (ticker-analysis) с reconcile уровней → синк алертов TV. Иначе: шорт-ветка (см. ниже). |
+| `evening-prep` | Полный режим + гейт. Чистит непозиционные тезисы противоположной стороны (regime-flip hygiene). На `allow`: heat → vcp-screener (top 10) → breakout-trade-planner → claude-валидация графиков top-3 через `technical-analyst` (отклоняет слабые + задаёт авторитетные уровни входа/стопа/цели, перебивающие механические из планнера) → watchlist + ingest тезисов → полный `ticker-analysis` по **одной** лучшей бумаге, не разбиравшейся за 5 т.д. (reconcile уровней / смена направления) → синк алертов TV. Иначе: шорт-ветка (см. ниже). |
 | `intraday` | Без claude. Берёт котировки watchlist + открытых позиций, оценивает сигналы ОТКРОЙ ЛОНГ/ШОРТ, СТОП/у-стопа/+2R, MISSED, пропуски по ёмкости/отчётам. Дедуп через `intraday_signals_state.json` (каждый сигнал — раз в день). Снимает `[WL]`-алерты по сбежавшим (MISSED). |
 | `weekly` | Детерминированные скрипты ibd-distribution-day-monitor (QQQ,SPY), macro-regime-detector, ftd-detector → claude добирает ручные входы market-top (50DMA breadth, put/call через WebSearch) и сводит неделю. |
 | `monthly` | claude гоняет `monthly-performance-review`: агрегат закрытых тезисов, постмортем, правки правил на следующий месяц. |
