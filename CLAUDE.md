@@ -225,7 +225,7 @@ State and logs live under `logs/` (PID lock files, state JSON/YAML, rotated logs
 
 ### Running the Web UI (State Dashboard)
 
-`ui/` is a self-contained **React + TypeScript (Vite) + Express (TypeScript)** app — an npm-workspaces monorepo (`ui/client`, `ui/server`, type-only contract in `ui/shared/types.d.ts`) — that visualizes the state the scheduler produces under `trading-data/` (exposure gate, watchlist, open positions/heat, screeners, market regime, theses, signals feed, autopilot status) and exposes buttons to run scheduler slots and sync TradingView alerts. Full reference: [`ui/README.md`](ui/README.md).
+`ui/` is a self-contained **React + TypeScript (Vite) + Express (TypeScript)** app — an npm-workspaces monorepo (`ui/client`, `ui/server`, type-only contract in `ui/shared/types.d.ts`) — that visualizes the state the scheduler produces under `trading-data/` (exposure gate, watchlist, open positions/heat, screeners, market regime, theses, signals feed, autopilot status, and a live read-only Interactive Brokers account/positions snapshot via `GET /api/ib` → `skills/ib-portfolio-manager/scripts/fetch_ib_snapshot.py`) and exposes buttons to run scheduler slots and sync TradingView alerts. Full reference: [`ui/README.md`](ui/README.md).
 
 ```bash
 cd ui && npm install

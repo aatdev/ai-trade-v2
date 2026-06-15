@@ -6,6 +6,7 @@ import AnalysesTab from '../components/AnalysesTab';
 import AnalyzeDialog from '../components/AnalyzeDialog';
 import AutopilotCard from '../components/AutopilotCard';
 import ExposureBanner from '../components/ExposureBanner';
+import IbTab from '../components/IbTab';
 import PositionsCard from '../components/PositionsCard';
 import RegimeCard from '../components/RegimeCard';
 import ScreenersCard from '../components/ScreenersCard';
@@ -15,13 +16,14 @@ import DocsModal from '../components/DocsModal';
 import TraderMemoryCard from '../components/TraderMemoryCard';
 import WatchlistCard from '../components/WatchlistCard';
 
-type Tab = 'overview' | 'signals' | 'analyses' | 'memory';
+type Tab = 'overview' | 'signals' | 'analyses' | 'memory' | 'ib';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Обзор' },
   { key: 'signals', label: 'Сигналы' },
   { key: 'analyses', label: 'Анализы' },
   { key: 'memory', label: 'Память' },
+  { key: 'ib', label: 'Счёт IB' },
 ];
 
 export default function Dashboard() {
@@ -109,6 +111,12 @@ export default function Dashboard() {
       {tab === 'memory' ? (
         <div className="grid">
           <TraderMemoryCard refetch={refetch} />
+        </div>
+      ) : null}
+
+      {tab === 'ib' ? (
+        <div className="grid">
+          <IbTab refetch={refetch} />
         </div>
       ) : null}
 

@@ -46,6 +46,12 @@ npm run typecheck
 | `TRADING_PROJECT_ROOT` | auto-detected | Repo root (walks up to `scripts/run_trading_schedule.py`) |
 | `TRADING_UI_ANALYZE_MODEL` | `claude-opus-4-8` | Model for `analyze-ticker` headless runs |
 | `TRADING_UI_MCP_CONFIG` | vendored TradingView server | `--mcp-config` file for `analyze-ticker` (point at a custom MCP config) |
+| `PYTHON_BIN` | `python3` | Interpreter used to shell out to the IB snapshot script |
+| `TRADING_UI_IB_FIXTURE` | _unset_ | Path to a recorded IB snapshot JSON; when set, `/api/ib` reads it instead of contacting the Gateway (offline dev / demo) |
+
+IB account/positions also read these standard IB env vars (loaded from the repo
+`.env` like the scheduler): `IB_PAPER_TRADING` (paper vs live label),
+`IB_GATEWAY_RUNTIME_DIR` (override the `ib-gateway/.runtime` session location).
 
 ## API surface
 
@@ -54,6 +60,14 @@ Read (each accepts `?date=YYYY-MM-DD`, defaults to the latest available):
 `/api/screeners`, `/api/theses` (+ `/:id`), `/api/signals`, `/api/profile`,
 `/api/autopilot`, `/api/analysis/tickers` (which tickers already have saved
 analysis), `/api/ticker/:symbol[/:date[/chart/:tf]]`.
+
+Live (no `?date`): `/api/ib` — a read-only Interactive Brokers snapshot
+(account balances + open positions) behind the **Счёт IB** tab. The server
+shells out to `skills/ib-portfolio-manager/scripts/fetch_ib_snapshot.py`, which
+locates the bundled IB Gateway session and queries the Client Portal REST API
+(GET-only; no orders). When the Gateway is down or unauthenticated the response
+is `{ ok: false, error }` and the tab renders a friendly notice. Set
+`TRADING_UI_IB_FIXTURE` to serve a recorded snapshot without a live connection.
 
 Watchlist reconcile: `GET /api/watchlist/reconcile/:ticker` previews how the
 analysis signal would change the candidate; `POST` applies it to the watchlist

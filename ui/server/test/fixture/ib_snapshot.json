@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "generated_at": "2026-06-15T12:00:00+02:00",
+  "mode": "paper",
+  "account_id": "DU1234567",
+  "account_ids": ["DU1234567"],
+  "summary": {
+    "account_id": "DU1234567",
+    "net_liquidation": 152340.55,
+    "total_cash": 42000.0,
+    "available_funds": 38000.0,
+    "buying_power": 76000.0,
+    "gross_position_value": 110340.55,
+    "unrealized_pnl": 4210.0,
+    "realized_pnl": -150.0,
+    "excess_liquidity": 37000.0,
+    "equity_with_loan": 152000.0,
+    "currency": "USD"
+  },
+  "positions": [
+    {
+      "symbol": "AAPL",
+      "conid": 265598,
+      "position": 100,
+      "side": "long",
+      "avg_cost": 150.0,
+      "market_price": 165.0,
+      "market_value": 16500.0,
+      "unrealized_pnl": 1500.0,
+      "unrealized_pnl_pct": 10.0,
+      "realized_pnl": 0.0,
+      "currency": "USD",
+      "asset_class": "STK",
+      "sector": "Technology"
+    },
+    {
+      "symbol": "TSLA",
+      "conid": 76792991,
+      "position": -50,
+      "side": "short",
+      "avg_cost": 200.0,
+      "market_price": 190.0,
+      "market_value": -9500.0,
+      "unrealized_pnl": 500.0,
+      "unrealized_pnl_pct": 5.0,
+      "realized_pnl": 0.0,
+      "currency": "USD",
+      "asset_class": "STK",
+      "sector": "Consumer Cyclical"
+    }
+  ],
+  "error": null,
+  "source": "fixture"
+}

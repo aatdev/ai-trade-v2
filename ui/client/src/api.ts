@@ -9,6 +9,7 @@ import type {
   DocSectionResponse,
   ReconcileResult,
   ExposureResponse,
+  IbSnapshot,
   JobDetail,
   JobSummary,
   MarketResponse,
@@ -69,6 +70,13 @@ export const usePortfolio = (date: string | null, refetchInterval: Refetch = fal
   useQuery({
     queryKey: ['portfolio', date],
     queryFn: () => getJSON<Sourced<PortfolioHeat>>(`/api/portfolio${dq(date)}`),
+    refetchInterval,
+  });
+
+export const useIbSnapshot = (refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['ib'],
+    queryFn: () => getJSON<IbSnapshot>('/api/ib'),
     refetchInterval,
   });
 

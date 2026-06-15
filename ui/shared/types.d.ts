@@ -175,6 +175,57 @@ export interface PortfolioHeat {
   warnings: string[];
 }
 
+/* ---------------- Interactive Brokers live snapshot ---------------- */
+
+/** One live position from Interactive Brokers (read-only Client Portal API). */
+export interface IbPosition {
+  symbol: string;
+  conid: number | null;
+  position: number | null; // signed quantity (negative = short)
+  side: Side | null;
+  avg_cost: number | null;
+  market_price: number | null;
+  market_value: number | null;
+  unrealized_pnl: number | null;
+  unrealized_pnl_pct: number | null;
+  realized_pnl: number | null;
+  currency: string | null;
+  asset_class: string | null;
+  sector: string | null;
+}
+
+/** Account-level balances from Interactive Brokers. */
+export interface IbAccountSummary {
+  account_id: string | null;
+  net_liquidation: number | null;
+  total_cash: number | null;
+  available_funds: number | null;
+  buying_power: number | null;
+  gross_position_value: number | null;
+  unrealized_pnl: number | null;
+  realized_pnl: number | null;
+  excess_liquidity: number | null;
+  equity_with_loan: number | null;
+  currency: string | null;
+}
+
+/**
+ * GET /api/ib — a live, read-only Interactive Brokers snapshot. `ok` is false
+ * (with a human `error`) when the bundled IB Gateway is down or unauthenticated,
+ * so the UI degrades gracefully instead of erroring.
+ */
+export interface IbSnapshot {
+  ok: boolean;
+  generated_at: string | null;
+  mode: string | null; // "paper" | "live"
+  account_id: string | null;
+  account_ids: string[];
+  summary: IbAccountSummary | null;
+  positions: IbPosition[];
+  error: string | null;
+  source: string | null; // "live" | "fixture"
+}
+
 /* ---------------- Market regime ---------------- */
 
 export interface RegimeComponent {
