@@ -64,172 +64,176 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
     .join(' · ');
 
   return (
-    <>
-      <Card title="IB — Счёт" source={meta || null}>
-        <div
-          style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}
-        >
-          <ModeBadge mode={data.mode} />
-          <span style={{ flex: 1 }} />
-          <RefreshButton onClick={reloadIb} busy={isFetching} />
-        </div>
-        {s ? (
-          <div className="stats">
-            <Stat k="Чистая ликвидация" v={fmtMoney(s.net_liquidation)} />
-            <Stat k="Денежные средства" v={fmtMoney(s.total_cash)} />
-            <Stat k="Доступно" v={fmtMoney(s.available_funds)} />
-            <Stat k="Покуп. способность" v={fmtMoney(s.buying_power)} />
-            <Stat k="Стоимость позиций" v={fmtMoney(s.gross_position_value)} />
-            <Stat
-              k="Нереализ. P&L"
-              v={fmtMoney(s.unrealized_pnl)}
-              color={pnlColor(s.unrealized_pnl)}
-            />
+    <div className="grid full" style={{ gap: 12, flex: 1, overflow: 'auto' }}>
+      <div style={{ display: 'grid', gap: 12, alignContent: 'start' }}>
+        <Card title="IB — Счёт" source={meta || null}>
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}
+          >
+            <ModeBadge mode={data.mode} />
+            <span style={{ flex: 1 }} />
+            <RefreshButton onClick={reloadIb} busy={isFetching} />
           </div>
-        ) : (
-          <Empty>Нет данных по счёту.</Empty>
-        )}
-      </Card>
+          {s ? (
+            <div className="stats">
+              <Stat k="Чистая ликвидация" v={fmtMoney(s.net_liquidation)} />
+              <Stat k="Денежные средства" v={fmtMoney(s.total_cash)} />
+              <Stat k="Доступно" v={fmtMoney(s.available_funds)} />
+              <Stat k="Покуп. способность" v={fmtMoney(s.buying_power)} />
+              <Stat k="Стоимость позиций" v={fmtMoney(s.gross_position_value)} />
+              <Stat
+                k="Нереализ. P&L"
+                v={fmtMoney(s.unrealized_pnl)}
+                color={pnlColor(s.unrealized_pnl)}
+              />
+            </div>
+          ) : (
+            <Empty>Нет данных по счёту.</Empty>
+          )}
+        </Card>
 
-      <Card title="IB — Позиции" className="full">
-        {positions.length === 0 ? (
-          <p className="muted" style={{ marginTop: 4 }}>
-            Открытых позиций нет.
-          </p>
-        ) : (
-          <div className="scroll-x">
-            <table>
-              <thead>
-                <tr>
-                  <th>Тикер</th>
-                  <th style={{ textAlign: 'left' }}>Сторона</th>
-                  <th>Кол-во</th>
-                  <th>Ср. цена</th>
-                  <th>Цена</th>
-                  <th>Стоимость</th>
-                  <th>P&amp;L $</th>
-                  <th>P&amp;L %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {positions.map((p) => (
-                  <tr key={`${p.symbol}-${p.conid ?? ''}`}>
-                    <td className="sym">
-                      <Link to={`/ticker/${p.symbol}`}>{p.symbol}</Link>
-                    </td>
-                    <td style={{ textAlign: 'left' }}>
-                      {p.side ? (
-                        <SideBadge side={p.side} />
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td style={{ color: sideColor(p.side) }}>{fmtNum(p.position, 0)}</td>
-                    <td>{fmtNum(p.avg_cost)}</td>
-                    <td>{fmtNum(p.market_price)}</td>
-                    <td>{fmtMoney(p.market_value)}</td>
-                    <td style={{ color: pnlColor(p.unrealized_pnl) }}>
-                      {fmtMoney(p.unrealized_pnl)}
-                    </td>
-                    <td style={{ color: pnlColor(p.unrealized_pnl_pct) }}>
-                      {fmtSignedPct(p.unrealized_pnl_pct)}
-                    </td>
+        <Card title="IB — Позиции">
+          {positions.length === 0 ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              Открытых позиций нет.
+            </p>
+          ) : (
+            <div className="scroll-x">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Тикер</th>
+                    <th style={{ textAlign: 'left' }}>Сторона</th>
+                    <th>Кол-во</th>
+                    <th>Ср. цена</th>
+                    <th>Цена</th>
+                    <th>Стоимость</th>
+                    <th>P&amp;L $</th>
+                    <th>P&amp;L %</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody>
+                  {positions.map((p) => (
+                    <tr key={`${p.symbol}-${p.conid ?? ''}`}>
+                      <td className="sym">
+                        <Link to={`/ticker/${p.symbol}`}>{p.symbol}</Link>
+                      </td>
+                      <td style={{ textAlign: 'left' }}>
+                        {p.side ? (
+                          <SideBadge side={p.side} />
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td style={{ color: sideColor(p.side) }}>{fmtNum(p.position, 0)}</td>
+                      <td>{fmtNum(p.avg_cost)}</td>
+                      <td>{fmtNum(p.market_price)}</td>
+                      <td>{fmtMoney(p.market_value)}</td>
+                      <td style={{ color: pnlColor(p.unrealized_pnl) }}>
+                        {fmtMoney(p.unrealized_pnl)}
+                      </td>
+                      <td style={{ color: pnlColor(p.unrealized_pnl_pct) }}>
+                        {fmtSignedPct(p.unrealized_pnl_pct)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
 
-      <Card title="IB — Ордера" className="full">
-        {orders.length === 0 ? (
-          <p className="muted" style={{ marginTop: 4 }}>
-            Активных ордеров нет.
-          </p>
-        ) : (
-          <div className="scroll-x">
-            <table>
-              <thead>
-                <tr>
-                  <th>Тикер</th>
-                  <th style={{ textAlign: 'left' }}>Сторона</th>
-                  <th style={{ textAlign: 'left' }}>Тип</th>
-                  <th>Кол-во</th>
-                  <th>Лимит</th>
-                  <th>Стоп</th>
-                  <th>TIF</th>
-                  <th style={{ textAlign: 'left' }}>Статус</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((o, i) => (
-                  <tr key={o.order_id ?? `${o.symbol}-${i}`}>
-                    <td className="sym">
-                      <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
-                    </td>
-                    <td style={{ textAlign: 'left' }}>
-                      <OrderSide side={o.side} />
-                    </td>
-                    <td style={{ textAlign: 'left' }}>{o.order_type ?? '—'}</td>
-                    <td>{fmtNum(o.total_quantity, 0)}</td>
-                    <td>{o.limit_price != null ? fmtNum(o.limit_price) : '—'}</td>
-                    <td>{o.stop_price != null ? fmtNum(o.stop_price) : '—'}</td>
-                    <td>{o.tif ?? '—'}</td>
-                    <td style={{ textAlign: 'left' }}>
-                      <OrderStatus status={o.status} />
-                    </td>
+        <Card title="IB — Ордера">
+          {orders.length === 0 ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              Активных ордеров нет.
+            </p>
+          ) : (
+            <div className="scroll-x">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Тикер</th>
+                    <th style={{ textAlign: 'left' }}>Сторона</th>
+                    <th style={{ textAlign: 'left' }}>Тип</th>
+                    <th>Кол-во</th>
+                    <th>Лимит</th>
+                    <th>Стоп</th>
+                    <th>TIF</th>
+                    <th style={{ textAlign: 'left' }}>Статус</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody>
+                  {orders.map((o, i) => (
+                    <tr key={o.order_id ?? `${o.symbol}-${i}`}>
+                      <td className="sym">
+                        <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
+                      </td>
+                      <td style={{ textAlign: 'left' }}>
+                        <OrderSide side={o.side} />
+                      </td>
+                      <td style={{ textAlign: 'left' }}>{o.order_type ?? '—'}</td>
+                      <td>{fmtNum(o.total_quantity, 0)}</td>
+                      <td>{o.limit_price != null ? fmtNum(o.limit_price) : '—'}</td>
+                      <td>{o.stop_price != null ? fmtNum(o.stop_price) : '—'}</td>
+                      <td>{o.tif ?? '—'}</td>
+                      <td style={{ textAlign: 'left' }}>
+                        <OrderStatus status={o.status} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
 
-      <Card title="IB — История операций" className="full">
-        {trades.length === 0 ? (
-          <p className="muted" style={{ marginTop: 4 }}>
-            Сделок за последние дни нет.
-          </p>
-        ) : (
-          <div className="scroll-x">
-            <table>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left' }}>Время</th>
-                  <th>Тикер</th>
-                  <th style={{ textAlign: 'left' }}>Сторона</th>
-                  <th>Кол-во</th>
-                  <th>Цена</th>
-                  <th>Сумма</th>
-                  <th>Комиссия</th>
-                </tr>
-              </thead>
-              <tbody>
-                {trades.map((t, i) => (
-                  <tr key={t.execution_id ?? `${t.symbol}-${i}`}>
-                    <td style={{ textAlign: 'left' }} className="muted">
-                      {fmtTradeTime(t.trade_time)}
-                    </td>
-                    <td className="sym">
-                      <Link to={`/ticker/${t.symbol}`}>{t.symbol}</Link>
-                    </td>
-                    <td style={{ textAlign: 'left' }}>
-                      <OrderSide side={t.side} />
-                    </td>
-                    <td>{fmtNum(t.quantity, 0)}</td>
-                    <td>{fmtNum(t.price)}</td>
-                    <td>{fmtMoney(t.amount)}</td>
-                    <td>{t.commission != null ? fmtNum(t.commission) : '—'}</td>
+      <div style={{ display: 'grid', gap: 12, alignContent: 'start' }}>
+        <Card title="IB — История операций">
+          {trades.length === 0 ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              Сделок за последние дни нет.
+            </p>
+          ) : (
+            <div className="scroll-x">
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: 'left' }}>Время</th>
+                    <th>Тикер</th>
+                    <th style={{ textAlign: 'left' }}>Сторона</th>
+                    <th>Кол-во</th>
+                    <th>Цена</th>
+                    <th>Сумма</th>
+                    <th>Комиссия</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-    </>
+                </thead>
+                <tbody>
+                  {trades.map((t, i) => (
+                    <tr key={t.execution_id ?? `${t.symbol}-${i}`}>
+                      <td style={{ textAlign: 'left' }} className="muted">
+                        {fmtTradeTime(t.trade_time)}
+                      </td>
+                      <td className="sym">
+                        <Link to={`/ticker/${t.symbol}`}>{t.symbol}</Link>
+                      </td>
+                      <td style={{ textAlign: 'left' }}>
+                        <OrderSide side={t.side} />
+                      </td>
+                      <td>{fmtNum(t.quantity, 0)}</td>
+                      <td>{fmtNum(t.price)}</td>
+                      <td>{fmtMoney(t.amount)}</td>
+                      <td>{t.commission != null ? fmtNum(t.commission) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
   );
 }
 
