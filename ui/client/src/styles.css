@@ -176,6 +176,14 @@ tbody tr:hover { background: var(--bg-elev2); }
 td.sym { font-weight: 650; }
 .scroll-x { overflow-x: auto; }
 
+/* native IB bracket: one summary row, expandable to its legs */
+.bracket-row { cursor: pointer; }
+.bracket-sym { display: inline-flex; align-items: center; gap: 6px; }
+.bracket-sym .disc { color: var(--muted); width: 0.9em; display: inline-block; }
+.leg-sub { font-size: 11px; font-weight: 400; margin-top: 1px; padding-left: calc(0.9em + 6px); }
+.bracket-leg td { color: var(--muted); font-size: 12px; background: var(--bg-elev2); }
+.bracket-leg td.leg-name { padding-left: 26px; font-weight: 500; }
+
 /* ---------- tabs ---------- */
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .tab { padding: 5px 12px; border-radius: 6px; background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 13px; }

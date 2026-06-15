@@ -168,6 +168,51 @@ def test_normalize_order_missing_fields():
     assert o["order_id"] is None
     assert o["status"] is None
     assert o["conid"] is None
+    # bracket-linkage fields default to None when absent
+    assert o["parent_id"] is None
+    assert o["client_order_id"] is None
+    assert o["order_ref"] is None
+    assert o["oca_group"] is None
+
+
+def test_normalize_order_preserves_bracket_parent_coid():
+    """Parent (entry) carries cOID echoed as order_ref; no parent_id."""
+    raw = {
+        "orderId": 1003,
+        "ticker": "AMD",
+        "side": "BUY",
+        "orderType": "STP",
+        "auxPrice": 145.0,
+        "cOID": "wl-amd-2026-06-15",
+        "order_ref": "wl-amd-2026-06-15",
+    }
+    o = fis.normalize_order(raw)
+    assert o["parent_id"] is None
+    assert o["client_order_id"] == "wl-amd-2026-06-15"
+    assert o["order_ref"] == "wl-amd-2026-06-15"
+
+
+def test_normalize_order_preserves_bracket_child_links():
+    """Child legs carry parent_id (string cOID) and a shared ocaGroup."""
+    raw = {
+        "orderId": 1004,
+        "ticker": "AMD",
+        "side": "SELL",
+        "orderType": "STP",
+        "auxPrice": 138.5,
+        "parentId": "wl-amd-2026-06-15",
+        "ocaGroup": "amd-oca-1",
+    }
+    o = fis.normalize_order(raw)
+    assert o["parent_id"] == "wl-amd-2026-06-15"
+    assert o["oca_group"] == "amd-oca-1"
+    assert o["client_order_id"] is None
+
+
+def test_normalize_order_coerces_int_parent_id():
+    """Some Gateway builds echo parentId as the parent's numeric order id."""
+    o = fis.normalize_order({"orderId": 1004, "ticker": "AMD", "parentId": 1003})
+    assert o["parent_id"] == "1003"  # coerced to a string token
 
 
 def test_fetch_orders_parses_orders_envelope(monkeypatch):

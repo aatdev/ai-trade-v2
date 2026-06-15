@@ -211,6 +211,12 @@ export interface IbOrder {
   currency: string | null;
   last_execution_time: string | null;
   order_desc: string | null;
+  // Native-bracket linkage (optional — absent on older snapshots). The UI
+  // collapses legs that share any of these tokens into a single bracket row.
+  parent_id?: string | null; // child leg → parent's id/cOID
+  client_order_id?: string | null; // parent leg cOID (idempotency anchor)
+  order_ref?: string | null; // Gateway echo of cOID on some builds
+  oca_group?: string | null; // OCA group shared by armed child legs
 }
 
 /** One executed trade (fill) from Interactive Brokers recent history. */

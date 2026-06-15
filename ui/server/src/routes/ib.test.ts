@@ -24,11 +24,21 @@ describe('GET /api/ib', () => {
     const tsla = res.body.positions.find((p: { symbol: string }) => p.symbol === 'TSLA');
     expect(tsla.side).toBe('short');
     expect(tsla.position).toBe(-50);
-    expect(res.body.orders).toHaveLength(2);
+    expect(res.body.orders).toHaveLength(5); // 2 standalone + a 3-leg AMD bracket
     const stop = res.body.orders.find((o: { symbol: string }) => o.symbol === 'MSFT');
     expect(stop.side).toBe('SELL');
     expect(stop.order_type).toBe('STP');
     expect(stop.stop_price).toBe(380.0);
+    // Native-bracket linkage fields survive the snapshot round-trip so the UI
+    // can collapse the three AMD legs into a single row.
+    const amd = res.body.orders.filter((o: { symbol: string }) => o.symbol === 'AMD');
+    expect(amd).toHaveLength(3);
+    const amdParent = amd.find((o: { client_order_id: string | null }) => o.client_order_id);
+    expect(amdParent.client_order_id).toBe('wl-amd-2026-06-15');
+    const amdChildren = amd.filter(
+      (o: { parent_id: string | null }) => o.parent_id === 'wl-amd-2026-06-15',
+    );
+    expect(amdChildren).toHaveLength(2);
     expect(res.body.trades).toHaveLength(2);
     const sell = res.body.trades.find((t: { symbol: string }) => t.symbol === 'TSLA');
     expect(sell.side).toBe('SELL');

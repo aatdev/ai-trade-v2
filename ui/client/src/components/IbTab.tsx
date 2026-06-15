@@ -1,5 +1,8 @@
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import type { IbOrder } from '@shared/types';
 import { useIbSnapshot, type Refetch } from '../api';
+import { groupIbOrders, legRole, type BracketRow } from '../lib/ibBrackets';
 import { fmtDateTime, fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
 import { pnlColor, sideColor } from '../lib/zones';
 import { Card, Empty, ErrorNote, Loading, SideBadge, Stat } from './ui';
@@ -144,48 +147,7 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
         </Card>
 
         <Card title="IB — Ордера">
-          {orders.length === 0 ? (
-            <p className="muted" style={{ marginTop: 4 }}>
-              Активных ордеров нет.
-            </p>
-          ) : (
-            <div className="scroll-x">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Тикер</th>
-                    <th style={{ textAlign: 'left' }}>Сторона</th>
-                    <th style={{ textAlign: 'left' }}>Тип</th>
-                    <th>Кол-во</th>
-                    <th>Лимит</th>
-                    <th>Стоп</th>
-                    <th>TIF</th>
-                    <th style={{ textAlign: 'left' }}>Статус</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {orders.map((o, i) => (
-                    <tr key={o.order_id ?? `${o.symbol}-${i}`}>
-                      <td className="sym">
-                        <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
-                      </td>
-                      <td style={{ textAlign: 'left' }}>
-                        <OrderSide side={o.side} />
-                      </td>
-                      <td style={{ textAlign: 'left' }}>{o.order_type ?? '—'}</td>
-                      <td>{fmtNum(o.total_quantity, 0)}</td>
-                      <td>{o.limit_price != null ? fmtNum(o.limit_price) : '—'}</td>
-                      <td>{o.stop_price != null ? fmtNum(o.stop_price) : '—'}</td>
-                      <td>{o.tif ?? '—'}</td>
-                      <td style={{ textAlign: 'left' }}>
-                        <OrderStatus status={o.status} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <OrdersTable orders={orders} />
         </Card>
       </div>
 
@@ -234,6 +196,138 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
         </Card>
       </div>
     </div>
+  );
+}
+
+/**
+ * IB open-orders table. Native bracket legs (entry + stop + target) are
+ * collapsed into a single row showing the entry pivot, take-profit (Лимит)
+ * and protective stop (Стоп); click the row to expand its individual legs.
+ */
+function OrdersTable({ orders }: { orders: IbOrder[] }) {
+  const rows = useMemo(() => groupIbOrders(orders), [orders]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  if (orders.length === 0)
+    return (
+      <p className="muted" style={{ marginTop: 4 }}>
+        Активных ордеров нет.
+      </p>
+    );
+
+  const toggle = (k: string) => setExpanded((e) => ({ ...e, [k]: !e[k] }));
+
+  return (
+    <div className="scroll-x">
+      <table>
+        <thead>
+          <tr>
+            <th>Тикер</th>
+            <th style={{ textAlign: 'left' }}>Сторона</th>
+            <th style={{ textAlign: 'left' }}>Тип</th>
+            <th>Кол-во</th>
+            <th>Лимит</th>
+            <th>Стоп</th>
+            <th>TIF</th>
+            <th style={{ textAlign: 'left' }}>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) =>
+            row.kind === 'single' ? (
+              <OrderRow key={row.key} o={row.order} />
+            ) : (
+              <BracketRows
+                key={row.key}
+                row={row}
+                open={!!expanded[row.key]}
+                onToggle={() => toggle(row.key)}
+              />
+            ),
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A single standalone order (one row). */
+function OrderRow({ o }: { o: IbOrder }) {
+  return (
+    <tr>
+      <td className="sym">
+        <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
+      </td>
+      <td style={{ textAlign: 'left' }}>
+        <OrderSide side={o.side} />
+      </td>
+      <td style={{ textAlign: 'left' }}>{o.order_type ?? '—'}</td>
+      <td>{fmtNum(o.total_quantity, 0)}</td>
+      <td>{o.limit_price != null ? fmtNum(o.limit_price) : '—'}</td>
+      <td>{o.stop_price != null ? fmtNum(o.stop_price) : '—'}</td>
+      <td>{o.tif ?? '—'}</td>
+      <td style={{ textAlign: 'left' }}>
+        <OrderStatus status={o.status} />
+      </td>
+    </tr>
+  );
+}
+
+/** A native bracket as one summary row (Лимит=цель, Стоп=защитный стоп), expandable to its legs. */
+function BracketRows({
+  row,
+  open,
+  onToggle,
+}: {
+  row: BracketRow;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr className="bracket-row" onClick={onToggle} title="Нативный bracket-ордер — нажмите, чтобы раскрыть ноги">
+        <td className="sym">
+          <div className="bracket-sym">
+            <span className="disc">{open ? '▾' : '▸'}</span>
+            <Link to={`/ticker/${row.symbol}`} onClick={(e) => e.stopPropagation()}>
+              {row.symbol}
+            </Link>
+            <span className="pill">BRACKET</span>
+          </div>
+          {row.entryPrice != null && (
+            <div className="muted leg-sub">вход {fmtNum(row.entryPrice)}</div>
+          )}
+        </td>
+        <td style={{ textAlign: 'left' }}>
+          <OrderSide side={row.side} />
+        </td>
+        <td style={{ textAlign: 'left' }}>Брекет · {row.legs.length}</td>
+        <td>{fmtNum(row.quantity, 0)}</td>
+        <td>{row.target?.limit_price != null ? fmtNum(row.target.limit_price) : '—'}</td>
+        <td>{row.stop?.stop_price != null ? fmtNum(row.stop.stop_price) : '—'}</td>
+        <td>{row.tif ?? '—'}</td>
+        <td style={{ textAlign: 'left' }}>
+          <OrderStatus status={row.status} />
+        </td>
+      </tr>
+      {open &&
+        row.legs.map((leg, i) => (
+          <tr className="bracket-leg" key={`${row.key}:${leg.order_id ?? i}`}>
+            <td className="sym leg-name">{legRole(leg, row)}</td>
+            <td style={{ textAlign: 'left' }}>
+              <OrderSide side={leg.side} />
+            </td>
+            <td style={{ textAlign: 'left' }}>{leg.order_type ?? '—'}</td>
+            <td>{fmtNum(leg.total_quantity, 0)}</td>
+            <td>{leg.limit_price != null ? fmtNum(leg.limit_price) : '—'}</td>
+            <td>{leg.stop_price != null ? fmtNum(leg.stop_price) : '—'}</td>
+            <td>{leg.tif ?? '—'}</td>
+            <td style={{ textAlign: 'left' }}>
+              <OrderStatus status={leg.status} />
+            </td>
+          </tr>
+        ))}
+    </>
   );
 }
 

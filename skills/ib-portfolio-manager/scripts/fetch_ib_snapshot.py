@@ -234,6 +234,22 @@ def _str_field(raw: dict, *keys: str) -> str | None:
     return None
 
 
+def _id_field(raw: dict, *keys: str) -> str | None:
+    """First non-empty id among ``keys`` as a string (ints coerced).
+
+    Bracket-linkage ids (parentId / cOID / order_ref) arrive as either strings
+    (the submitted client-order id) or ints (the Gateway-assigned order id),
+    depending on the build; normalize both to a string token.
+    """
+    for key in keys:
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, int) and not isinstance(val, bool):
+            return str(val)
+    return None
+
+
 def normalize_order(raw: dict) -> dict:
     """Map one Client Portal ``/iserver/account/orders`` row to an IbOrder."""
     side = _str_field(raw, "side")
@@ -264,6 +280,14 @@ def normalize_order(raw: dict) -> dict:
         "currency": _str_field(raw, "cashCcy", "currency"),
         "last_execution_time": _str_field(raw, "lastExecutionTime"),
         "order_desc": _str_field(raw, "orderDesc"),
+        # Native-bracket linkage: a child carries parent_id == parent's cOID;
+        # the parent carries client_order_id (cOID, echoed as order_ref on some
+        # builds); armed children share an oca_group. The UI groups legs that
+        # share any of these tokens into a single bracket row.
+        "parent_id": _id_field(raw, "parentId", "parent_id"),
+        "client_order_id": _id_field(raw, "cOID", "coid", "client_order_id"),
+        "order_ref": _id_field(raw, "order_ref", "orderRef"),
+        "oca_group": _id_field(raw, "ocaGroup", "oca_group"),
     }
 
 
