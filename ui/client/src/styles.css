@@ -349,3 +349,34 @@ button.ticker-btn:hover { text-decoration: underline; }
 .candle-tooltip .t-date { color: var(--muted); margin-bottom: 3px; }
 .candle-tooltip .t-row { font-variant-numeric: tabular-nums; }
 .candle-tooltip .t-row + .t-row { margin-top: 2px; }
+
+/* ---------- login ---------- */
+.login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 320px;
+  padding: 28px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.login-card h1 { font-size: 20px; margin: 0; font-weight: 650; }
+.login-card > .muted { margin: -6px 0 4px; }
+.login-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.login-card input { width: 100%; padding: 8px 10px; }
+.login-card button.primary { padding: 9px 12px; margin-top: 4px; }

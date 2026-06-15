@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useDates } from '../api';
+import { logout, useAuthStatus, useDates } from '../api';
 import ActionsPanel from '../components/ActionsPanel';
 import AnalysesTab from '../components/AnalysesTab';
 import AnalyzeDialog from '../components/AnalyzeDialog';
@@ -33,6 +33,12 @@ export default function Dashboard() {
   const [docsOpen, setDocsOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('overview');
   const qc = useQueryClient();
+  const { data: auth } = useAuthStatus();
+
+  async function onLogout() {
+    await logout().catch(() => undefined);
+    await qc.invalidateQueries();
+  }
 
   const { data: dates } = useDates(autoRefresh ? 60_000 : false);
   const refetch = autoRefresh ? 30_000 : false;
@@ -69,6 +75,11 @@ export default function Dashboard() {
         <button className="primary" onClick={() => setActionsOpen(true)}>
           ⚡ Actions
         </button>
+        {auth?.authRequired && auth.authenticated ? (
+          <button onClick={onLogout} title={`Выйти${auth.user ? ` (${auth.user})` : ''}`}>
+            🚪 Выйти
+          </button>
+        ) : null}
       </div>
 
       <div className="tabs" style={{ marginBottom: 16 }}>

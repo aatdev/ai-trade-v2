@@ -11,6 +11,24 @@ export type ExposureDecision = 'allow' | 'restrict' | 'cash-priority' | string;
 export type Side = 'long' | 'short' | string;
 export type ThesisStatus = 'IDEA' | 'OPEN' | 'CLOSED' | string;
 
+/* ---------------- Auth ---------------- */
+
+/** GET /api/auth — whether login is required and whether this client is in. */
+export interface AuthStatusResponse {
+  /** Login is configured (UI_AUTH_USER + UI_AUTH_PASSWORD set in .env). */
+  authRequired: boolean;
+  /** True when a valid session cookie is present, or when auth is disabled. */
+  authenticated: boolean;
+  /** Logged-in user name (only when authenticated against an enabled config). */
+  user?: string;
+}
+
+/** POST /api/login, POST /api/logout */
+export interface AuthActionResponse {
+  ok: boolean;
+  error?: string;
+}
+
 /** GET /api/dates */
 export interface DatesResponse {
   dates: string[]; // descending (newest first)

@@ -42,6 +42,10 @@ npm run typecheck
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `PORT` | `4000` | API / prod server port |
+| `UI_AUTH_USER` | _unset_ | Login username. Set together with `UI_AUTH_PASSWORD` to require login. |
+| `UI_AUTH_PASSWORD` | _unset_ | Login password. Auth is **disabled** unless both user + password are set. |
+| `UI_AUTH_SECRET` | derived from creds | Signing key for the session cookie. If unset, derived from the credentials (so changing the password invalidates outstanding sessions). |
+| `UI_AUTH_TTL_HOURS` | `168` | Session lifetime in hours (default 7 days). |
 | `TRADING_DATE_DIR` | `trading-data` | Trading-data dir (mirrors the scheduler env var; note: `DATE`) |
 | `TRADING_PROJECT_ROOT` | auto-detected | Repo root (walks up to `scripts/run_trading_schedule.py`) |
 | `TRADING_UI_ANALYZE_MODEL` | `claude-opus-4-8` | Model for `analyze-ticker` headless runs |
@@ -54,6 +58,31 @@ npm run typecheck
 IB account/positions also read these standard IB env vars (loaded from the repo
 `.env` like the scheduler): `IB_PAPER_TRADING` (paper vs live label),
 `IB_GATEWAY_RUNTIME_DIR` (override the `ib-gateway/.runtime` session location).
+
+## Authentication (optional)
+
+The server binds to loopback only, but it can spawn real scheduler processes, so
+an optional username/password gate is built in. Set **both** `UI_AUTH_USER` and
+`UI_AUTH_PASSWORD` in `ui/.env` (or the repo-root `.env` — both are loaded) to
+require login; leave either unset and the dashboard behaves as before (no login).
+
+```bash
+# ui/.env
+UI_AUTH_USER=trader
+UI_AUTH_PASSWORD=change-me
+```
+
+On first visit an unauthenticated client sees a login screen (`POST /api/login`).
+A successful login sets a signed, **httpOnly** session cookie
+(`SameSite=Lax`, default 7-day TTL via `UI_AUTH_TTL_HOURS`); no credentials are
+stored on the client. The cookie — rather than a header — is used so that SSE
+log streams (`EventSource`) and chart `<img>` requests authenticate too. The
+token is signed with `UI_AUTH_SECRET` (or a key derived from the credentials, so
+changing the password invalidates every outstanding session). All `/api/*`
+routes are gated except `/api/health` and the auth endpoints (`GET /api/auth`
+status, `POST /api/login`, `POST /api/logout`); the "🚪 Выйти" button in the
+top bar logs out. A session that expires mid-use bounces back to the login
+screen automatically.
 
 ## API surface
 

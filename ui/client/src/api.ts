@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import type {
   AnalysisIndexResponse,
   ApplyReconcileResponse,
+  AuthActionResponse,
+  AuthStatusResponse,
   AutopilotResponse,
   DatesResponse,
   DeleteSignalResponse,
@@ -31,8 +33,19 @@ import type {
 
 export type Refetch = number | false;
 
+/** Event name fired on any 401 so the AuthGate can bounce back to the login screen. */
+export const UNAUTHORIZED_EVENT = 'auth:unauthorized';
+
+function onUnauthorized(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new Error('unauthorized');
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${url}`);
   return (await res.json()) as T;
 }
@@ -43,10 +56,27 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   });
+  if (res.status === 401) onUnauthorized();
   return (await res.json()) as T;
 }
 
 const dq = (date: string | null) => (date ? `?date=${encodeURIComponent(date)}` : '');
+
+/* ---------------- auth ---------------- */
+
+export const useAuthStatus = () =>
+  useQuery({
+    queryKey: ['auth'],
+    queryFn: () => getJSON<AuthStatusResponse>('/api/auth'),
+    retry: false,
+    staleTime: 30_000,
+  });
+
+export async function login(username: string, password: string): Promise<AuthActionResponse> {
+  return postJSON<AuthActionResponse>('/api/login', { username, password });
+}
+
+export const logout = () => postJSON<AuthActionResponse>('/api/logout', {});
 
 /* ---------------- read hooks ---------------- */
 

@@ -1,8 +1,12 @@
+import path from 'node:path';
 import { createApp } from './app';
 import { PORT, PROJECT_ROOT, ensureRuntimePath, loadDotEnv, resolveTradingDataDir } from './config';
 
 // Make spawned claude/skill processes self-sufficient (secrets + executables).
+// Repo-root `.env` first (FMP / TELEGRAM / OAUTH), then UI-local `ui/.env`
+// (PORT, UI_AUTH_* — see ui/.env.example); neither overrides already-set vars.
 loadDotEnv(PROJECT_ROOT);
+loadDotEnv(path.join(PROJECT_ROOT, 'ui'));
 ensureRuntimePath();
 
 const dataDir = resolveTradingDataDir(PROJECT_ROOT);
