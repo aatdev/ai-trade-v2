@@ -318,3 +318,36 @@ def test_batch_chunk_cli_failure_leaves_symbols_unresolved(client, monkeypatch):
 
     # Per-symbol fallback still produced data.
     assert set(out) == {"S01", "S02"}
+
+
+def test_batch_mapping_is_by_name_not_position(client, monkeypatch):
+    """Each chunk result is matched to its symbol by NAME, not response order.
+
+    Feeds a batch reply that is (a) shuffled vs the request order, (b) carries an
+    extra unrequested symbol, (c) gives each symbol a UNIQUE marker close — so a
+    position-based mis-map would attach the wrong bars and be detectable.
+    """
+    symbols = ["AAA", "BBB", "CCC", "DDD"]
+    marker = {"AAA": 10.0, "BBB": 20.0, "CCC": 30.0, "DDD": 40.0}
+
+    def bars_handler(args):
+        requested = [a for a in args if a in symbols]
+        entries = [
+            {"symbol": s, "bars": make_bars(250, base_close=marker[s])} for s in requested
+        ]
+        entries = list(reversed(entries))  # response order != request order
+        entries.insert(2, {"symbol": "ZZZ_INTRUDER", "bars": make_bars(250, base_close=999.0)})
+        return bars_payload(*entries)
+
+    fake = FakeCli({"bars": bars_handler})
+    monkeypatch.setattr(client, "_cli", fake)
+
+    out = client.get_batch_historical(symbols)
+
+    # Intruder ignored, no symbol dropped.
+    assert set(out) == set(symbols)
+    # Every symbol carries ITS OWN marker close (newest first), none collapsed.
+    for s in symbols:
+        expected = make_bars(250, base_close=marker[s])[-1]["close"]
+        assert out[s][0]["close"] == expected, f"{s} got the wrong symbol's bars"
+    assert len({out[s][0]["close"] for s in symbols}) == len(symbols)
