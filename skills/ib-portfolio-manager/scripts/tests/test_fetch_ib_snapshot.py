@@ -109,6 +109,163 @@ def test_normalize_position_missing_fields():
 
 
 # --------------------------------------------------------------------------- #
+# Order normalization
+# --------------------------------------------------------------------------- #
+def test_normalize_order_limit_buy():
+    raw = {
+        "orderId": 123456,
+        "ticker": "NVDA",
+        "conid": 4815747,
+        "side": "BUY",
+        "orderType": "LMT",
+        "status": "Submitted",
+        "totalSize": 50,
+        "filledQuantity": 0,
+        "remainingQuantity": 50,
+        "price": 120.5,
+        "timeInForce": "GTC",
+        "cashCcy": "USD",
+        "orderDesc": "BUY 50 NVDA LMT 120.50 GTC",
+    }
+    o = fis.normalize_order(raw)
+    assert o["order_id"] == "123456"
+    assert o["symbol"] == "NVDA"
+    assert o["conid"] == 4815747
+    assert o["side"] == "BUY"
+    assert o["order_type"] == "LMT"
+    assert o["status"] == "Submitted"
+    assert o["total_quantity"] == 50.0
+    assert o["remaining_quantity"] == 50.0
+    assert o["limit_price"] == 120.5
+    assert o["stop_price"] is None
+    assert o["tif"] == "GTC"
+    assert o["currency"] == "USD"
+
+
+def test_normalize_order_stop_sell_and_symbol_token():
+    raw = {
+        "orderId": 99,
+        "ticker": "MSFT NASDAQ.NMS STK",
+        "side": "sell",
+        "orderType": "STP",
+        "status": "PreSubmitted",
+        "totalSize": "30",
+        "auxPrice": 380.0,
+    }
+    o = fis.normalize_order(raw)
+    assert o["symbol"] == "MSFT"
+    assert o["side"] == "SELL"  # normalized to upper-case
+    assert o["order_type"] == "STP"
+    assert o["stop_price"] == 380.0
+    assert o["total_quantity"] == 30.0  # numeric string coerced
+    assert o["limit_price"] is None
+
+
+def test_normalize_order_missing_fields():
+    o = fis.normalize_order({})
+    assert o["symbol"] == "?"
+    assert o["side"] is None
+    assert o["order_id"] is None
+    assert o["status"] is None
+    assert o["conid"] is None
+
+
+def test_fetch_orders_parses_orders_envelope(monkeypatch):
+    payload = {
+        "orders": [
+            {"orderId": 1, "ticker": "AAPL", "side": "BUY", "orderType": "LMT", "totalSize": 10}
+        ],
+        "snapshot": True,
+    }
+    monkeypatch.setattr(fis, "http_get_json", lambda port, path, timeout: payload)
+    orders = fis.fetch_orders(5002, 1.0)
+    assert len(orders) == 1
+    assert orders[0]["symbol"] == "AAPL"
+    assert orders[0]["side"] == "BUY"
+
+
+def test_fetch_orders_accepts_bare_list(monkeypatch):
+    monkeypatch.setattr(
+        fis, "http_get_json", lambda port, path, timeout: [{"orderId": 2, "ticker": "TSLA"}]
+    )
+    orders = fis.fetch_orders(5002, 1.0)
+    assert [o["symbol"] for o in orders] == ["TSLA"]
+
+
+def test_fetch_orders_tolerates_non_collection(monkeypatch):
+    monkeypatch.setattr(fis, "http_get_json", lambda port, path, timeout: None)
+    assert fis.fetch_orders(5002, 1.0) == []
+
+
+# --------------------------------------------------------------------------- #
+# Trade (execution history) normalization
+# --------------------------------------------------------------------------- #
+def test_normalize_trade_buy():
+    raw = {
+        "execution_id": "0000e0d5.1",
+        "symbol": "AAPL",
+        "conid": 265598,
+        "side": "B",
+        "size": 100,
+        "price": "165.00",
+        "net_amount": 16500.0,
+        "commission": "1.05",
+        "exchange": "NASDAQ",
+        "sec_type": "STK",
+        "order_description": "Bot 100 AAPL @ 165.00",
+    }
+    t = fis.normalize_trade(raw)
+    assert t["execution_id"] == "0000e0d5.1"
+    assert t["symbol"] == "AAPL"
+    assert t["conid"] == 265598
+    assert t["side"] == "BUY"  # "B" -> BUY
+    assert t["quantity"] == 100.0
+    assert t["price"] == 165.0
+    assert t["amount"] == 16500.0
+    assert t["commission"] == 1.05
+    assert t["exchange"] == "NASDAQ"
+
+
+def test_normalize_trade_sell_with_epoch_time_and_symbol_token():
+    raw = {
+        "symbol": "MSFT NASDAQ.NMS STK",
+        "side": "SLD",
+        "size": "30",
+        "price": 380.0,
+        "trade_time_r": 1750000000000,  # epoch ms -> ISO string
+    }
+    t = fis.normalize_trade(raw)
+    assert t["symbol"] == "MSFT"
+    assert t["side"] == "SELL"  # "SLD" -> SELL
+    assert t["quantity"] == 30.0
+    # epoch was converted to an ISO-8601 timestamp (tz-independent assertions)
+    assert isinstance(t["trade_time"], str)
+    assert "T" in t["trade_time"]
+
+
+def test_normalize_trade_raw_time_fallback_and_missing():
+    t = fis.normalize_trade({"trade_time": "20260615-13:30:00"})
+    assert t["symbol"] == "?"
+    assert t["side"] is None
+    assert t["trade_time"] == "20260615-13:30:00"  # raw string kept when no epoch
+
+
+def test_fetch_trades_sorts_newest_first(monkeypatch):
+    rows = [
+        {"symbol": "OLD", "side": "B", "trade_time_r": 1000},
+        {"symbol": "NEW", "side": "S", "trade_time_r": 2000},
+    ]
+    monkeypatch.setattr(fis, "http_get_json", lambda port, path, timeout: rows)
+    trades = fis.fetch_trades(5002, 1.0)
+    assert [t["symbol"] for t in trades] == ["NEW", "OLD"]
+
+
+def test_fetch_trades_tolerates_non_collection(monkeypatch):
+    monkeypatch.setattr(fis, "http_get_json", lambda port, path, timeout: {"unexpected": 1})
+    assert fis.fetch_trades(5002, 1.0) == []
+
+
+# --------------------------------------------------------------------------- #
 # Error snapshot shape
 # --------------------------------------------------------------------------- #
 def test_error_snapshot_shape():
@@ -116,6 +273,8 @@ def test_error_snapshot_shape():
     assert snap["ok"] is False
     assert snap["error"] == "boom"
     assert snap["positions"] == []
+    assert snap["orders"] == []
+    assert snap["trades"] == []
     assert snap["summary"] is None
     assert snap["source"] == "live"
     assert snap["mode"] in ("paper", "live")
@@ -135,6 +294,8 @@ def test_load_fixture_happy(tmp_path: Path):
     assert snap["source"] == "fixture"
     assert snap["account_id"] == "U999"
     assert snap["positions"][0]["symbol"] == "MSFT"
+    assert snap["orders"] == []  # defaulted when absent from the fixture
+    assert snap["trades"] == []  # defaulted when absent from the fixture
 
 
 def test_load_fixture_missing_file_is_structured_error(tmp_path: Path):

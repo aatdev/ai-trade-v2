@@ -194,6 +194,41 @@ export interface IbPosition {
   sector: string | null;
 }
 
+/** One live/working order from Interactive Brokers (read-only Client Portal API). */
+export interface IbOrder {
+  order_id: string | null;
+  symbol: string;
+  conid: number | null;
+  side: string | null; // "BUY" | "SELL"
+  order_type: string | null; // LMT / MKT / STP / STP LMT ...
+  status: string | null; // Submitted / PreSubmitted / Filled / Cancelled ...
+  total_quantity: number | null;
+  filled_quantity: number | null;
+  remaining_quantity: number | null;
+  limit_price: number | null;
+  stop_price: number | null;
+  tif: string | null; // DAY / GTC ...
+  currency: string | null;
+  last_execution_time: string | null;
+  order_desc: string | null;
+}
+
+/** One executed trade (fill) from Interactive Brokers recent history. */
+export interface IbTrade {
+  execution_id: string | null;
+  symbol: string;
+  conid: number | null;
+  side: string | null; // "BUY" | "SELL"
+  quantity: number | null;
+  price: number | null;
+  amount: number | null; // net amount / proceeds
+  commission: number | null;
+  exchange: string | null;
+  sec_type: string | null;
+  trade_time: string | null; // ISO-8601 when derivable, else raw exchange string
+  order_desc: string | null;
+}
+
 /** Account-level balances from Interactive Brokers. */
 export interface IbAccountSummary {
   account_id: string | null;
@@ -222,6 +257,8 @@ export interface IbSnapshot {
   account_ids: string[];
   summary: IbAccountSummary | null;
   positions: IbPosition[];
+  orders: IbOrder[];
+  trades: IbTrade[];
   error: string | null;
   source: string | null; // "live" | "fixture"
 }

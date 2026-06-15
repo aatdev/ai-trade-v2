@@ -11,7 +11,8 @@ import { Card, Empty, ErrorNote, Loading, SideBadge, Stat } from './ui';
  * `ok:false`, which we render as a friendly notice rather than a hard error.
  */
 export default function IbTab({ refetch }: { refetch: Refetch }) {
-  const { data, isLoading, error } = useIbSnapshot(refetch);
+  const { data, isLoading, error, refetch: reload, isFetching } = useIbSnapshot(refetch);
+  const reloadIb = () => void reload();
 
   if (isLoading)
     return (
@@ -35,12 +36,15 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
   if (!data.ok) {
     return (
       <Card title="IB — Счёт">
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <RefreshButton onClick={reloadIb} busy={isFetching} />
+        </div>
         <div className="warns">
           IB Gateway недоступен. {data.error ?? 'Нет соединения с Interactive Brokers.'}
         </div>
         <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
           Запустите Claude-сессию с настроенным interactive-brokers MCP и пройдите вход в IB
-          Gateway (логин / 2FA), затем обновите страницу. Проверка соединения:{' '}
+          Gateway (логин / 2FA), затем нажмите «Обновить». Проверка соединения:{' '}
           <code>python3 skills/ib-portfolio-manager/scripts/check_ib_connection.py</code>.
         </p>
       </Card>
@@ -49,6 +53,8 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
 
   const s = data.summary;
   const positions = data.positions ?? [];
+  const orders = data.orders ?? [];
+  const trades = data.trades ?? [];
   const meta = [
     data.account_id,
     data.source === 'fixture' ? 'fixture' : null,
@@ -60,8 +66,12 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
   return (
     <>
       <Card title="IB — Счёт" source={meta || null}>
-        <div style={{ marginBottom: 12 }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}
+        >
           <ModeBadge mode={data.mode} />
+          <span style={{ flex: 1 }} />
+          <RefreshButton onClick={reloadIb} busy={isFetching} />
         </div>
         {s ? (
           <div className="stats">
@@ -131,8 +141,128 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
           </div>
         )}
       </Card>
+
+      <Card title="IB — Ордера" className="full">
+        {orders.length === 0 ? (
+          <p className="muted" style={{ marginTop: 4 }}>
+            Активных ордеров нет.
+          </p>
+        ) : (
+          <div className="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th>Тикер</th>
+                  <th style={{ textAlign: 'left' }}>Сторона</th>
+                  <th style={{ textAlign: 'left' }}>Тип</th>
+                  <th>Кол-во</th>
+                  <th>Лимит</th>
+                  <th>Стоп</th>
+                  <th>TIF</th>
+                  <th style={{ textAlign: 'left' }}>Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((o, i) => (
+                  <tr key={o.order_id ?? `${o.symbol}-${i}`}>
+                    <td className="sym">
+                      <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
+                    </td>
+                    <td style={{ textAlign: 'left' }}>
+                      <OrderSide side={o.side} />
+                    </td>
+                    <td style={{ textAlign: 'left' }}>{o.order_type ?? '—'}</td>
+                    <td>{fmtNum(o.total_quantity, 0)}</td>
+                    <td>{o.limit_price != null ? fmtNum(o.limit_price) : '—'}</td>
+                    <td>{o.stop_price != null ? fmtNum(o.stop_price) : '—'}</td>
+                    <td>{o.tif ?? '—'}</td>
+                    <td style={{ textAlign: 'left' }}>
+                      <OrderStatus status={o.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card title="IB — История операций" className="full">
+        {trades.length === 0 ? (
+          <p className="muted" style={{ marginTop: 4 }}>
+            Сделок за последние дни нет.
+          </p>
+        ) : (
+          <div className="scroll-x">
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left' }}>Время</th>
+                  <th>Тикер</th>
+                  <th style={{ textAlign: 'left' }}>Сторона</th>
+                  <th>Кол-во</th>
+                  <th>Цена</th>
+                  <th>Сумма</th>
+                  <th>Комиссия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map((t, i) => (
+                  <tr key={t.execution_id ?? `${t.symbol}-${i}`}>
+                    <td style={{ textAlign: 'left' }} className="muted">
+                      {fmtTradeTime(t.trade_time)}
+                    </td>
+                    <td className="sym">
+                      <Link to={`/ticker/${t.symbol}`}>{t.symbol}</Link>
+                    </td>
+                    <td style={{ textAlign: 'left' }}>
+                      <OrderSide side={t.side} />
+                    </td>
+                    <td>{fmtNum(t.quantity, 0)}</td>
+                    <td>{fmtNum(t.price)}</td>
+                    <td>{fmtMoney(t.amount)}</td>
+                    <td>{t.commission != null ? fmtNum(t.commission) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </>
   );
+}
+
+function fmtTradeTime(t: string | null): string {
+  if (!t) return '—';
+  return Number.isNaN(Date.parse(t)) ? t : fmtDateTime(t);
+}
+
+function RefreshButton({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  return (
+    <button onClick={onClick} disabled={busy} title="Загрузить данные с IB Gateway">
+      {busy ? '↻ Загрузка…' : '↻ Обновить'}
+    </button>
+  );
+}
+
+function OrderSide({ side }: { side: string | null }) {
+  if (!side) return <span className="muted">—</span>;
+  const sell = side.toUpperCase() === 'SELL';
+  return (
+    <span className="badge" style={{ color: sell ? 'var(--red)' : 'var(--green)' }}>
+      {side.toUpperCase()}
+    </span>
+  );
+}
+
+function OrderStatus({ status }: { status: string | null }) {
+  if (!status) return <span className="muted">—</span>;
+  const s = status.toLowerCase();
+  if (s.includes('fill')) return <span style={{ color: 'var(--green)' }}>{status}</span>;
+  if (s.includes('cancel') || s.includes('inactive') || s.includes('reject'))
+    return <span className="muted">{status}</span>;
+  return <span>{status}</span>;
 }
 
 function ModeBadge({ mode }: { mode: string | null }) {

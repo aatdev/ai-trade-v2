@@ -62,12 +62,18 @@ Read (each accepts `?date=YYYY-MM-DD`, defaults to the latest available):
 analysis), `/api/ticker/:symbol[/:date[/chart/:tf]]`.
 
 Live (no `?date`): `/api/ib` — a read-only Interactive Brokers snapshot
-(account balances + open positions) behind the **Счёт IB** tab. The server
-shells out to `skills/ib-portfolio-manager/scripts/fetch_ib_snapshot.py`, which
-locates the bundled IB Gateway session and queries the Client Portal REST API
-(GET-only; no orders). When the Gateway is down or unauthenticated the response
-is `{ ok: false, error }` and the tab renders a friendly notice. Set
-`TRADING_UI_IB_FIXTURE` to serve a recorded snapshot without a live connection.
+(account balances + open positions + working orders + recent trade history)
+behind the **Счёт IB** tab. The server shells out to
+`skills/ib-portfolio-manager/scripts/fetch_ib_snapshot.py`, which locates the
+bundled IB Gateway session and queries the Client Portal REST API (strictly
+GET-only — `/portfolio/*`, `/iserver/account/orders` and
+`/iserver/account/trades`; never places an order). Trade history covers the
+current day plus ~6 prior days (the Gateway's window), newest first. The tab has
+an **«Обновить»** button that re-fetches on demand.
+When the Gateway is down or unauthenticated the response is `{ ok: false, error }`
+and the tab renders a friendly notice (with the same refresh button, so you can
+retry after completing IB login / 2FA). Set `TRADING_UI_IB_FIXTURE` to serve a
+recorded snapshot without a live connection.
 
 Watchlist reconcile: `GET /api/watchlist/reconcile/:ticker` previews how the
 analysis signal would change the candidate; `POST` applies it to the watchlist

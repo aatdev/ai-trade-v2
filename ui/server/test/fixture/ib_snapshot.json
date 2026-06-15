@@ -49,6 +49,72 @@
       "sector": "Consumer Cyclical"
     }
   ],
+  "orders": [
+    {
+      "order_id": "1001",
+      "symbol": "NVDA",
+      "conid": 4815747,
+      "side": "BUY",
+      "order_type": "LMT",
+      "status": "Submitted",
+      "total_quantity": 50,
+      "filled_quantity": 0,
+      "remaining_quantity": 50,
+      "limit_price": 120.5,
+      "stop_price": null,
+      "tif": "GTC",
+      "currency": "USD",
+      "last_execution_time": null,
+      "order_desc": "BUY 50 NVDA LMT 120.50 GTC"
+    },
+    {
+      "order_id": "1002",
+      "symbol": "MSFT",
+      "conid": 272093,
+      "side": "SELL",
+      "order_type": "STP",
+      "status": "PreSubmitted",
+      "total_quantity": 30,
+      "filled_quantity": 0,
+      "remaining_quantity": 30,
+      "limit_price": null,
+      "stop_price": 380.0,
+      "tif": "GTC",
+      "currency": "USD",
+      "last_execution_time": null,
+      "order_desc": "SELL 30 MSFT STP 380.00 GTC"
+    }
+  ],
+  "trades": [
+    {
+      "execution_id": "0000e0d5.1",
+      "symbol": "AAPL",
+      "conid": 265598,
+      "side": "BUY",
+      "quantity": 100,
+      "price": 150.0,
+      "amount": -15000.0,
+      "commission": 1.0,
+      "exchange": "NASDAQ",
+      "sec_type": "STK",
+      "trade_time": "2026-06-12T15:31:00+02:00",
+      "order_desc": "Bot 100 AAPL @ 150.00"
+    },
+    {
+      "execution_id": "0000e0d5.2",
+      "symbol": "TSLA",
+      "conid": 76792991,
+      "side": "SELL",
+      "quantity": 50,
+      "price": 205.0,
+      "amount": 10250.0,
+      "commission": 1.0,
+      "exchange": "NASDAQ",
+      "sec_type": "STK",
+      "trade_time": "2026-06-13T16:02:00+02:00",
+      "order_desc": "Sold 50 TSLA @ 205.00"
+    }
+  ],
   "error": null,
   "source": "fixture"
 }

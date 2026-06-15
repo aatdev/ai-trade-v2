@@ -38,6 +38,8 @@ export function errorSnapshot(error: string, source: 'live' | 'fixture' = 'live'
     account_ids: [],
     summary: null,
     positions: [],
+    orders: [],
+    trades: [],
     error,
     source,
   };
@@ -59,6 +61,8 @@ function normalizeSnapshot(
     account_ids: Array.isArray(v.account_ids) ? v.account_ids.map(String) : [],
     summary: v.summary && typeof v.summary === 'object' ? (v.summary as IbSnapshot['summary']) : null,
     positions: Array.isArray(v.positions) ? (v.positions as IbSnapshot['positions']) : [],
+    orders: Array.isArray(v.orders) ? (v.orders as IbSnapshot['orders']) : [],
+    trades: Array.isArray(v.trades) ? (v.trades as IbSnapshot['trades']) : [],
     error: typeof v.error === 'string' ? v.error : null,
     source: typeof v.source === 'string' ? v.source : source,
   };

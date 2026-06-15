@@ -7,8 +7,9 @@ Client Portal API directly over its local HTTPS port and prints a normalized JSO
 snapshot to stdout, so the Express server can simply shell out to it.
 
 It is strictly read-only: it issues only ``GET`` requests against
-``/portfolio/*`` endpoints. No orders are placed regardless of
-``IB_READ_ONLY_MODE``.
+``/portfolio/*`` (account + positions), ``/iserver/account/orders`` (live
+orders) and ``/iserver/account/trades`` (recent execution history) endpoints.
+No orders are placed regardless of ``IB_READ_ONLY_MODE``.
 
 Connection discovery mirrors ``check_ib_connection.py``: locate
 ``ib-gateway/.runtime/gateway-session.json`` (written by the MCP server when the
@@ -24,6 +25,8 @@ Output (stdout) is always a single JSON object with this shape::
       "account_ids": ["U1234567"],
       "summary": { ...IbAccountSummary } | null,
       "positions": [ { ...IbPosition }, ... ],
+      "orders": [ { ...IbOrder }, ... ],
+      "trades": [ { ...IbTrade }, ... ],
       "error": "<reason>" | null,
       "source": "live" | "fixture"
     }
@@ -212,6 +215,117 @@ def normalize_position(raw: dict) -> dict:
     }
 
 
+def _order_symbol(raw: dict) -> str:
+    """Best-effort ticker for an order row across Client Portal field variants."""
+    for key in ("ticker", "symbol", "contractDesc"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            # "MSFT NASDAQ.NMS STK" -> "MSFT".
+            return val.strip().split()[0]
+    return "?"
+
+
+def _str_field(raw: dict, *keys: str) -> str | None:
+    """First non-empty string among ``keys`` (in order), else None."""
+    for key in keys:
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def normalize_order(raw: dict) -> dict:
+    """Map one Client Portal ``/iserver/account/orders`` row to an IbOrder."""
+    side = _str_field(raw, "side")
+    order_id = raw.get("orderId")
+    if order_id is None:
+        order_id = raw.get("order_id")
+    conid = raw.get("conid")
+    # Limit price lives under "price" (or "limitPrice"); stop under "auxPrice".
+    limit_price = _num(raw.get("price"))
+    if limit_price is None:
+        limit_price = _num(raw.get("limitPrice"))
+    stop_price = _num(raw.get("auxPrice"))
+    if stop_price is None:
+        stop_price = _num(raw.get("stopPrice"))
+    return {
+        "order_id": str(order_id) if order_id is not None else None,
+        "symbol": _order_symbol(raw),
+        "conid": int(conid) if isinstance(conid, (int, float)) else None,
+        "side": side.upper() if side else None,
+        "order_type": _str_field(raw, "orderType", "origOrderType"),
+        "status": _str_field(raw, "status", "order_ccp_status"),
+        "total_quantity": _num(raw.get("totalSize")),
+        "filled_quantity": _num(raw.get("filledQuantity")),
+        "remaining_quantity": _num(raw.get("remainingQuantity")),
+        "limit_price": limit_price,
+        "stop_price": stop_price,
+        "tif": _str_field(raw, "timeInForce", "tif"),
+        "currency": _str_field(raw, "cashCcy", "currency"),
+        "last_execution_time": _str_field(raw, "lastExecutionTime"),
+        "order_desc": _str_field(raw, "orderDesc"),
+    }
+
+
+def _trade_symbol(raw: dict) -> str:
+    """Best-effort ticker for a trade row across Client Portal field variants."""
+    for key in ("symbol", "contract_description_1", "ticker"):
+        val = raw.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().split()[0]
+    return "?"
+
+
+def _trade_time(raw: dict) -> str | None:
+    """Prefer the epoch-ms ``trade_time_r`` as an ISO-8601 string; else the raw string."""
+    epoch_ms = raw.get("trade_time_r")
+    if isinstance(epoch_ms, (int, float)) and not isinstance(epoch_ms, bool) and epoch_ms > 0:
+        try:
+            return (
+                datetime.fromtimestamp(epoch_ms / 1000.0, timezone.utc)
+                .astimezone()
+                .isoformat(timespec="seconds")
+            )
+        except (OverflowError, OSError, ValueError):
+            pass
+    return _str_field(raw, "trade_time")
+
+
+def normalize_trade(raw: dict) -> dict:
+    """Map one Client Portal ``/iserver/account/trades`` row to an IbTrade.
+
+    ``side`` is IB's ``B``/``S`` (or ``BOT``/``SLD``); normalize to ``BUY``/``SELL``.
+    """
+    side = _str_field(raw, "side")
+    norm_side: str | None = None
+    if side:
+        upper = side.upper()
+        if upper in ("B", "BOT", "BUY"):
+            norm_side = "BUY"
+        elif upper in ("S", "SLD", "SELL"):
+            norm_side = "SELL"
+        else:
+            norm_side = upper
+    conid = raw.get("conid")
+    amount = _num(raw.get("net_amount"))
+    if amount is None:
+        amount = _num(raw.get("amount"))
+    return {
+        "execution_id": _str_field(raw, "execution_id", "executionId"),
+        "symbol": _trade_symbol(raw),
+        "conid": int(conid) if isinstance(conid, (int, float)) else None,
+        "side": norm_side,
+        "quantity": _num(raw.get("size")),
+        "price": _num(raw.get("price")),
+        "amount": amount,
+        "commission": _num(raw.get("commission")),
+        "exchange": _str_field(raw, "exchange"),
+        "sec_type": _str_field(raw, "sec_type", "secType"),
+        "trade_time": _trade_time(raw),
+        "order_desc": _str_field(raw, "order_description", "orderDesc"),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Snapshot assembly
 # --------------------------------------------------------------------------- #
@@ -232,6 +346,8 @@ def error_snapshot(message: str, source: str = "live") -> dict:
         "account_ids": [],
         "summary": None,
         "positions": [],
+        "orders": [],
+        "trades": [],
         "error": message,
         "source": source,
     }
@@ -255,6 +371,49 @@ def fetch_positions(port: int, account_id: str, timeout: float) -> list[dict]:
     return positions
 
 
+def fetch_orders(port: int, timeout: float) -> list[dict]:
+    """Fetch live/working orders and normalize them.
+
+    The Client Portal ``/iserver/account/orders`` endpoint returns an envelope
+    ``{"orders": [...], "snapshot": true}``; some Gateway builds return a bare
+    list. Tolerate both and ignore anything else.
+    """
+    payload = http_get_json(port, "/iserver/account/orders", timeout)
+    rows: list = []
+    if isinstance(payload, dict):
+        maybe = payload.get("orders")
+        if isinstance(maybe, list):
+            rows = maybe
+    elif isinstance(payload, list):
+        rows = payload
+    return [normalize_order(r) for r in rows if isinstance(r, dict)]
+
+
+def _trade_sort_key(raw: dict) -> float:
+    """Sortable epoch-ms for a raw trade row (0 when absent), for newest-first order."""
+    epoch = raw.get("trade_time_r")
+    if isinstance(epoch, (int, float)) and not isinstance(epoch, bool):
+        return float(epoch)
+    return 0.0
+
+
+def fetch_trades(port: int, timeout: float) -> list[dict]:
+    """Fetch recent executions (current day + ~6 prior), newest first.
+
+    ``/iserver/account/trades`` normally returns a bare list; tolerate a
+    ``{"trades": [...]}`` envelope and ignore anything else.
+    """
+    payload = http_get_json(port, "/iserver/account/trades", timeout)
+    rows: list = []
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("trades"), list):
+        rows = payload["trades"]
+    rows = [r for r in rows if isinstance(r, dict)]
+    rows.sort(key=_trade_sort_key, reverse=True)
+    return [normalize_trade(r) for r in rows]
+
+
 def build_snapshot(port: int, timeout: float) -> dict:
     """Hit the read-only Client Portal endpoints and assemble the snapshot."""
     accounts = http_get_json(port, "/portfolio/accounts", timeout)
@@ -273,6 +432,17 @@ def build_snapshot(port: int, timeout: float) -> dict:
     summary = normalize_summary(primary, raw_summary if isinstance(raw_summary, dict) else None)
     positions = fetch_positions(port, primary, timeout)
 
+    # Orders and trades are best-effort add-ons: never fail the whole snapshot
+    # (account + positions are the primary payload) if either endpoint hiccups.
+    try:
+        orders = fetch_orders(port, timeout)
+    except Exception:  # noqa: BLE001 - degrade gracefully, keep account/positions
+        orders = []
+    try:
+        trades = fetch_trades(port, timeout)
+    except Exception:  # noqa: BLE001 - degrade gracefully, keep account/positions
+        trades = []
+
     return {
         "ok": True,
         "generated_at": _now_iso(),
@@ -281,6 +451,8 @@ def build_snapshot(port: int, timeout: float) -> dict:
         "account_ids": account_ids,
         "summary": summary,
         "positions": positions,
+        "orders": orders,
+        "trades": trades,
         "error": None,
         "source": "live",
     }
@@ -332,6 +504,8 @@ def load_fixture(path: str) -> dict:
     data.setdefault("generated_at", _now_iso())
     data.setdefault("error", None)
     data.setdefault("positions", [])
+    data.setdefault("orders", [])
+    data.setdefault("trades", [])
     return data
 
 

@@ -24,6 +24,16 @@ describe('GET /api/ib', () => {
     const tsla = res.body.positions.find((p: { symbol: string }) => p.symbol === 'TSLA');
     expect(tsla.side).toBe('short');
     expect(tsla.position).toBe(-50);
+    expect(res.body.orders).toHaveLength(2);
+    const stop = res.body.orders.find((o: { symbol: string }) => o.symbol === 'MSFT');
+    expect(stop.side).toBe('SELL');
+    expect(stop.order_type).toBe('STP');
+    expect(stop.stop_price).toBe(380.0);
+    expect(res.body.trades).toHaveLength(2);
+    const sell = res.body.trades.find((t: { symbol: string }) => t.symbol === 'TSLA');
+    expect(sell.side).toBe('SELL');
+    expect(sell.quantity).toBe(50);
+    expect(sell.price).toBe(205.0);
   });
 
   it('degrades to a structured error when the fixture is missing', async () => {
