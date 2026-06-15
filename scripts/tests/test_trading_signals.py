@@ -250,6 +250,15 @@ class TestOpenSignals:
         signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 154.0}}, "allow", set())
         assert signals == []
 
+    def test_armed_ticker_suppresses_open_signal(self):
+        # A bracket already placed via the watchlist-order daemon must not also
+        # surface an OPEN_LONG (the trader would otherwise re-place it manually).
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NVDA": {"price": 156.0}}, "allow", set(), armed_tickers={"NVDA"}
+        )
+        assert signals == []
+
     def test_missed_above_worst_entry(self):
         wl = make_watchlist([long_candidate()])
         signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 160.0}}, "allow", set())

@@ -471,6 +471,7 @@ def evaluate_signals(
     sent: set[str],
     *,
     today: dt.date | None = None,
+    armed_tickers: set[str] | None = None,
 ) -> list[dict]:
     """Compute the actionable signals for this monitoring round.
 
@@ -481,11 +482,16 @@ def evaluate_signals(
     carry ``earnings_date`` arm the earnings rules: OPEN_SHORT is blocked
     within SHORT_EARNINGS_GATE_WEEKDAYS of the report (plan rule 6.4), and any
     open position within POSITION_EARNINGS_WARN_WEEKDAYS gets EARNINGS_SOON.
+
+    ``armed_tickers`` (tickers whose bracket was already placed via the
+    watchlist-order daemon) are suppressed from OPEN signals so the trader is not
+    told to manually place an order that is already live in Interactive Brokers.
     """
     today = today or dt.date.today()
     signals: list[dict] = []
     positions = (heat or {}).get("positions") or []
     open_tickers = {str(p.get("ticker", "")).upper() for p in positions}
+    armed = {str(t).upper() for t in (armed_tickers or set())}
 
     # --- manage open positions (always, regardless of gate) -----------------
     for position in positions:
@@ -518,7 +524,7 @@ def evaluate_signals(
     ranked = sorted(candidates, key=lambda c: c.get("score") or 0, reverse=True)
     for candidate in ranked:
         ticker = str(candidate.get("ticker", "")).upper()
-        if not ticker or ticker in open_tickers:
+        if not ticker or ticker in open_tickers or ticker in armed:
             continue
         quote = quotes.get(ticker)
         if not quote:

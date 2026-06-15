@@ -47,7 +47,9 @@ This skill requires the Interactive Brokers MCP Server to be configured and conn
 - `get_order_status` — execution status of a specific order
 - `get_flex_query` / `list_flex_queries` — historical statements, realized P&L, dividend income (requires `IB_FLEX_TOKEN`)
 
-**Order placement is out of scope for this skill.** `place_order` exists on the server but this skill is analysis-only: it produces rebalancing *recommendations*, never auto-executes. Run the MCP server with `IB_READ_ONLY_MODE=true` so `place_order` is disabled at the server level while analysis runs.
+**Order placement is out of scope for this skill's MCP-driven analysis.** `place_order` exists on the server but this skill is analysis-only: it produces rebalancing *recommendations*, never auto-executes. Run the MCP server with `IB_READ_ONLY_MODE=true` so `place_order` is disabled at the server level while analysis runs.
+
+**Separate, opt-in order-placement helper:** `scripts/place_ib_bracket.py` is a write-side companion to the read-only snapshot. It talks to the IB Gateway Client Portal REST API directly (the same transport as `fetch_ib_snapshot.py`) to place a native bracket (entry buy/sell-stop + protective stop + take-profit via `cOID`/`parentId`). Because the direct REST path bypasses `IB_READ_ONLY_MODE`, it carries its own two-lock guard: it only POSTs when **both** `IB_ALLOW_ORDER_PLACEMENT=true` is set **and** the `--live` flag is passed; otherwise it prints a preview and posts nothing. It is driven by the watchlist-order automation (`scripts/watchlist_orders.py`), not by the normal "analyze my portfolio" flow.
 
 If the Interactive Brokers MCP Server is not connected, inform the user and provide setup instructions from `references/ib-mcp-setup.md`.
 

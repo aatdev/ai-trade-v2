@@ -1,0 +1,548 @@
+"""Tests for scripts/watchlist_orders.py (send producer + pure matching)."""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+_SCRIPTS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_SCRIPTS))
+
+import watchlist_orders as wo  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# Fixtures
+# --------------------------------------------------------------------------- #
+def _thesis(tid, ticker, side="long", status="ENTRY_READY"):
+    return {"thesis_id": tid, "ticker": ticker, "side": side, "status": status}
+
+
+def _cand(ticker, side="long", thesis_id=None, **geo):
+    base = {
+        "ticker": ticker,
+        "side": side,
+        "pivot": 100.0,
+        "stop": 95.0,
+        "target": 110.0,
+        "shares": 10,
+        "risk_dollars": 50.0,
+    }
+    base.update(geo)
+    if thesis_id:
+        base["thesis_id"] = thesis_id
+    return base
+
+
+# --------------------------------------------------------------------------- #
+# Pure matching
+# --------------------------------------------------------------------------- #
+def test_select_cards_matches_by_thesis_id():
+    wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]}
+    theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    cards = wo.select_cards(wl, theses, "2026-06-15")
+    assert len(cards) == 1
+    assert cards[0]["thesis_id"] == "th_nvda_pvt_20260612_aaaa"
+    assert cards[0]["coid"] == "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
+
+
+def test_select_cards_fallback_ticker_side():
+    wl = {"candidates": [_cand("AMD", side="long")]}  # no thesis_id on candidate
+    theses = [_thesis("th_amd_pvt_20260612_bbbb", "AMD", "long")]
+    cards = wo.select_cards(wl, theses, "2026-06-15")
+    assert len(cards) == 1 and cards[0]["thesis_id"] == "th_amd_pvt_20260612_bbbb"
+
+
+def test_select_cards_skips_non_entry_ready():
+    wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]}
+    theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA", status="ACTIVE")]
+    assert wo.select_cards(wl, theses, "2026-06-15") == []
+
+
+def test_select_cards_skips_incomplete_geometry():
+    wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa", target=None)]}
+    theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    assert wo.select_cards(wl, theses, "2026-06-15") == []
+
+
+def test_select_cards_side_mismatch_no_match():
+    wl = {"candidates": [_cand("CHTR", side="short")]}
+    theses = [_thesis("th_chtr_pvt_20260612_cccc", "CHTR", "long")]  # long thesis, short candidate
+    assert wo.select_cards(wl, theses, "2026-06-15") == []
+
+
+# --------------------------------------------------------------------------- #
+# cmd_send guards + happy path
+# --------------------------------------------------------------------------- #
+class _Args:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.dry_run = False
+        self.no_telegram = False
+        self.__dict__.update(kw)
+
+
+@pytest.fixture
+def patched(monkeypatch, tmp_path):
+    """Point the ledger at tmp and stub the scheduler helpers."""
+    monkeypatch.setattr(wo.sched, "TRADING_DATA_DIR", tmp_path)
+    (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(wo.sched, "decision_path", lambda d: tmp_path / "gate.json")
+    monkeypatch.setattr(wo.sched, "latest_watchlist", lambda: tmp_path / "wl.json")
+    monkeypatch.setattr(wo.sched, "_watchlist_is_fresh", lambda wl, today: True)
+    monkeypatch.setattr(wo.pib, "is_paper", lambda: True)
+    monkeypatch.setattr(wo.pib, "mode_badge", lambda: "📝 PAPER")
+    monkeypatch.setattr(wo.ti, "resolve_credentials", lambda *a, **k: ("BOT", "CHAT"))
+    return tmp_path
+
+
+def test_cmd_send_skips_when_gate_not_allow(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "restrict", "degraded": False}
+    )
+    sent = []
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: sent.append(a) or 1)
+    assert wo.cmd_send(_Args()) == 0
+    assert sent == []  # nothing sent
+
+
+def test_cmd_send_skips_when_degraded(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": True}
+    )
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: 1)
+    assert wo.cmd_send(_Args()) == 0
+
+
+def test_cmd_send_skips_when_stale(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+    )
+    monkeypatch.setattr(wo.sched, "_read_json", lambda p: {"date": "2020-01-01", "candidates": []})
+    monkeypatch.setattr(wo.sched, "_watchlist_is_fresh", lambda wl, today: False)
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: 1)
+    assert wo.cmd_send(_Args()) == 0
+
+
+def test_cmd_send_happy_path_writes_ledger(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+    )
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    )
+
+    sent = {}
+
+    def fake_send(card, token, *, bot_token, chat_id, mode_badge):
+        sent["token"] = token
+        sent["badge"] = mode_badge
+        return 555
+
+    monkeypatch.setattr(wo.ti, "send_order_card", fake_send)
+
+    rc = wo.cmd_send(_Args())
+    assert rc == 0
+    assert sent["token"] == "th_nvda_pvt_20260612_aaaa"
+    ledger = wo.load_ledger("2026-06-15")
+    entry = ledger["orders"]["th_nvda_pvt_20260612_aaaa"]
+    assert entry["status"] == "pending"
+    assert entry["message_id"] == 555
+    assert entry["coid"] == "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
+    assert ledger["mode"] == "paper"
+
+
+def test_cmd_send_idempotent_no_duplicate(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+    )
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    )
+    calls = []
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: calls.append(1) or 1)
+
+    wo.cmd_send(_Args())
+    wo.cmd_send(_Args())  # second run must not resend
+    assert len(calls) == 1
+
+
+def test_cmd_send_dry_run_sends_nothing(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+    )
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    )
+    monkeypatch.setattr(
+        wo.ti, "send_order_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no send"))
+    )
+    assert wo.cmd_send(_Args(dry_run=True)) == 0
+    assert not wo.ledger_path("2026-06-15").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: heat gate
+# --------------------------------------------------------------------------- #
+def _entry(status="pending", **kw):
+    e = {
+        "thesis_id": "th_nvda_pvt_20260612_aaaa",
+        "ticker": "NVDA",
+        "side": "long",
+        "pivot": 100.0,
+        "stop": 95.0,
+        "target": 110.0,
+        "shares": 10,
+        "risk_dollars": 50.0,
+        "coid": "wl-th_nvda_pvt_20260612_aaaa-2026-06-15",
+        "message_id": None,
+        "chat_id": None,
+        "status": status,
+        "order_ids": [],
+        "entry_order_id": None,
+        "placed_at": None,
+        "fill_price": None,
+        "error": None,
+    }
+    e.update(kw)
+    return e
+
+
+def test_heat_ok_for_no_file_passes(monkeypatch):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: None)
+    ok, reason = wo.heat_ok_for(_entry())
+    assert ok is True and "heat-гейт пропущен" in reason
+
+
+def test_heat_ok_for_blocks_no_slots(monkeypatch, tmp_path):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: tmp_path / "h.json")
+    monkeypatch.setattr(
+        wo,
+        "_read_json_file",
+        lambda p: {"remaining_position_slots": 0, "remaining_heat_dollars": 9000},
+    )
+    ok, reason = wo.heat_ok_for(_entry())
+    assert ok is False and "слотов" in reason
+
+
+def test_heat_ok_for_blocks_insufficient_heat(monkeypatch, tmp_path):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: tmp_path / "h.json")
+    monkeypatch.setattr(
+        wo,
+        "_read_json_file",
+        lambda p: {"remaining_position_slots": 3, "remaining_heat_dollars": 40},
+    )
+    ok, reason = wo.heat_ok_for(_entry(risk_dollars=50.0))
+    assert ok is False and "heat" in reason
+
+
+def test_heat_ok_for_passes(monkeypatch, tmp_path):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: tmp_path / "h.json")
+    monkeypatch.setattr(
+        wo,
+        "_read_json_file",
+        lambda p: {"remaining_position_slots": 3, "remaining_heat_dollars": 9000},
+    )
+    ok, _ = wo.heat_ok_for(_entry())
+    assert ok is True
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: handle_open
+# --------------------------------------------------------------------------- #
+def test_handle_open_preview_when_not_live(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(
+        wo.pib, "submit_bracket", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no place"))
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=False, bot_token="B")
+    assert entry["status"] == "preview"
+
+
+def test_handle_open_blocked_by_heat(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (False, "нет свободных слотов позиций (heat)"))
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "skipped" and "слот" in entry["error"]
+
+
+def test_handle_open_gateway_down(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    entry = _entry()
+    wo.handle_open(entry, port=None, live=True, bot_token="B")
+    assert entry["status"] == "error" and "gateway" in entry["error"].lower()
+
+
+def test_handle_open_success(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 265598)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_bracket",
+        lambda *a, **k: {
+            "ok": True,
+            "order_ids": ["100", "101", "102"],
+            "entry_order_id": "100",
+            "raw": [],
+        },
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "placed"
+    assert entry["entry_order_id"] == "100" and entry["order_ids"] == ["100", "101", "102"]
+    assert entry["placed_at"] is not None
+
+
+def test_handle_open_idempotent_existing_coid(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    entry = _entry()
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: {entry["coid"]})
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_bracket",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no double place")),
+    )
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "placed"
+
+
+def test_handle_open_already_placed_noop(monkeypatch):
+    monkeypatch.setattr(
+        wo, "heat_ok_for", lambda e: (_ for _ in ()).throw(AssertionError("should not check"))
+    )
+    entry = _entry(status="placed")
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "placed"
+
+
+def test_handle_open_broker_rejects(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_bracket",
+        lambda *a, **k: {
+            "ok": False,
+            "order_ids": [],
+            "entry_order_id": None,
+            "raw": {"error": "x"},
+        },
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "error"
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: handle_skip
+# --------------------------------------------------------------------------- #
+def test_handle_skip_leaves_entry_ready():
+    entry = _entry()
+    wo.handle_skip(entry, bot_token="B")
+    assert entry["status"] == "skipped"
+
+
+def test_handle_skip_noop_when_placed():
+    entry = _entry(status="placed")
+    wo.handle_skip(entry, bot_token="B")
+    assert entry["status"] == "placed"
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: expire_pending_cards (timeout -> strip buttons)
+# --------------------------------------------------------------------------- #
+def test_expire_pending_cards_flips_and_strips(monkeypatch):
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+    ledger = {
+        "orders": {
+            "t1": _entry(thesis_id="t1", status="pending", message_id=5, chat_id=-1),
+            "t2": _entry(thesis_id="t2", status="placed", message_id=6, chat_id=-1),
+            "t3": _entry(thesis_id="t3", status="skipped", message_id=7, chat_id=-1),
+        }
+    }
+    changed = wo.expire_pending_cards(ledger, bot_token="B")
+    assert changed is True
+    assert ledger["orders"]["t1"]["status"] == "expired"
+    assert ledger["orders"]["t2"]["status"] == "placed"  # non-pending untouched
+    assert ledger["orders"]["t3"]["status"] == "skipped"
+    assert len(edits) == 1  # only the pending card's buttons were stripped
+
+
+def test_expire_pending_cards_noop_when_none_pending(monkeypatch):
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no edit")))
+    ledger = {"orders": {"t1": _entry(status="placed", message_id=5, chat_id=-1)}}
+    assert wo.expire_pending_cards(ledger, bot_token="B") is False
+
+
+class _ListenTimeoutArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.live = False
+        self.window_sec = 0  # deadline already passed -> exercises the timeout branch
+        self.once = False
+        self.__dict__.update(kw)
+
+
+def test_cmd_listen_timeout_expires_pending(monkeypatch, patched):
+    ledger = {
+        "date": "2026-06-15", "mode": "paper",
+        "orders": {"th_x_pvt_20260101_0001": _entry(
+            thesis_id="th_x_pvt_20260101_0001", status="pending", message_id=9, chat_id=-100
+        )},
+    }
+    wo.save_ledger("2026-06-15", ledger)
+    monkeypatch.setattr(wo.ti, "poll_updates", lambda *a, **k: [])
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+
+    rc = wo.cmd_listen(_ListenTimeoutArgs())
+    assert rc == 0
+    entry = wo.load_ledger("2026-06-15")["orders"]["th_x_pvt_20260101_0001"]
+    assert entry["status"] == "expired"
+    assert edits  # the card's buttons were stripped on timeout
+
+
+def test_cmd_send_skips_expired(monkeypatch, patched):
+    # An expired card must not be re-sent the same day (idempotent guard).
+    monkeypatch.setattr(wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False})
+    monkeypatch.setattr(
+        wo.sched, "_read_json",
+        lambda p: {"date": "2026-06-15", "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]},
+    )
+    monkeypatch.setattr(wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")])
+    # Seed the ledger with an already-expired entry for the same thesis.
+    seeded = {"date": "2026-06-15", "mode": "paper",
+              "orders": {"th_nvda_pvt_20260612_aaaa": _entry(thesis_id="th_nvda_pvt_20260612_aaaa", status="expired")}}
+    wo.save_ledger("2026-06-15", seeded)
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no resend")))
+    assert wo.cmd_send(_Args()) == 0
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: check_fills
+# --------------------------------------------------------------------------- #
+def test_check_fills_transitions_to_active(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib,
+        "order_fill_status",
+        lambda port, oid: {"filled": True, "avg_price": 155.4, "status": "Filled"},
+    )
+    calls = []
+    monkeypatch.setattr(
+        wo,
+        "transition_to_active",
+        lambda tid, price, shares: calls.append((tid, price, shares)) or True,
+    )
+    ledger = {"orders": {"t1": _entry(status="placed", entry_order_id="100")}}
+    changed = wo.check_fills(ledger, port=9000, bot_token="B")
+    assert changed is True
+    assert ledger["orders"]["t1"]["status"] == "filled"
+    assert ledger["orders"]["t1"]["fill_price"] == 155.4
+    assert calls == [("th_nvda_pvt_20260612_aaaa", 155.4, 10)]
+
+
+def test_check_fills_skips_unfilled(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib,
+        "order_fill_status",
+        lambda port, oid: {"filled": False, "avg_price": None, "status": "PreSubmitted"},
+    )
+    ledger = {"orders": {"t1": _entry(status="placed", entry_order_id="100")}}
+    assert wo.check_fills(ledger, port=9000, bot_token="B") is False
+    assert ledger["orders"]["t1"]["status"] == "placed"
+
+
+def test_check_fills_gives_up_after_max_attempts(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib,
+        "order_fill_status",
+        lambda port, oid: {"filled": True, "avg_price": 100.0, "status": "Filled"},
+    )
+    monkeypatch.setattr(wo, "transition_to_active", lambda *a, **k: False)
+    ledger = {"orders": {"t1": _entry(status="placed", entry_order_id="100")}}
+    for _ in range(wo.MAX_FILL_TRANSITION_ATTEMPTS):
+        wo.check_fills(ledger, port=9000, bot_token="B")
+    assert ledger["orders"]["t1"]["status"] == "error"
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: cmd_listen --once
+# --------------------------------------------------------------------------- #
+class _ListenArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.live = True
+        self.window_sec = 1
+        self.once = True
+        self.__dict__.update(kw)
+
+
+def test_cmd_listen_once_processes_open_tap(monkeypatch, patched):
+    # Seed a pending ledger entry for the token the callback will reference.
+    ledger = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {"th_x_pvt_20260101_0001": _entry(thesis_id="th_x_pvt_20260101_0001")},
+    }
+    wo.save_ledger("2026-06-15", ledger)
+
+    update = {
+        "update_id": 7,
+        "callback_query": {
+            "id": "cq1",
+            "data": "o:th_x_pvt_20260101_0001",
+            "message": {"message_id": 1, "chat": {"id": -100}},
+        },
+    }
+    monkeypatch.setattr(wo.ti, "poll_updates", lambda bot, off, timeout=25: [update])
+    monkeypatch.setattr(wo.ti, "answer_callback", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(wo.pib, "connect", lambda *a, **k: 9000)
+    opened = []
+    monkeypatch.setattr(
+        wo,
+        "handle_open",
+        lambda entry, port, *, live, bot_token: opened.append((entry["thesis_id"], port, live))
+        or entry.update(status="placed"),
+    )
+
+    rc = wo.cmd_listen(_ListenArgs())
+    assert rc == 0
+    assert opened and opened[0][0] == "th_x_pvt_20260101_0001" and opened[0][2] is True
+    # offset advanced past the processed update
+    assert wo.load_offset() == 8
+    # ledger persisted the new status
+    assert wo.load_ledger("2026-06-15")["orders"]["th_x_pvt_20260101_0001"]["status"] == "placed"

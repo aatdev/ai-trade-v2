@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!--
+  Watchlist-order confirmation daemon. Starts ~14:55 CET Mon-Fri (just before the
+  premarket slot sends order cards) and self-exits after its window (~7h, through
+  the US close). It long-polls Telegram for "Открыть"/"Не открывать" taps and
+  watches IB for fills. A PID lock keeps a single instance.
+
+  Real order placement also requires IB_ALLOW_ORDER_PLACEMENT=true in .env;
+  without it the daemon runs in preview (places nothing) even with --live.
+
+  SETUP: Replace $HOME and $PROJECT_DIR before installing.
+    sed "s|\$HOME|$HOME|g; s|\$PROJECT_DIR|$(pwd)|g" \
+      launchd/com.trade-analysis.watchlist-order-daemon.plist \
+      > ~/Library/LaunchAgents/com.trade-analysis.watchlist-order-daemon.plist
+    launchctl load ~/Library/LaunchAgents/com.trade-analysis.watchlist-order-daemon.plist
+-->
+<dict>
+	<key>Label</key>
+	<string>com.trade-analysis.watchlist-order-daemon</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>$PROJECT_DIR/scripts/run_watchlist_orders.sh</string>
+		<string>listen</string>
+		<string>--live</string>
+	</array>
+
+	<key>WorkingDirectory</key>
+	<string>$PROJECT_DIR</string>
+
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>55</integer></dict>
+		<dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>55</integer></dict>
+		<dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>55</integer></dict>
+		<dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>55</integer></dict>
+		<dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>14</integer><key>Minute</key><integer>55</integer></dict>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>$HOME</string>
+	</dict>
+
+	<key>StandardOutPath</key>
+	<string>$PROJECT_DIR/logs/launchd_watchlist_order_daemon.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>$PROJECT_DIR/logs/launchd_watchlist_order_daemon_error.log</string>
+
+	<key>RunAtLoad</key>
+	<false/>
+</dict>
+</plist>

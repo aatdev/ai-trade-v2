@@ -58,3 +58,4 @@ See the skill's SKILL.md for the complete workflow.
 **Scripts:**
 
 - `skills/send-telegram/scripts/send_telegram.py`
+- `skills/send-telegram/scripts/telegram_interactive.py`

@@ -259,6 +259,7 @@ VCP_SCREEN_SCRIPT = SKILLS_DIR / "vcp-screener" / "scripts" / "screen_vcp.py"
 SHORT_SCREEN_SCRIPT = SKILLS_DIR / "swing-short-screener" / "scripts" / "screen_short.py"
 PLANNER_SCRIPT = SKILLS_DIR / "breakout-trade-planner" / "scripts" / "plan_breakout_trades.py"
 TRADER_MEMORY_CLI = SKILLS_DIR / "trader-memory-core" / "scripts" / "trader_memory_cli.py"
+WATCHLIST_ORDERS_SCRIPT = PROJECT_ROOT / "scripts" / "watchlist_orders.py"
 IBD_SCRIPT = SKILLS_DIR / "ibd-distribution-day-monitor" / "scripts" / "ibd_monitor.py"
 MACRO_SCRIPT = SKILLS_DIR / "macro-regime-detector" / "scripts" / "macro_regime_detector.py"
 FTD_SCRIPT = SKILLS_DIR / "ftd-detector" / "scripts" / "ftd_detector.py"
@@ -298,7 +299,8 @@ def _rel(p: Path) -> str:
     except ValueError:
         return str(p)
 
-CBIN="claude-p"
+
+CBIN = "claude-p"
 
 # Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
 CLAUDE_FALLBACK_PATHS = [
@@ -336,8 +338,8 @@ def _child_claude_env() -> dict:
     env.pop("CLAUDECODE", None)
     # for key in [k for k in env if k.startswith("CLAUDE_CODE_")]:
     #     del env[key]
-    env['RUST_LOG'] = 'debug'
-    log(f'ENVIRONMENT: {" ".join(f"{k}={v!r}" for k, v in env.items())}', logging.INFO)
+    env["RUST_LOG"] = "debug"
+    log(f"ENVIRONMENT: {' '.join(f'{k}={v!r}' for k, v in env.items())}", logging.INFO)
     return env
 
 
@@ -474,7 +476,10 @@ def _stream_enabled() -> bool:
     scripts/run_trading_schedule.sh --slot weekly``.
     """
     return os.environ.get("TRADING_SCHEDULE_STREAM", "").strip().lower() in (
-        "1", "true", "yes", "on",
+        "1",
+        "true",
+        "yes",
+        "on",
     )
 
 
@@ -495,8 +500,13 @@ def _popen_tee(cmd, *, env, timeout, stream):
         )
 
     proc = subprocess.Popen(
-        cmd, cwd=PROJECT_ROOT, env=env, text=True, bufsize=1,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cmd,
+        cwd=PROJECT_ROOT,
+        env=env,
+        text=True,
+        bufsize=1,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     timed_out = {"v": False}
 
@@ -550,9 +560,13 @@ def _run_claude_kill_ppid(
     )
     cmd = [claude_bin, "--permission-mode", perm_mode, *extra, wrapped]
 
-    log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}, mode=kill-ppid) ---")
-    log(f"command: {claude_bin} --permission-mode {perm_mode} <wrapped prompt {len(wrapped)} chars>",
-        logging.INFO)
+    log(
+        f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}, mode=kill-ppid) ---"
+    )
+    log(
+        f"command: {claude_bin} --permission-mode {perm_mode} <wrapped prompt {len(wrapped)} chars>",
+        logging.INFO,
+    )
     if dry_run:
         log(f"(dry-run) kill-ppid prompt:\n{wrapped}")
         output_path.unlink(missing_ok=True)
@@ -560,8 +574,7 @@ def _run_claude_kill_ppid(
 
     started = time.monotonic()
     try:
-        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout,
-                         stream=_stream_enabled())
+        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout, stream=_stream_enabled())
     except subprocess.TimeoutExpired:
         log(f"{label}: claude timed out after {timeout}s", logging.ERROR)
         return False
@@ -601,7 +614,7 @@ def run_claude(
     label: str,
     dry_run: bool,
     timeout: int,
-    expected_output: "Path | str | None" = None,
+    expected_output: Path | str | None = None,
 ) -> bool:
     """Run one workflow headlessly via ``claude``. Returns success bool.
 
@@ -625,26 +638,34 @@ def run_claude(
 
     if exit_mode == "kill-ppid":
         return _run_claude_kill_ppid(
-            prompt, label=label, dry_run=dry_run, timeout=timeout,
-            claude_bin=claude_bin, perm_mode=perm_mode, extra=extra,
+            prompt,
+            label=label,
+            dry_run=dry_run,
+            timeout=timeout,
+            claude_bin=claude_bin,
+            perm_mode=perm_mode,
+            extra=extra,
         )
 
-    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt ]
+    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt]
 
     log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
-    log(f"command: {claude_bin} -p <prompt {len(prompt)} chars> --permission-mode {perm_mode}  {' '.join(extra)}",
-        logging.INFO)
+    log(
+        f"command: {claude_bin} -p <prompt {len(prompt)} chars> --permission-mode {perm_mode}  {' '.join(extra)}",
+        logging.INFO,
+    )
     if dry_run:
         log("(dry-run) prompt that would be sent to claude:\n" + prompt)
         return True
 
     started = time.monotonic()
     try:
-        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout,
-                         stream=_stream_enabled())
+        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout, stream=_stream_enabled())
     except subprocess.TimeoutExpired:
-        log(f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
-            logging.ERROR)
+        log(
+            f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
+            logging.ERROR,
+        )
         return False
     except OSError as exc:
         log(f"{label}: could not launch claude ({exc})", logging.ERROR)
@@ -670,12 +691,18 @@ def run_claude(
         except OSError:
             produced = False
         if not produced:
-            log(f"{label}: no expected output at {_rel(out)} (rc=0, {elapsed:.0f}s) -- "
-                "claude produced nothing", logging.ERROR)
+            log(
+                f"{label}: no expected output at {_rel(out)} (rc=0, {elapsed:.0f}s) -- "
+                "claude produced nothing",
+                logging.ERROR,
+            )
             return False
     elif not (res.stdout and res.stdout.strip()):
-        log(f"{label}: claude produced no output (rc=0, {elapsed:.0f}s) -- "
-            "likely empty/failed session", logging.ERROR)
+        log(
+            f"{label}: claude produced no output (rc=0, {elapsed:.0f}s) -- "
+            "likely empty/failed session",
+            logging.ERROR,
+        )
         return False
 
     log(f"--- claude workflow DONE: {label} in {elapsed:.0f}s ---")
@@ -992,7 +1019,7 @@ def _watchlist_is_fresh(wl: dict | None, today: dt.date) -> bool:
     """A watchlist arms OPEN signals only when built today or on the previous
     US trading day (the evening run builds tomorrow's list). After a few
     failed evenings the 'latest' file is days old — its levels are stale and
-    must not trigger entries. Unparseable/missing date counts as stale."""
+    must not trigger entries. Unparsable/missing date counts as stale."""
     raw = (wl or {}).get("date")
     try:
         built = dt.date.fromisoformat(str(raw))
@@ -1328,6 +1355,45 @@ def run_regime_gate(
 
 
 # --------------------------------------------------------------------------- #
+# Watchlist-order automation (Шаг 2) — producer hook + armed-ticker lookup
+# --------------------------------------------------------------------------- #
+def _pending_orders_path(date_str: str) -> Path:
+    return TRADING_DATA_DIR / "logs" / f"pending_orders_{date_str}.json"
+
+
+def armed_order_tickers(date_str: str) -> set[str]:
+    """Tickers whose bracket is already placed/filled today (suppress OPEN dupes)."""
+    ledger = _read_json(_pending_orders_path(date_str))
+    if not ledger:
+        return set()
+    out: set[str] = set()
+    for entry in (ledger.get("orders") or {}).values():
+        if isinstance(entry, dict) and entry.get("status") in {"placed", "filled"}:
+            ticker = entry.get("ticker")
+            if ticker:
+                out.add(str(ticker).upper())
+    return out
+
+
+def _send_watchlist_cards(date_str: str, dec: dict, args) -> None:
+    """Producer hook: send Telegram order cards for ENTRY_READY candidates.
+
+    Only fires on a clean ``allow`` gate (not degraded), and never on dry-run /
+    --no-telegram. Placing the orders is a separate, opt-in step handled by the
+    ``watchlist_orders.py listen`` daemon — this only rings the trader."""
+    if args.dry_run or args.no_telegram:
+        return
+    if dec.get("degraded") or dec.get("decision") != "allow":
+        return
+    run_skill_script(
+        [WATCHLIST_ORDERS_SCRIPT, "send", "--date", date_str],
+        label="watchlist-orders send (Шаг 2 cards)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Slot handlers
 # --------------------------------------------------------------------------- #
 def slot_premarket(date_str: str, args) -> int:
@@ -1366,13 +1432,15 @@ def slot_premarket(date_str: str, args) -> int:
     # alert sync need it (the heat refresh above reads only local YAML).
     if not args.dry_run and not tv_available():
         msg = (
-            _tv_down_text(
-                "Premarket: вечерний скрин и алерты без TradingView не сработают."
-            )
+            _tv_down_text("Premarket: вечерний скрин и алерты без TradingView не сработают.")
             + "\n\n"
             + msg
         )
     notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
+    # Шаг 2: if the gate is open and the watchlist is fresh, ring the trader with
+    # per-candidate order cards (the listen daemon places them on confirmation).
+    if wl_data is not None and _watchlist_is_fresh(wl_data, _today):
+        _send_watchlist_cards(date_str, dec, args)
     return 0 if ok or args.dry_run else 1
 
 
@@ -1526,9 +1594,18 @@ def _parse_signals_md(ticker: str) -> dict | None:
 
     if None in (trigger, stop, t1):
         return None
-    return {"ticker": T, "date": date, "direction": direction,
-            "trigger": trigger, "stop": stop, "t1": t1, "t2": t2, "t3": t3,
-            "entry_low": entry_low, "entry_high": entry_high}
+    return {
+        "ticker": T,
+        "date": date,
+        "direction": direction,
+        "trigger": trigger,
+        "stop": stop,
+        "t1": t1,
+        "t2": t2,
+        "t3": t3,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
+    }
 
 
 def _run_ticker_analysis(ticker: str, args) -> bool:
@@ -1576,12 +1653,24 @@ def _invalidate_thesis(thesis_id: str, *, reason: str) -> None:
     The state machine forbids `transition <id> INVALIDATED` (terminal states go
     through terminate()), and the CLI launcher routes only store/ingest/review/
     heat — so the correct invocation is `store terminate`."""
-    cmd = [sys.executable, str(TRADER_MEMORY_CLI), "store", "terminate", thesis_id,
-           "--terminal-status", "INVALIDATED", "--exit-reason", reason]
+    cmd = [
+        sys.executable,
+        str(TRADER_MEMORY_CLI),
+        "store",
+        "terminate",
+        thesis_id,
+        "--terminal-status",
+        "INVALIDATED",
+        "--exit-reason",
+        reason,
+    ]
     try:
         res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
-            log(f"thesis invalidate {thesis_id}: rc={res.returncode} {res.stderr.strip()}", logging.WARNING)
+            log(
+                f"thesis invalidate {thesis_id}: rc={res.returncode} {res.stderr.strip()}",
+                logging.WARNING,
+            )
         else:
             log(f"thesis invalidated: {thesis_id} ({reason})")
     except (subprocess.SubprocessError, OSError) as exc:
@@ -1627,7 +1716,8 @@ def _terminate_offside_theses(dec: dict, args) -> list[str]:
     regime = "long" if decision == "allow" else "short"
     wrong_side = "short" if decision == "allow" else "long"
     offside = [
-        t for t in _list_theses()
+        t
+        for t in _list_theses()
         if str(t.get("status", "")).upper() in NON_OPEN_THESIS_STATES
         and str(t.get("side") or "long").lower() == wrong_side
         and t.get("thesis_id")
@@ -1636,16 +1726,20 @@ def _terminate_offside_theses(dec: dict, args) -> list[str]:
         return []
     ids = [t["thesis_id"] for t in offside]
     if args.dry_run:
-        log(f"(dry-run) would invalidate {len(ids)} off-side ({wrong_side}) non-open "
-            f"thesis/theses on {regime} regime: " + ", ".join(ids))
+        log(
+            f"(dry-run) would invalidate {len(ids)} off-side ({wrong_side}) non-open "
+            f"thesis/theses on {regime} regime: " + ", ".join(ids)
+        )
         return ids
     for t in offside:
         _invalidate_thesis(
             t["thesis_id"],
             reason=f"regime -> {regime} ({decision}): off-side {wrong_side} thesis, not yet a position",
         )
-    log(f"regime-flip hygiene: invalidated {len(ids)} off-side ({wrong_side}) non-open "
-        f"thesis/theses on {regime} regime: " + ", ".join(ids))
+    log(
+        f"regime-flip hygiene: invalidated {len(ids)} off-side ({wrong_side}) non-open "
+        f"thesis/theses on {regime} regime: " + ", ".join(ids)
+    )
     return ids
 
 
@@ -1653,8 +1747,10 @@ def _offside_note(terminated: list[str] | None) -> str:
     """One-line Telegram note summarising regime-flip thesis invalidation."""
     if not terminated:
         return ""
-    return (f"♻️ Смена режима: инвалидировано {len(terminated)} непозиционных "
-            "тезисов другого направления (IDEA/ENTRY_READY).")
+    return (
+        f"♻️ Смена режима: инвалидировано {len(terminated)} непозиционных "
+        "тезисов другого направления (IDEA/ENTRY_READY)."
+    )
 
 
 def _profile_sized_shares(profile: dict, pivot, stop) -> tuple[int | None, float | None]:
@@ -1741,18 +1837,22 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
 
         if side == "short":
             if stop <= entry or (target is not None and target >= entry):
-                log(f"chart-validation: {ticker} bad short geometry "
+                log(
+                    f"chart-validation: {ticker} bad short geometry "
                     f"(entry={entry}, stop={stop}, target={target}) — keeping planner levels",
-                    logging.WARNING)
+                    logging.WARNING,
+                )
                 continue
             worst = round(entry * (1 - chase), 2)
             shares = tsig.size_short(account, entry, stop) or None
             risk_dollars = round(shares * (stop - entry), 2) if shares else None
         else:
             if stop >= entry or (target is not None and target <= entry):
-                log(f"chart-validation: {ticker} bad long geometry "
+                log(
+                    f"chart-validation: {ticker} bad long geometry "
                     f"(entry={entry}, stop={stop}, target={target}) — keeping planner levels",
-                    logging.WARNING)
+                    logging.WARNING,
+                )
                 continue
             worst = round(entry * (1 + chase), 2)
             shares, risk_dollars = _profile_sized_shares(profile, entry, stop)
@@ -1769,8 +1869,11 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
             "source_plan": wl.get("source_plan"),
         }
         base_note = (cand.get("validation_note") or "").strip()
-        note = (f"{base_note} · уровни из chart-validation"
-                if base_note else "уровни из chart-validation")
+        note = (
+            f"{base_note} · уровни из chart-validation"
+            if base_note
+            else "уровни из chart-validation"
+        )
         candidates[i] = {
             **cand,
             "pivot": entry,
@@ -1785,8 +1888,10 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
             "screener_origin": screener_origin,
         }
         changed = True
-        log(f"chart-validation: {ticker} levels-authoritative entry={entry} stop={stop}"
-            + (f" target={target}" if target is not None else ""))
+        log(
+            f"chart-validation: {ticker} levels-authoritative entry={entry} stop={stop}"
+            + (f" target={target}" if target is not None else "")
+        )
 
     if changed:
         wl["candidates"] = candidates
@@ -1821,12 +1926,13 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
         if not ticker:
             continue
         if _recently_analyzed(ticker, FRESH_ANALYSIS_WEEKDAYS):
-            log(f"auto-analyze: {ticker} analyzed within {FRESH_ANALYSIS_WEEKDAYS} weekdays "
-                "— keeping chart-validation levels, skipping deep dive")
+            log(
+                f"auto-analyze: {ticker} analyzed within {FRESH_ANALYSIS_WEEKDAYS} weekdays "
+                "— keeping chart-validation levels, skipping deep dive"
+            )
             continue
         runs += 1
-        log(f"auto-analyze: deep ticker-analysis for {ticker} "
-            f"(budget {runs}/{AUTO_ANALYZE_TOP_N})")
+        log(f"auto-analyze: deep ticker-analysis for {ticker} (budget {runs}/{AUTO_ANALYZE_TOP_N})")
 
         ok = _run_ticker_analysis(ticker, args)
         if not ok and not args.dry_run:
@@ -1850,20 +1956,23 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
             excluded["source"] = "analysis-excluded"
             excluded["validated"] = False
             candidates = [c for c in candidates if str(c.get("ticker", "")).upper() != ticker]
-            rejected = [c for c in (wl.get("rejected_by_validation") or [])
-                        if str(c.get("ticker", "")).upper() != ticker]
+            rejected = [
+                c
+                for c in (wl.get("rejected_by_validation") or [])
+                if str(c.get("ticker", "")).upper() != ticker
+            ]
             wl["rejected_by_validation"] = rejected + [excluded]
             wl["candidates"] = candidates
             tid = cand.get("thesis_id")
             if tid and not args.dry_run:
                 _invalidate_thesis(tid, reason=f"analysis direction-flip: signal={sig_dir}")
         else:
-            log(f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
-                f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}")
-            profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
-            shares, risk_dollars = _profile_sized_shares(
-                profile, signal["trigger"], signal["stop"]
+            log(
+                f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
+                f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}"
             )
+            profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+            shares, risk_dollars = _profile_sized_shares(profile, signal["trigger"], signal["stop"])
             if shares is None:
                 shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
             # worst_entry from the analysis Entry range when present, else the
@@ -1899,8 +2008,9 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
                 "source": "analysis",
                 "screener_origin": screener_origin,
             }
-            candidates = [updated if str(c.get("ticker", "")).upper() == ticker else c
-                          for c in candidates]
+            candidates = [
+                updated if str(c.get("ticker", "")).upper() == ticker else c for c in candidates
+            ]
             wl["candidates"] = candidates
 
     if not args.dry_run:
@@ -1981,18 +2091,29 @@ def _write_watchlist(wl: dict, date_str: str, args) -> Path:
 
 
 def _ingest_theses(
-    source: str, input_path: Path, wl: dict, wl_path: Path, date_str: str, args,
-    *, plan_path: Path | None = None,
+    source: str,
+    input_path: Path,
+    wl: dict,
+    wl_path: Path,
+    date_str: str,
+    args,
+    *,
+    plan_path: Path | None = None,
 ) -> None:
     """Register watchlist candidates as theses and inject thesis_id back into
     the watchlist (the intraday OPEN signal embeds the journal commands)."""
     ids_output_path = SCHEDULE_DIR / f"thesis_ids_{date_str}.json"
     ingest_cmd = [
-        TRADER_MEMORY_CLI, "ingest",
-        "--source", source,
-        "--input", str(input_path),
-        "--watchlist-filter", str(wl_path),
-        "--ids-output", str(ids_output_path),
+        TRADER_MEMORY_CLI,
+        "ingest",
+        "--source",
+        source,
+        "--input",
+        str(input_path),
+        "--watchlist-filter",
+        str(wl_path),
+        "--ids-output",
+        str(ids_output_path),
     ]
     if plan_path:
         ingest_cmd += ["--plan-input", str(plan_path)]
@@ -2032,13 +2153,21 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
             logging.ERROR,
         )
         wl = tsig.build_watchlist(
-            date_str, "allow", None, None, None,
+            date_str,
+            "allow",
+            None,
+            None,
+            None,
             notes="heat-отчёт не построился — скрин пропущен, новый риск заблокирован (fail-safe)",
         )
         wl_path = _write_watchlist(wl, date_str, args)
-        return wl_path, wl, (
-            "⚠️ heat-отчёт не построился — скрин и планирование пропущены, "
-            "новый риск заблокирован (fail-safe). Проверь trader_memory_cli heat вручную."
+        return (
+            wl_path,
+            wl,
+            (
+                "⚠️ heat-отчёт не построился — скрин и планирование пропущены, "
+                "новый риск заблокирован (fail-safe). Проверь trader_memory_cli heat вручную."
+            ),
         )
 
     vcp = run_skill_script(
@@ -2189,7 +2318,10 @@ def _short_conditions() -> tuple[bool, str]:
         ftd_note = "market_top.follow_through_day"
 
     if not (score >= SHORT_TOP_RISK_MIN or dd_count >= SHORT_DD_MIN):
-        return False, f"давления нет (top-risk {score}, DD {dd_count} [{dd_source}]) — шорт-скрин не нужен"
+        return (
+            False,
+            f"давления нет (top-risk {score}, DD {dd_count} [{dd_source}]) — шорт-скрин не нужен",
+        )
     if ftd:
         return False, f"свежий FTD — шортить запрещено (правило 6.4): {ftd_note}"
     return True, f"top-risk {score} / DD {dd_count} [{dd_source}], свежего FTD нет"
@@ -2319,7 +2451,11 @@ def _filter_shorts_on_earnings(shorts: list, args) -> tuple[list, str]:
 
 
 def _evening_short_branch(
-    date_str: str, dec: dict, args, *, regime_ok: bool,
+    date_str: str,
+    dec: dict,
+    args,
+    *,
+    regime_ok: bool,
     terminated_offside: list[str] | None = None,
 ) -> int:
     rc = 0 if regime_ok or args.dry_run else 1
@@ -2527,7 +2663,14 @@ def slot_intraday(date_str: str, args) -> int:
         log(f"intraday: не удалось получить котировки: {exc}", logging.ERROR)
         return 1
 
-    signals = tsig.evaluate_signals(wl, heat, quotes, dec["decision"], set(state.get("sent") or {}))
+    signals = tsig.evaluate_signals(
+        wl,
+        heat,
+        quotes,
+        dec["decision"],
+        set(state.get("sent") or {}),
+        armed_tickers=armed_order_tickers(date_str),
+    )
     if not signals:
         log(f"intraday: {len(tickers)} тикеров проверено — новых сигналов нет")
         return 0

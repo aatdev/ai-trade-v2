@@ -15,7 +15,7 @@ The user must provide their Telegram Bot Token and Chat ID. Usually, these shoul
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-> **Note**: If the user asks you to send something to Telegram and the environment variables are not set or known in your context, prompt the user to provide them (or ask if they are configured). 
+> **Note**: If the user asks you to send something to Telegram and the environment variables are not set or known in your context, prompt the user to provide them (or ask if they are configured).
 
 ## How to use
 
@@ -35,3 +35,11 @@ python scripts/send_telegram.py \
 - If the token/chat_id is not in bash environment, check if the user previously gave it to you or stored it in a config file, and pass them via the arguments.
 - Be careful with large files; Telegram bot API limits file uploads to 50MB.
 
+## Interactive companion: `telegram_interactive.py`
+
+`send_telegram.py` is strictly one-way. A sibling module, `scripts/telegram_interactive.py`, adds two-way messaging for confirmation flows (e.g. the watchlist-order automation in `scripts/watchlist_orders.py`):
+- `send_order_card(...)` — `sendMessage` with an `inline_keyboard` of action buttons, returning the `message_id` so the card can later be edited with the outcome.
+- `poll_updates(...)` — a `getUpdates` long-poll restricted to `callback_query` updates, for a daemon that listens for button taps.
+- `answer_callback` / `edit_card` — clear the tap spinner and rewrite the card.
+
+It reuses the same `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` env vars (and `send_telegram.load_dotenv`). `callback_data` is capped by Telegram at 64 bytes, so it carries only a short `"<action>:<token>"`; the full payload lives in the caller's ledger keyed by that token.
