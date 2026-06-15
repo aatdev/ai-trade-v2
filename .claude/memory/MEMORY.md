@@ -1,6 +1,7 @@
 # Memory Index
 
 - [Respond in Russian](respond-in-russian.md) — user wants all replies in Russian
+- [Commit on main, no branch](commit-on-main-no-branch.md) — commit directly to current branch; never create a branch for changes
 - [Save screener results to MyNotes](save-screener-results-to-mynotes.md) — file screener outputs into ~/Documents/MyNotes via save-note skill
 - [Vendored TV data layer](vendored-tv-data-layer.md) — TradingView CLI/data now vendored under vendor/tradingview-mcp; repo independent of external checkout
 - [TV CLI shadowing](tv-cli-shadowing-jackson.md) — global `tv` on PATH = jackson checkout, shadows vendor/; mirror vendor edits there
