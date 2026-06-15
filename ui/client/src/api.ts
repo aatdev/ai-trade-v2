@@ -14,6 +14,7 @@ import type {
   JobSummary,
   MarketResponse,
   MemoryResponse,
+  OhlcvResponse,
   PortfolioHeat,
   ScreenersResponse,
   SignalsResponse,
@@ -168,6 +169,18 @@ export const useTickerAnalysis = (symbol: string, date: string | null) =>
 
 export const chartUrl = (symbol: string, date: string, tf: string) =>
   `/api/ticker/${encodeURIComponent(symbol)}/${date}/chart/${tf}`;
+
+/** Live OHLCV bars from the vendored `tv` CLI (TradingView Desktop). */
+export const useOhlcv = (symbol: string, tf: string, count = 300, enabled = true) =>
+  useQuery({
+    queryKey: ['ohlcv', symbol, tf, count],
+    queryFn: () =>
+      getJSON<OhlcvResponse>(
+        `/api/ohlcv/${encodeURIComponent(symbol)}?tf=${encodeURIComponent(tf)}&n=${count}`,
+      ),
+    enabled: enabled && !!symbol,
+    staleTime: 60_000,
+  });
 
 export const useAnalysisIndex = (refetchInterval: Refetch = false) =>
   useQuery({

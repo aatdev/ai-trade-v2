@@ -1,4 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import type { AnalysisIndexEntry } from '@shared/types';
 import { gradeColor, scoreColor, sideColor, zoneColor } from '../lib/zones';
 import { fmtScore } from '../lib/format';
 
@@ -95,6 +97,28 @@ export function GradeBadge({ grade }: { grade?: string | null }) {
     <span className="grade" style={{ background: gradeColor(grade) }}>
       {grade}
     </span>
+  );
+}
+
+/** Link through to a ticker's saved analysis report; renders nothing if none. */
+export function AnalysisLink({
+  ticker,
+  entry,
+  compact = false,
+}: {
+  ticker: string;
+  entry?: AnalysisIndexEntry;
+  compact?: boolean;
+}) {
+  if (!entry) return null;
+  return (
+    <Link
+      to={`/ticker/${ticker}`}
+      className="analysis-link"
+      title={`Analysis available — latest ${entry.latest} (${entry.count} day${entry.count === 1 ? '' : 's'})`}
+    >
+      {compact ? '📄' : '📄 analysis →'}
+    </Link>
   );
 }
 

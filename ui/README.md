@@ -48,6 +48,8 @@ npm run typecheck
 | `TRADING_UI_MCP_CONFIG` | vendored TradingView server | `--mcp-config` file for `analyze-ticker` (point at a custom MCP config) |
 | `PYTHON_BIN` | `python3` | Interpreter used to shell out to the IB snapshot script |
 | `TRADING_UI_IB_FIXTURE` | _unset_ | Path to a recorded IB snapshot JSON; when set, `/api/ib` reads it instead of contacting the Gateway (offline dev / demo) |
+| `TRADING_UI_TV_BIN` | `tv` | Vendored TradingView CLI used by `/api/ohlcv` (override for a non-standard install) |
+| `TRADING_UI_OHLCV_FIXTURE` | _unset_ | Path to a recorded `tv bars` JSON envelope; when set, `/api/ohlcv` reads it instead of running the CLI (offline dev / tests) |
 
 IB account/positions also read these standard IB env vars (loaded from the repo
 `.env` like the scheduler): `IB_PAPER_TRADING` (paper vs live label),
@@ -74,6 +76,17 @@ When the Gateway is down or unauthenticated the response is `{ ok: false, error 
 and the tab renders a friendly notice (with the same refresh button, so you can
 retry after completing IB login / 2FA). Set `TRADING_UI_IB_FIXTURE` to serve a
 recorded snapshot without a live connection.
+
+Live (no `?date`): `/api/ohlcv/:symbol?tf=D&n=300` — read-only OHLCV bars from
+the live TradingView data layer. The server shells out to the vendored `tv`
+CLI (`tv bars … -t <tf>`), normalizes the envelope, and degrades to
+`{ ok: false, error }` when TradingView Desktop isn't running with CDP on :9222.
+`tf` ∈ `D/W/M/240/120/60/30/15/5`; `n` is clamped to 20–500. Clicking a ticker
+in the **Watchlist** opens a candlestick + volume + MA(20/50/200) modal chart
+with the row's entry/stop/target overlaid as price lines (lightweight-charts,
+lazy-loaded). The per-row link to the saved analysis report sits next to the
+**Analyze** button. Set `TRADING_UI_OHLCV_FIXTURE` to serve recorded bars
+without a live connection.
 
 Watchlist reconcile: `GET /api/watchlist/reconcile/:ticker` previews how the
 analysis signal would change the candidate; `POST` applies it to the watchlist

@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "requested": 1,
+  "fetched": 1,
+  "failed": 0,
+  "results": [
+    {
+      "symbol": "AAPL",
+      "success": true,
+      "resolved": "NASDAQ:AAPL",
+      "bar_count": 6,
+      "bars": [
+        { "time": 1781011800, "open": 300.275, "high": 300.75, "low": 287.78, "close": 290.55, "volume": 70108847 },
+        { "time": 1781098200, "open": 290.74, "high": 294.75, "low": 287.38, "close": 291.58, "volume": 52793266 },
+        { "time": 1781184600, "open": 293.72, "high": 297.0, "low": 289.59, "close": 295.63, "volume": 42572497 },
+        { "time": 1781271000, "open": 296.03, "high": 297.14, "low": 289.62, "close": 291.13, "volume": 38784789 },
+        { "time": 1781530200, "open": 294.12, "high": 297.78, "low": 291.7, "close": 296.185, "volume": 24830654 },
+        { "time": 1781616600, "open": 296.5, "high": 301.2, "low": 295.1, "close": 300.4, "volume": 31002145 }
+      ],
+      "elapsed_ms": 950
+    }
+  ]
+}

@@ -489,6 +489,34 @@ export interface AnalysisIndexResponse {
   tickers: Record<string, AnalysisIndexEntry>;
 }
 
+/* ---------------- OHLCV bars (live TradingView data layer) ---------------- */
+
+/** One price bar. `time` is a Unix timestamp in seconds (lightweight-charts UTCTimestamp). */
+export interface OhlcvBar {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/**
+ * GET /api/ohlcv/:symbol — live OHLCV pulled from the vendored `tv` CLI (TradingView
+ * Desktop via CDP). Like the IB snapshot, `ok` is false (with a human `error`) when
+ * TradingView Desktop is down / unreachable, so the chart modal degrades gracefully.
+ */
+export interface OhlcvResponse {
+  ok: boolean;
+  symbol: string; // as requested
+  resolved: string | null; // symbol TradingView actually resolved (e.g. "NASDAQ:AAPL")
+  timeframe: string; // D / W / M / 60 / 240 ...
+  bars: OhlcvBar[]; // ascending by time
+  error: string | null;
+  source: string | null; // "live" | "fixture"
+  generated_at: string | null;
+}
+
 /* ---------------- Actions / jobs ---------------- */
 
 export type SchedulerSlot = 'premarket' | 'evening-prep' | 'intraday' | 'weekly' | 'monthly';

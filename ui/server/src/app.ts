@@ -5,6 +5,7 @@ import { JobManager } from './lib/jobs';
 import { actionsRouter } from './routes/actions';
 import { docsRouter } from './routes/docs';
 import { ibRouter } from './routes/ib';
+import { ohlcvRouter } from './routes/ohlcv';
 import { stateRouter } from './routes/state';
 import { tickerRouter } from './routes/ticker';
 import { watchlistRouter } from './routes/watchlist';
@@ -30,6 +31,7 @@ export function createApp(opts: AppOptions): Express {
   app.use('/api', watchlistRouter(opts.dataDir));
   app.use('/api', docsRouter(opts.projectRoot));
   app.use('/api', ibRouter(opts.projectRoot));
+  app.use('/api', ohlcvRouter());
   app.use('/api', actionsRouter(opts.projectRoot, opts.dataDir, jobs));
 
   // Production: serve the built SPA and fall back to index.html for routes.
