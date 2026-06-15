@@ -93,8 +93,17 @@ export function loadDotEnv(projectRoot: string = PROJECT_ROOT): void {
 export const ANALYZE_MODEL = process.env.TRADING_UI_ANALYZE_MODEL || 'claude-opus-4-8';
 
 /**
+ * Wall-time cap (seconds) for a headless ticker-analysis run, passed to
+ * `claude-p --timeout` (override: TRADING_UI_ANALYZE_TIMEOUT_SEC). claude-p
+ * defaults to 300s; a full analysis (news + fundamentals + TradingView MCP
+ * charts + screenshots + optional alerts/notes) routinely runs longer, so we
+ * raise it to 30 min. Plain `claude` had no internal cap.
+ */
+export const ANALYZE_TIMEOUT_SEC = Number(process.env.TRADING_UI_ANALYZE_TIMEOUT_SEC) || 1800;
+
+/**
  * Resolve an --mcp-config file that registers the vendored TradingView MCP
- * server, so headless `claude -p` ticker-analysis gets the `mcp__tradingview__*`
+ * server, so headless `claude-p` ticker-analysis gets the `mcp__tradingview__*`
  * tools (they are not in the user/global MCP config). Override with
  * TRADING_UI_MCP_CONFIG to point at a custom config (e.g. a different checkout).
  * Returns null when the vendored server is absent — the flag is then skipped.

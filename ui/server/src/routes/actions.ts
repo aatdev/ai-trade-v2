@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { Router } from 'express';
-import { ANALYZE_MODEL, resolveMcpConfigPath } from '../config';
+import { ANALYZE_MODEL, ANALYZE_TIMEOUT_SEC, resolveMcpConfigPath } from '../config';
 import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
+import { buildAnalyzeTickerArgs } from '../lib/analyzeTicker';
 import { getTheses } from '../lib/mappers';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
@@ -11,7 +12,11 @@ const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
 const TRADER_MEMORY_CLI = 'skills/trader-memory-core/scripts/trader_memory_cli.py';
 
 function resolveClaudeBin(): string {
-  return process.env.CLAUDE_BIN || 'claude';
+  // claude-p: a drop-in `claude -p` emulator that takes the prompt as a
+  // positional arg and survives being launched from within a Claude Code
+  // session (a nested plain `claude -p` silently no-ops). Same convention as
+  // the scheduler's resolve_claude_bin (CLAUDE_BIN override > claude-p).
+  return process.env.CLAUDE_BIN || 'claude-p';
 }
 
 function resolvePythonBin(): string {
@@ -114,38 +119,17 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
     const perm = process.env.TRADING_SCHEDULE_PERMISSION_MODE || 'bypassPermissions';
     const createAlerts = req.body?.createAlerts === true;
     const saveToNotes = req.body?.saveToNotes === true;
-    const parts = [
-      `Проанализируй тикер ${ticker}: запусти скил ticker-analysis — полный комплексный анализ`,
-      `(новости, фундаментал, технический анализ через TradingView MCP). Сохрани четыре markdown-файла`,
-      `и daily/weekly скриншоты в trading-data/analysis/${ticker}/.`,
-      createAlerts
-        ? `После анализа СОЗДАЙ алерты в TradingView по приоритетному сценарию (Trigger / Stop / T1 / T2 / T3) — используй скил signals-alerts.`
-        : `Алерты в TradingView НЕ создавай.`,
-    ];
-    if (saveToNotes) {
-      parts.push(
-        `Также СОХРАНИ итоговый отчёт в личную базу MyNotes через скил save-note (подкаталог «Анализ-тикеров/${ticker}»).`,
-      );
-    }
-    const prompt = parts.join(' ');
-    // Run on Opus 4.8; stream events so the UI shows live progress (each step).
-    const args = [
-      '-p',
-      prompt,
-      '--permission-mode',
-      perm,
-      '--model',
-      ANALYZE_MODEL,
-      '--output-format',
-      'stream-json',
-      '--verbose',
-    ];
-    // Load the vendored TradingView MCP server so the skill gets mcp__tradingview__*.
-    // --strict-mcp-config => only this server (deterministic; ignores whatever
-    // other MCP servers the user has configured). Built-in tools/skills are
-    // unaffected. The tools surface as deferred tools (found via ToolSearch).
-    const mcpConfig = resolveMcpConfigPath(projectRoot);
-    if (mcpConfig) args.push('--mcp-config', mcpConfig, '--strict-mcp-config');
+    // Run on the configured model via claude-p (prompt is the trailing
+    // positional, no `-p`); stream events so the UI shows live progress.
+    const args = buildAnalyzeTickerArgs({
+      ticker,
+      createAlerts,
+      saveToNotes,
+      permissionMode: perm,
+      model: ANALYZE_MODEL,
+      mcpConfig: resolveMcpConfigPath(projectRoot),
+      timeoutSec: ANALYZE_TIMEOUT_SEC,
+    });
 
     return startAndRespond(res, {
       label: `analyze ${ticker} (${ANALYZE_MODEL})`,
