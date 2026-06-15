@@ -62,7 +62,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import types
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -296,7 +298,7 @@ def _rel(p: Path) -> str:
     except ValueError:
         return str(p)
 
-CBIN="claude-pee"
+CBIN="claude-p"
 
 # Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
 CLAUDE_FALLBACK_PATHS = [
@@ -332,8 +334,10 @@ def _child_claude_env() -> dict:
     """
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
-    for key in [k for k in env if k.startswith("CLAUDE_CODE_")]:
-        del env[key]
+    # for key in [k for k in env if k.startswith("CLAUDE_CODE_")]:
+    #     del env[key]
+    env['RUST_LOG'] = 'debug'
+    log(f'ENVIRONMENT: {" ".join(f"{k}={v!r}" for k, v in env.items())}', logging.INFO)
     return env
 
 
@@ -460,6 +464,63 @@ def notify(text: str, *, dry_run: bool, no_telegram: bool, file: str | None = No
 import tempfile as _tempfile
 
 
+def _stream_enabled() -> bool:
+    """Whether to echo the claude subprocess output to the console live.
+
+    Off by default (output is captured and only logged as a tail after the run,
+    which keeps cron/launchd logs compact). Set ``TRADING_SCHEDULE_STREAM=1``
+    when debugging to see claude-pee's progress + RUST_LOG diagnostics in real
+    time — e.g. ``TRADING_SCHEDULE_STREAM=1 RUST_LOG=debug bash
+    scripts/run_trading_schedule.sh --slot weekly``.
+    """
+    return os.environ.get("TRADING_SCHEDULE_STREAM", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _popen_tee(cmd, *, env, timeout, stream):
+    """Run ``cmd`` and return a ``subprocess.run``-shaped result.
+
+    Default (``stream=False``): identical to ``subprocess.run(capture_output=
+    True)``. When ``stream=True``, the child's combined output (stderr folded
+    into stdout so RUST_LOG/diagnostics interleave in order) is echoed to the
+    console line by line as it arrives AND accumulated, so downstream
+    rc/expected_output/empty-output checks keep working. ``res.stderr`` is ""
+    in stream mode (it went to stdout). ``timeout`` is enforced via a watchdog
+    that kills the process and raises ``TimeoutExpired`` like ``run`` does.
+    """
+    if not stream:
+        return subprocess.run(
+            cmd, cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=timeout
+        )
+
+    proc = subprocess.Popen(
+        cmd, cwd=PROJECT_ROOT, env=env, text=True, bufsize=1,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    timed_out = {"v": False}
+
+    def _kill() -> None:
+        timed_out["v"] = True
+        proc.kill()
+
+    timer = threading.Timer(timeout, _kill)
+    timer.start()
+    chunks: list[str] = []
+    try:
+        for line in proc.stdout:  # ends when the child closes stdout (exit/kill)
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            chunks.append(line)
+        proc.wait()
+    finally:
+        timer.cancel()
+
+    if timed_out["v"]:
+        raise subprocess.TimeoutExpired(cmd, timeout, output="".join(chunks))
+    return types.SimpleNamespace(returncode=proc.returncode, stdout="".join(chunks), stderr="")
+
+
 def _run_claude_kill_ppid(
     prompt: str,
     *,
@@ -499,8 +560,8 @@ def _run_claude_kill_ppid(
 
     started = time.monotonic()
     try:
-        res = subprocess.run(cmd, cwd=PROJECT_ROOT, env=_child_claude_env(),
-                             capture_output=True, text=True, timeout=timeout)
+        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout,
+                         stream=_stream_enabled())
     except subprocess.TimeoutExpired:
         log(f"{label}: claude timed out after {timeout}s", logging.ERROR)
         return False
@@ -509,6 +570,11 @@ def _run_claude_kill_ppid(
         return False
 
     elapsed = time.monotonic() - started
+    # Log stderr on every path (not only on failure): claude-pee writes its
+    # RUST_LOG diagnostics + the inner claude's warnings here, which are exactly
+    # what you need when debugging a nested no-op / session-greeting capture.
+    if res.stderr and res.stderr.strip():
+        log(f"{label} stderr (tail):\n" + res.stderr[-2000:])
     try:
         file_text = output_path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -523,7 +589,7 @@ def _run_claude_kill_ppid(
     if res.stdout:
         log(f"{label} stdout (tail):\n" + res.stdout[-2000:])
     log(
-        f"{label}: no output in {output_path} (rc={res.returncode}, {elapsed:.0f}s)\n{res.stderr[-1000:]}",
+        f"{label}: no output in {output_path} (rc={res.returncode}, {elapsed:.0f}s)",
         logging.ERROR,
     )
     return False
@@ -563,10 +629,10 @@ def run_claude(
             claude_bin=claude_bin, perm_mode=perm_mode, extra=extra,
         )
 
-    cmd = [claude_bin, "-p", "--permission-mode", perm_mode, *extra, prompt]
+    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt ]
 
     log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
-    log(f"command: {claude_bin} -p --permission-mode {perm_mode} <prompt {len(prompt)} chars> {' '.join(extra)}",
+    log(f"command: {claude_bin} -p <prompt {len(prompt)} chars> --permission-mode {perm_mode}  {' '.join(extra)}",
         logging.INFO)
     if dry_run:
         log("(dry-run) prompt that would be sent to claude:\n" + prompt)
@@ -574,8 +640,8 @@ def run_claude(
 
     started = time.monotonic()
     try:
-        res = subprocess.run(cmd, cwd=PROJECT_ROOT, env=_child_claude_env(),
-                             capture_output=True, text=True, timeout=timeout)
+        res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout,
+                         stream=_stream_enabled())
     except subprocess.TimeoutExpired:
         log(f"{label}: claude timed out after {timeout}s ({time.monotonic() - started:.0f}s elapsed)",
             logging.ERROR)
@@ -587,9 +653,13 @@ def run_claude(
     elapsed = time.monotonic() - started
     if res.stdout:
         log(f"{label} stdout (tail):\n" + res.stdout[-2000:])
+    # Log stderr on every path (not only on failure): claude-pee writes its
+    # RUST_LOG diagnostics + the inner claude's warnings here, which are exactly
+    # what you need when debugging a nested no-op / session-greeting capture.
+    if res.stderr and res.stderr.strip():
+        log(f"{label} stderr (tail):\n" + res.stderr[-2000:])
     if res.returncode != 0:
-        log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s\n{res.stderr[-1000:]}",
-            logging.ERROR)
+        log(f"{label}: FAILED rc={res.returncode} in {elapsed:.0f}s", logging.ERROR)
         return False
 
     # rc==0 is not enough: a nested/failed claude-pee exits clean with no output.
