@@ -40,7 +40,7 @@ def _cand(ticker, side="long", thesis_id=None, **geo):
 def test_select_cards_matches_by_thesis_id():
     wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]}
     theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
-    cards = wo.select_cards(wl, theses, "2026-06-15")
+    cards = wo.select_cards(wl, theses, "2026-06-15", "allow")
     assert len(cards) == 1
     assert cards[0]["thesis_id"] == "th_nvda_pvt_20260612_aaaa"
     assert cards[0]["coid"] == "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
@@ -49,26 +49,71 @@ def test_select_cards_matches_by_thesis_id():
 def test_select_cards_fallback_ticker_side():
     wl = {"candidates": [_cand("AMD", side="long")]}  # no thesis_id on candidate
     theses = [_thesis("th_amd_pvt_20260612_bbbb", "AMD", "long")]
-    cards = wo.select_cards(wl, theses, "2026-06-15")
+    cards = wo.select_cards(wl, theses, "2026-06-15", "allow")
     assert len(cards) == 1 and cards[0]["thesis_id"] == "th_amd_pvt_20260612_bbbb"
 
 
 def test_select_cards_skips_non_entry_ready():
     wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]}
     theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA", status="ACTIVE")]
-    assert wo.select_cards(wl, theses, "2026-06-15") == []
+    assert wo.select_cards(wl, theses, "2026-06-15", "allow") == []
 
 
 def test_select_cards_skips_incomplete_geometry():
     wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa", target=None)]}
     theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
-    assert wo.select_cards(wl, theses, "2026-06-15") == []
+    assert wo.select_cards(wl, theses, "2026-06-15", "allow") == []
 
 
 def test_select_cards_side_mismatch_no_match():
     wl = {"candidates": [_cand("CHTR", side="short")]}
     theses = [_thesis("th_chtr_pvt_20260612_cccc", "CHTR", "long")]  # long thesis, short candidate
-    assert wo.select_cards(wl, theses, "2026-06-15") == []
+    assert wo.select_cards(wl, theses, "2026-06-15", "restrict") == []
+
+
+def test_select_cards_short_carded_under_restrict():
+    wl = {
+        "candidates": [
+            _cand(
+                "CHTR",
+                side="short",
+                thesis_id="th_chtr_pvt_20260612_cccc",
+                pivot=145.0,
+                stop=153.0,
+                target=130.0,
+            )
+        ]
+    }
+    theses = [_thesis("th_chtr_pvt_20260612_cccc", "CHTR", "short")]
+    cards = wo.select_cards(wl, theses, "2026-06-15", "restrict")
+    assert len(cards) == 1 and cards[0]["side"] == "short"
+    cards_cash = wo.select_cards(wl, theses, "2026-06-15", "cash-priority")
+    assert len(cards_cash) == 1  # shorts also allowed under cash-priority
+
+
+def test_select_cards_long_filtered_out_under_restrict():
+    wl = {"candidates": [_cand("NVDA", side="long", thesis_id="th_nvda_pvt_20260612_aaaa")]}
+    theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA", "long")]
+    assert (
+        wo.select_cards(wl, theses, "2026-06-15", "restrict") == []
+    )  # no new longs under restrict
+
+
+def test_select_cards_short_filtered_out_under_allow():
+    wl = {
+        "candidates": [
+            _cand(
+                "CHTR",
+                side="short",
+                thesis_id="th_chtr_pvt_20260612_cccc",
+                pivot=145.0,
+                stop=153.0,
+                target=130.0,
+            )
+        ]
+    }
+    theses = [_thesis("th_chtr_pvt_20260612_cccc", "CHTR", "short")]
+    assert wo.select_cards(wl, theses, "2026-06-15", "allow") == []  # no shorts under allow
 
 
 # --------------------------------------------------------------------------- #
@@ -96,14 +141,55 @@ def patched(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_cmd_send_skips_when_gate_not_allow(monkeypatch, patched):
+def test_cmd_send_short_under_restrict_sends(monkeypatch, patched):
     monkeypatch.setattr(
         wo.sched, "read_decision", lambda p: {"decision": "restrict", "degraded": False}
+    )
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [
+                _cand(
+                    "CHTR",
+                    side="short",
+                    thesis_id="th_chtr_pvt_20260612_cccc",
+                    pivot=145.0,
+                    stop=153.0,
+                    target=130.0,
+                )
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_chtr_pvt_20260612_cccc", "CHTR", "short")]
     )
     sent = []
     monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: sent.append(a) or 1)
     assert wo.cmd_send(_Args()) == 0
-    assert sent == []  # nothing sent
+    assert len(sent) == 1  # short carded under restrict
+
+
+def test_cmd_send_long_under_restrict_no_cards(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.sched, "read_decision", lambda p: {"decision": "restrict", "degraded": False}
+    )
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [_cand("NVDA", side="long", thesis_id="th_nvda_pvt_20260612_aaaa")],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA", "long")]
+    )
+    sent = []
+    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: sent.append(a) or 1)
+    assert wo.cmd_send(_Args()) == 0
+    assert sent == []  # no new longs under restrict
 
 
 def test_cmd_send_skips_when_degraded(monkeypatch, patched):
@@ -403,7 +489,9 @@ def test_expire_pending_cards_flips_and_strips(monkeypatch):
 
 
 def test_expire_pending_cards_noop_when_none_pending(monkeypatch):
-    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no edit")))
+    monkeypatch.setattr(
+        wo.ti, "edit_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no edit"))
+    )
     ledger = {"orders": {"t1": _entry(status="placed", message_id=5, chat_id=-1)}}
     assert wo.expire_pending_cards(ledger, bot_token="B") is False
 
@@ -419,10 +507,13 @@ class _ListenTimeoutArgs:
 
 def test_cmd_listen_timeout_expires_pending(monkeypatch, patched):
     ledger = {
-        "date": "2026-06-15", "mode": "paper",
-        "orders": {"th_x_pvt_20260101_0001": _entry(
-            thesis_id="th_x_pvt_20260101_0001", status="pending", message_id=9, chat_id=-100
-        )},
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            "th_x_pvt_20260101_0001": _entry(
+                thesis_id="th_x_pvt_20260101_0001", status="pending", message_id=9, chat_id=-100
+            )
+        },
     }
     wo.save_ledger("2026-06-15", ledger)
     monkeypatch.setattr(wo.ti, "poll_updates", lambda *a, **k: [])
@@ -438,17 +529,34 @@ def test_cmd_listen_timeout_expires_pending(monkeypatch, patched):
 
 def test_cmd_send_skips_expired(monkeypatch, patched):
     # An expired card must not be re-sent the same day (idempotent guard).
-    monkeypatch.setattr(wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False})
     monkeypatch.setattr(
-        wo.sched, "_read_json",
-        lambda p: {"date": "2026-06-15", "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")]},
+        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
     )
-    monkeypatch.setattr(wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")])
+    monkeypatch.setattr(
+        wo.sched,
+        "_read_json",
+        lambda p: {
+            "date": "2026-06-15",
+            "candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa")],
+        },
+    )
+    monkeypatch.setattr(
+        wo.sched, "_list_theses", lambda: [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    )
     # Seed the ledger with an already-expired entry for the same thesis.
-    seeded = {"date": "2026-06-15", "mode": "paper",
-              "orders": {"th_nvda_pvt_20260612_aaaa": _entry(thesis_id="th_nvda_pvt_20260612_aaaa", status="expired")}}
+    seeded = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            "th_nvda_pvt_20260612_aaaa": _entry(
+                thesis_id="th_nvda_pvt_20260612_aaaa", status="expired"
+            )
+        },
+    }
     wo.save_ledger("2026-06-15", seeded)
-    monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no resend")))
+    monkeypatch.setattr(
+        wo.ti, "send_order_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no resend"))
+    )
     assert wo.cmd_send(_Args()) == 0
 
 
@@ -502,6 +610,295 @@ def test_check_fills_gives_up_after_max_attempts(monkeypatch):
 # --------------------------------------------------------------------------- #
 # Daemon: cmd_listen --once
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# Daemon: +2R scale-out
+# --------------------------------------------------------------------------- #
+def _scale_entry(status="pending", **kw):
+    e = {
+        "kind": "scale",
+        "thesis_id": "th_nvda_pvt_20260612_aaaa",
+        "ticker": "NVDA",
+        "side": "long",
+        "shares": 50,
+        "entry_price": 100.0,
+        "current_price": 116.0,
+        "message_id": None,
+        "chat_id": None,
+        "status": status,
+        "sold_qty": None,
+        "remaining_qty": None,
+        "scale_order_ids": [],
+        "error": None,
+    }
+    e.update(kw)
+    return e
+
+
+def test_handle_scale_out_preview_when_not_live(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib,
+        "place_market_close",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no order")),
+    )
+    entry = _scale_entry()
+    wo.handle_scale_out(entry, port=9000, live=False, bot_token="B")
+    assert entry["status"] == "preview"
+
+
+def test_handle_scale_out_success(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 265598)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(wo.pib, "exit_action_for", lambda side: "SELL")
+    closed = {}
+    monkeypatch.setattr(
+        wo.pib,
+        "place_market_close",
+        lambda port, acct, conid, action, qty: (
+            closed.update(action=action, qty=qty) or {"ok": True, "order_ids": ["300"]}
+        ),
+    )
+    cancelled = []
+    monkeypatch.setattr(wo.pib, "working_exit_orders", lambda port, conid, ea: ["s1", "t1"])
+    monkeypatch.setattr(wo.pib, "cancel_order", lambda port, acct, oid, **k: cancelled.append(oid))
+    stopped = {}
+    monkeypatch.setattr(
+        wo.pib,
+        "place_stop",
+        lambda port, acct, conid, action, qty, sp, **k: (
+            stopped.update(qty=qty, sp=sp) or {"ok": True, "order_ids": ["400"]}
+        ),
+    )
+    trims = []
+    monkeypatch.setattr(
+        wo, "record_trim", lambda tid, qty, price: trims.append((tid, qty, price)) or True
+    )
+
+    entry = _scale_entry(message_id=5, chat_id=-1)
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+
+    wo.handle_scale_out(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "scaled"
+    assert entry["sold_qty"] == 25 and entry["remaining_qty"] == 25  # 50% of 50
+    assert closed == {"action": "SELL", "qty": 25}
+    assert cancelled == ["s1", "t1"]  # old bracket children torn down
+    assert stopped == {"qty": 25, "sp": 100.0}  # breakeven stop on the remainder
+    assert trims == [("th_nvda_pvt_20260612_aaaa", 25, 116.0)]  # trim at +2R price
+
+
+def test_handle_scale_out_gateway_down(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    entry = _scale_entry()
+    wo.handle_scale_out(entry, port=None, live=True, bot_token="B")
+    assert entry["status"] == "error"
+
+
+def test_handle_scale_out_mkt_rejected(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(
+        wo.pib, "place_market_close", lambda *a, **k: {"ok": False, "order_ids": []}
+    )
+    monkeypatch.setattr(
+        wo.pib,
+        "working_exit_orders",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not reach")),
+    )
+    entry = _scale_entry()
+    wo.handle_scale_out(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "error" and "rejected" in entry["error"]
+
+
+def test_handle_scale_out_idempotent():
+    entry = _scale_entry(status="scaled")
+    wo.handle_scale_out(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "scaled"
+
+
+def test_handle_scale_skip():
+    entry = _scale_entry()
+    wo.handle_scale_skip(entry, bot_token="B")
+    assert entry["status"] == "skipped"
+
+
+# --------------------------------------------------------------------------- #
+# Producer: cmd_scale_card
+# --------------------------------------------------------------------------- #
+class _ScaleArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.thesis_id = "th_nvda_pvt_20260612_aaaa"
+        self.ticker = "NVDA"
+        self.side = "long"
+        self.shares = 50.0
+        self.entry = 100.0
+        self.price = 116.0
+        self.dry_run = False
+        self.__dict__.update(kw)
+
+
+def test_cmd_scale_card_sends_and_writes(monkeypatch, patched):
+    sent = {}
+    monkeypatch.setattr(
+        wo.ti, "send_scale_card", lambda card, token, **k: sent.update(token=token) or 88
+    )
+    rc = wo.cmd_scale_card(_ScaleArgs())
+    assert rc == 0 and sent["token"] == "2r-th_nvda_pvt_20260612_aaaa"
+    led = wo.load_ledger("2026-06-15")
+    e = led["orders"]["2r-th_nvda_pvt_20260612_aaaa"]
+    assert e["kind"] == "scale" and e["status"] == "pending" and e["message_id"] == 88
+
+
+def test_cmd_scale_card_idempotent(monkeypatch, patched):
+    calls = []
+    monkeypatch.setattr(wo.ti, "send_scale_card", lambda *a, **k: calls.append(1) or 88)
+    wo.cmd_scale_card(_ScaleArgs())
+    wo.cmd_scale_card(_ScaleArgs())  # same thesis same day -> no resend
+    assert len(calls) == 1
+
+
+def test_cmd_scale_card_dry_run(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.ti, "send_scale_card", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no send"))
+    )
+    assert wo.cmd_scale_card(_ScaleArgs(dry_run=True)) == 0
+    assert not wo.ledger_path("2026-06-15").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: position-management close (point 3)
+# --------------------------------------------------------------------------- #
+def _close_entry(status="pending", **kw):
+    e = {
+        "kind": "close",
+        "thesis_id": "th_aapl_pvt_20260612_aaaa",
+        "ticker": "AAPL",
+        "side": "long",
+        "shares": 100,
+        "price": 96.0,
+        "reason": "тайм-стоп наступил",
+        "exit_reason": "time_stop",
+        "message_id": None,
+        "chat_id": None,
+        "status": status,
+        "close_order_ids": [],
+        "error": None,
+    }
+    e.update(kw)
+    return e
+
+
+def test_handle_close_preview_when_not_live(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib,
+        "place_market_close",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no order")),
+    )
+    entry = _close_entry()
+    wo.handle_close(entry, port=9000, live=False, bot_token="B")
+    assert entry["status"] == "preview"
+
+
+def test_handle_close_success(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(wo.pib, "exit_action_for", lambda side: "SELL")
+    order = []
+    cancelled = []
+    monkeypatch.setattr(wo.pib, "working_exit_orders", lambda port, conid, ea: ["s1", "t1"])
+    monkeypatch.setattr(wo.pib, "cancel_order", lambda port, acct, oid, **k: cancelled.append(oid))
+    monkeypatch.setattr(
+        wo.pib,
+        "place_market_close",
+        lambda port, acct, conid, action, qty: (
+            order.append((action, qty)) or {"ok": True, "order_ids": ["500"]}
+        ),
+    )
+    closed = []
+    monkeypatch.setattr(
+        wo, "record_close", lambda tid, price, reason: closed.append((tid, price, reason)) or True
+    )
+    entry = _close_entry(message_id=5, chat_id=-1)
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: {"ok": True})
+
+    wo.handle_close(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "closed"
+    assert cancelled == ["s1", "t1"]  # protective legs cancelled FIRST
+    assert order == [("SELL", 100)]  # full position closed at market
+    assert closed == [("th_aapl_pvt_20260612_aaaa", 96.0, "time_stop")]
+
+
+def test_handle_close_gateway_down(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    entry = _close_entry()
+    wo.handle_close(entry, port=None, live=True, bot_token="B")
+    assert entry["status"] == "error"
+
+
+def test_handle_close_mkt_rejected(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(wo.pib, "working_exit_orders", lambda *a, **k: [])
+    monkeypatch.setattr(
+        wo.pib, "place_market_close", lambda *a, **k: {"ok": False, "order_ids": []}
+    )
+    monkeypatch.setattr(
+        wo, "record_close", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no record"))
+    )
+    entry = _close_entry()
+    wo.handle_close(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "error" and "rejected" in entry["error"]
+
+
+def test_handle_close_idempotent():
+    entry = _close_entry(status="closed")
+    wo.handle_close(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "closed"
+
+
+def test_handle_close_skip():
+    entry = _close_entry()
+    wo.handle_close_skip(entry, bot_token="B")
+    assert entry["status"] == "skipped"
+
+
+class _CloseArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.thesis_id = "th_aapl_pvt_20260612_aaaa"
+        self.ticker = "AAPL"
+        self.side = "long"
+        self.shares = 100.0
+        self.price = 96.0
+        self.reason = "тайм-стоп наступил"
+        self.exit_reason = "time_stop"
+        self.dry_run = False
+        self.__dict__.update(kw)
+
+
+def test_cmd_close_card_sends_and_writes(monkeypatch, patched):
+    sent = {}
+    monkeypatch.setattr(
+        wo.ti, "send_close_card", lambda card, token, **k: sent.update(token=token) or 77
+    )
+    rc = wo.cmd_close_card(_CloseArgs())
+    assert rc == 0 and sent["token"] == "close-th_aapl_pvt_20260612_aaaa"
+    e = wo.load_ledger("2026-06-15")["orders"]["close-th_aapl_pvt_20260612_aaaa"]
+    assert e["kind"] == "close" and e["status"] == "pending" and e["exit_reason"] == "time_stop"
+
+
+def test_cmd_close_card_idempotent(monkeypatch, patched):
+    calls = []
+    monkeypatch.setattr(wo.ti, "send_close_card", lambda *a, **k: calls.append(1) or 77)
+    wo.cmd_close_card(_CloseArgs())
+    wo.cmd_close_card(_CloseArgs())
+    assert len(calls) == 1
+
+
 class _ListenArgs:
     def __init__(self, **kw):
         self.date = "2026-06-15"
@@ -535,8 +932,9 @@ def test_cmd_listen_once_processes_open_tap(monkeypatch, patched):
     monkeypatch.setattr(
         wo,
         "handle_open",
-        lambda entry, port, *, live, bot_token: opened.append((entry["thesis_id"], port, live))
-        or entry.update(status="placed"),
+        lambda entry, port, *, live, bot_token: (
+            opened.append((entry["thesis_id"], port, live)) or entry.update(status="placed")
+        ),
     )
 
     rc = wo.cmd_listen(_ListenArgs())
@@ -546,3 +944,84 @@ def test_cmd_listen_once_processes_open_tap(monkeypatch, patched):
     assert wo.load_offset() == 8
     # ledger persisted the new status
     assert wo.load_ledger("2026-06-15")["orders"]["th_x_pvt_20260101_0001"]["status"] == "placed"
+
+
+def test_cmd_listen_once_routes_scale_tap(monkeypatch, patched):
+    # A tapped +2R card (kind="scale") routes to handle_scale_out, not handle_open.
+    token = "2r-th_x_pvt_20260101_0001"
+    ledger = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            token: _scale_entry(thesis_id="th_x_pvt_20260101_0001", message_id=1, chat_id=-100)
+        },
+    }
+    wo.save_ledger("2026-06-15", ledger)
+    update = {
+        "update_id": 11,
+        "callback_query": {
+            "id": "cq",
+            "data": f"o:{token}",
+            "message": {"message_id": 1, "chat": {"id": -100}},
+        },
+    }
+    monkeypatch.setattr(wo.ti, "poll_updates", lambda *a, **k: [update])
+    monkeypatch.setattr(wo.ti, "answer_callback", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(wo.pib, "connect", lambda *a, **k: 9000)
+    routed = []
+    monkeypatch.setattr(
+        wo,
+        "handle_scale_out",
+        lambda entry, port, *, live, bot_token: (
+            routed.append(entry["thesis_id"]) or entry.update(status="scaled")
+        ),
+    )
+    monkeypatch.setattr(
+        wo, "handle_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("wrong route"))
+    )
+
+    rc = wo.cmd_listen(_ListenArgs())
+    assert rc == 0 and routed == ["th_x_pvt_20260101_0001"]
+    assert wo.load_ledger("2026-06-15")["orders"][token]["status"] == "scaled"
+
+
+def test_cmd_listen_once_routes_close_tap(monkeypatch, patched):
+    # A tapped close card (kind="close") routes to handle_close.
+    token = "close-th_x_pvt_20260101_0001"
+    ledger = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            token: _close_entry(thesis_id="th_x_pvt_20260101_0001", message_id=1, chat_id=-100)
+        },
+    }
+    wo.save_ledger("2026-06-15", ledger)
+    update = {
+        "update_id": 21,
+        "callback_query": {
+            "id": "cq",
+            "data": f"o:{token}",
+            "message": {"message_id": 1, "chat": {"id": -100}},
+        },
+    }
+    monkeypatch.setattr(wo.ti, "poll_updates", lambda *a, **k: [update])
+    monkeypatch.setattr(wo.ti, "answer_callback", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(wo.pib, "connect", lambda *a, **k: 9000)
+    routed = []
+    monkeypatch.setattr(
+        wo,
+        "handle_close",
+        lambda entry, port, *, live, bot_token: (
+            routed.append(entry["thesis_id"]) or entry.update(status="closed")
+        ),
+    )
+    monkeypatch.setattr(
+        wo, "handle_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("wrong route"))
+    )
+    monkeypatch.setattr(
+        wo, "handle_scale_out", lambda *a, **k: (_ for _ in ()).throw(AssertionError("wrong route"))
+    )
+
+    rc = wo.cmd_listen(_ListenArgs())
+    assert rc == 0 and routed == ["th_x_pvt_20260101_0001"]
+    assert wo.load_ledger("2026-06-15")["orders"][token]["status"] == "closed"

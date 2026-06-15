@@ -91,13 +91,20 @@ def parse_callback_data(data: str) -> tuple[str, str]:
     return action, token
 
 
-def inline_keyboard(token: str) -> dict:
-    """Two-button inline keyboard for one order card."""
+def inline_keyboard(
+    token: str, *, confirm_label: str = "✅ Открыть", decline_label: str = "✋ Не открывать"
+) -> dict:
+    """Two-button inline keyboard (confirm / decline) for one card.
+
+    Labels vary by card kind (open vs +2R scale), but both encode the same
+    ``o:<token>`` / ``x:<token>`` callback_data — the daemon routes by the
+    ledger entry's ``kind``, not by the label.
+    """
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Открыть", "callback_data": callback_data(ACTION_OPEN, token)},
-                {"text": "✋ Не открывать", "callback_data": callback_data(ACTION_SKIP, token)},
+                {"text": confirm_label, "callback_data": callback_data(ACTION_OPEN, token)},
+                {"text": decline_label, "callback_data": callback_data(ACTION_SKIP, token)},
             ]
         ]
     }
@@ -152,6 +159,67 @@ def send_order_card(
         "chat_id": chat_id,
         "text": card_text(card, mode_badge),  # plain text — see card_text docstring
         "reply_markup": inline_keyboard(token),
+    }
+    resp = _tg_post(bot_token, "sendMessage", payload)
+    if not resp.get("ok"):
+        return None
+    return resp.get("result", {}).get("message_id")
+
+
+def scale_card_text(card: dict, mode_badge: str = "📝 PAPER") -> str:
+    """+2R scale-out card body (PLAIN text). Keys: ticker/side/shares/entry_price/current_price."""
+    side = (card.get("side") or "long").lower()
+    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
+    shares = card.get("shares") or 0
+    half = max(1, int(shares // 2))
+    lines = [
+        f"{mode_badge}  💰 +2R  {card['ticker']}  ({arrow})",
+        f"Цена ~${_fmt(card.get('current_price'))} достигла +2R.",
+        f"Действие: продать 50% ({half} из {_fmt(shares)}) рыночным "
+        f"+ перенести стоп остатка в безубыток ${_fmt(card.get('entry_price'))}.",
+    ]
+    return "\n".join(lines)
+
+
+def send_scale_card(
+    card: dict, token: str, *, bot_token: str, chat_id: str, mode_badge: str = "📝 PAPER"
+) -> int | None:
+    """Send a +2R scale-out card with confirm/decline buttons; return message_id."""
+    payload = {
+        "chat_id": chat_id,
+        "text": scale_card_text(card, mode_badge),
+        "reply_markup": inline_keyboard(
+            token, confirm_label="💰 Зафиксировать 50%", decline_label="✋ Не сейчас"
+        ),
+    }
+    resp = _tg_post(bot_token, "sendMessage", payload)
+    if not resp.get("ok"):
+        return None
+    return resp.get("result", {}).get("message_id")
+
+
+def close_card_text(card: dict, mode_badge: str = "📝 PAPER") -> str:
+    """Position-management exit card body (PLAIN text). Keys: ticker/side/shares/reason."""
+    side = (card.get("side") or "long").lower()
+    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
+    lines = [
+        f"{mode_badge}  ⛔️ ЗАКРЫТЬ  {card['ticker']}  ({arrow})",
+        f"Причина: {card.get('reason')}",
+        f"Действие: закрыть {_fmt(card.get('shares'))} шт рыночным + снять защитные ордера.",
+    ]
+    return "\n".join(lines)
+
+
+def send_close_card(
+    card: dict, token: str, *, bot_token: str, chat_id: str, mode_badge: str = "📝 PAPER"
+) -> int | None:
+    """Send a position-management exit card with confirm/decline buttons; return message_id."""
+    payload = {
+        "chat_id": chat_id,
+        "text": close_card_text(card, mode_badge),
+        "reply_markup": inline_keyboard(
+            token, confirm_label="⛔️ Закрыть", decline_label="✋ Оставить"
+        ),
     }
     resp = _tg_post(bot_token, "sendMessage", payload)
     if not resp.get("ok"):

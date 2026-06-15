@@ -93,6 +93,20 @@ def http_post_json(
         return _http_json_urllib("POST", url, body, timeout)
 
 
+def http_delete_json(port: int, api_path: str, timeout: float = DEFAULT_TIMEOUT) -> Any:
+    """DELETE ``https://localhost:<port>/v1/api<api_path>`` and parse JSON (order cancel)."""
+    url = f"https://localhost:{port}/v1/api{api_path}"
+    try:
+        import requests  # type: ignore
+
+        _silence_insecure_warnings()
+        resp = requests.delete(url, verify=False, timeout=timeout)  # noqa: S501
+        resp.raise_for_status()
+        return resp.json()
+    except ImportError:
+        return _http_json_urllib("DELETE", url, None, timeout)
+
+
 def _silence_insecure_warnings() -> None:
     try:
         import urllib3  # type: ignore
@@ -405,6 +419,99 @@ def _to_float(value: Any) -> float | None:
         return float(str(value).replace(",", "").strip())
     except (ValueError, TypeError):
         return None
+
+
+# --------------------------------------------------------------------------- #
+# Scale-out / close helpers (+2R: sell half MKT, move the stop to breakeven)
+# --------------------------------------------------------------------------- #
+def exit_action_for(side: str) -> str:
+    """The order side that REDUCES/closes a position: SELL a long, BUY a short."""
+    return "SELL" if str(side or "long").lower() == "long" else "BUY"
+
+
+def place_market_close(
+    port: int,
+    account_id: str,
+    conid: int,
+    action: str,
+    qty: float,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict:
+    """Place a single MKT order (used to scale out / close). Normalized envelope."""
+    orders = [
+        {"conid": int(conid), "orderType": "MKT", "side": action, "quantity": qty, "tif": "DAY"}
+    ]
+    resp = place_with_confirmations(port, account_id, {"orders": orders}, timeout)
+    ids = extract_order_ids(resp)
+    return {"ok": _is_terminal_order_response(resp) and bool(ids), "order_ids": ids, "raw": resp}
+
+
+def place_stop(
+    port: int,
+    account_id: str,
+    conid: int,
+    action: str,
+    qty: float,
+    stop_price: float,
+    tif: str = "GTC",
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict:
+    """Place a single protective STP order (e.g. the new breakeven stop)."""
+    orders = [
+        {
+            "conid": int(conid),
+            "orderType": "STP",
+            "side": action,
+            "quantity": qty,
+            "auxPrice": stop_price,
+            "tif": _normalize_tif(tif),
+        }
+    ]
+    resp = place_with_confirmations(port, account_id, {"orders": orders}, timeout)
+    ids = extract_order_ids(resp)
+    return {"ok": _is_terminal_order_response(resp) and bool(ids), "order_ids": ids, "raw": resp}
+
+
+def cancel_order(
+    port: int, account_id: str, order_id: str, timeout: float = DEFAULT_TIMEOUT
+) -> Any:
+    """Cancel one working order by id (DELETE /iserver/account/{id}/order/{orderId})."""
+    return http_delete_json(port, f"/iserver/account/{account_id}/order/{order_id}", timeout)
+
+
+_WORKING_DONE_STATUSES = frozenset({"filled", "cancelled", "canceled", "inactive", "rejected"})
+
+
+def working_exit_orders(
+    port: int, conid: int, exit_action: str, timeout: float = DEFAULT_TIMEOUT
+) -> list[str]:
+    """Order ids of WORKING protective orders (stop/target) for a conid + exit side.
+
+    Used to tear down the old bracket children before re-arming a breakeven stop.
+    """
+    payload = http_get_json(port, "/iserver/account/orders", timeout)
+    rows: list = []
+    if isinstance(payload, dict) and isinstance(payload.get("orders"), list):
+        rows = payload["orders"]
+    elif isinstance(payload, list):
+        rows = payload
+    out: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_conid = row.get("conid")
+        if row_conid is None or int(row_conid) != int(conid):
+            continue
+        side = str(row.get("side", "")).upper()
+        if side != exit_action.upper():
+            continue
+        status = str(row.get("status") or row.get("order_ccp_status") or "").strip().lower()
+        if status in _WORKING_DONE_STATUSES:
+            continue
+        oid = row.get("orderId") or row.get("order_id")
+        if oid is not None:
+            out.append(str(oid))
+    return out
 
 
 # --------------------------------------------------------------------------- #

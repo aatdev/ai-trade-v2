@@ -157,6 +157,78 @@ def test_edit_card_removes_inline_keyboard(monkeypatch):
     assert captured["payload"]["message_id"] == 5
 
 
+def test_scale_card_text_and_buttons():
+    card = {
+        "ticker": "NVDA",
+        "side": "long",
+        "shares": 50,
+        "entry_price": 100.0,
+        "current_price": 116.5,
+    }
+    txt = ti.scale_card_text(card, mode_badge="📝 PAPER")
+    assert "+2R" in txt and "NVDA" in txt
+    assert "25 из 50" in txt  # 50% of 50
+    assert "безубыток $100" in txt
+    assert "*" not in txt  # plain text
+
+
+def test_inline_keyboard_custom_labels():
+    kb = ti.inline_keyboard(
+        "2r-th_x", confirm_label="💰 Зафиксировать 50%", decline_label="✋ Не сейчас"
+    )
+    row = kb["inline_keyboard"][0]
+    assert row[0]["text"] == "💰 Зафиксировать 50%"
+    assert row[0]["callback_data"] == "o:2r-th_x"  # still o:/x: under the hood
+    assert row[1]["callback_data"] == "x:2r-th_x"
+
+
+def test_send_scale_card_returns_message_id(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        ti,
+        "_tg_post",
+        lambda bt, m, p, timeout=30: (
+            captured.update(p=p) or {"ok": True, "result": {"message_id": 9}}
+        ),
+    )
+    card = {
+        "ticker": "NVDA",
+        "side": "long",
+        "shares": 50,
+        "entry_price": 100.0,
+        "current_price": 116.0,
+    }
+    mid = ti.send_scale_card(card, "2r-th_x", bot_token="B", chat_id="C")
+    assert mid == 9
+    assert "parse_mode" not in captured["p"]
+    assert captured["p"]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "o:2r-th_x"
+
+
+def test_close_card_text_and_buttons():
+    card = {"ticker": "AAPL", "side": "long", "shares": 100, "reason": "тайм-стоп 15 т.д. наступил"}
+    txt = ti.close_card_text(card, mode_badge="📝 PAPER")
+    assert "ЗАКРЫТЬ" in txt and "AAPL" in txt and "тайм-стоп" in txt and "100" in txt
+    assert "*" not in txt
+
+
+def test_send_close_card_buttons_and_plain(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        ti,
+        "_tg_post",
+        lambda bt, m, p, timeout=30: (
+            captured.update(p=p) or {"ok": True, "result": {"message_id": 12}}
+        ),
+    )
+    card = {"ticker": "AAPL", "side": "long", "shares": 100, "reason": "закрытие ниже EMA20"}
+    mid = ti.send_close_card(card, "close-th_x", bot_token="B", chat_id="C")
+    assert mid == 12
+    assert "parse_mode" not in captured["p"]
+    row = captured["p"]["reply_markup"]["inline_keyboard"][0]
+    assert row[0]["text"] == "⛔️ Закрыть" and row[0]["callback_data"] == "o:close-th_x"
+    assert row[1]["text"] == "✋ Оставить"
+
+
 def test_card_and_edit_are_plain_text(monkeypatch):
     # Regression: underscores in card content / outcome text must NOT be sent
     # with parse_mode (Markdown would reject ENTRY_READY-style strings).

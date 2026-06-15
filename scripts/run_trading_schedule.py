@@ -1378,12 +1378,16 @@ def armed_order_tickers(date_str: str) -> set[str]:
 def _send_watchlist_cards(date_str: str, dec: dict, args) -> None:
     """Producer hook: send Telegram order cards for ENTRY_READY candidates.
 
-    Only fires on a clean ``allow`` gate (not degraded), and never on dry-run /
-    --no-telegram. Placing the orders is a separate, opt-in step handled by the
-    ``watchlist_orders.py listen`` daemon — this only rings the trader."""
+    Fires on any clean (non-degraded) gate — ``allow`` rings long candidates,
+    ``restrict`` / ``cash-priority`` rings short candidates (the producer filters
+    per side). Never on dry-run / --no-telegram. Placing the orders is a separate,
+    opt-in step handled by the ``watchlist_orders.py listen`` daemon — this only
+    rings the trader."""
     if args.dry_run or args.no_telegram:
         return
-    if dec.get("degraded") or dec.get("decision") != "allow":
+    # Fire on any clean (non-degraded) gate: allow -> long cards, restrict /
+    # cash-priority -> short cards. The producer filters cards per side.
+    if dec.get("degraded"):
         return
     run_skill_script(
         [WATCHLIST_ORDERS_SCRIPT, "send", "--date", date_str],
@@ -1391,6 +1395,46 @@ def _send_watchlist_cards(date_str: str, dec: dict, args) -> None:
         dry_run=args.dry_run,
         timeout=args.timeout,
     )
+
+
+def _send_scale_cards(date_str: str, signals: list, args) -> None:
+    """For each +2R (TWO_R) signal, send an actionable scale-out confirmation card.
+
+    The listen daemon places the sell-50% + breakeven-stop on confirmation. Per-day
+    dedup is handled by the intraday `sent` state (so the card is sent once) and by
+    the producer's own ledger guard."""
+    if args.dry_run or args.no_telegram:
+        return
+    for s in signals:
+        if s.get("type") != tsig.TWO_R:
+            continue
+        pos = s.get("position") or {}
+        tid, shares, entry = pos.get("thesis_id"), pos.get("shares"), pos.get("entry_price")
+        if not (tid and shares and entry):
+            continue
+        run_skill_script(
+            [
+                WATCHLIST_ORDERS_SCRIPT,
+                "scale-card",
+                "--date",
+                date_str,
+                "--thesis-id",
+                tid,
+                "--ticker",
+                s["ticker"],
+                "--side",
+                s.get("side", "long"),
+                "--shares",
+                str(shares),
+                "--entry",
+                str(entry),
+                "--price",
+                str(s.get("price", entry)),
+            ],
+            label=f"+2R card {s['ticker']}",
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1441,6 +1485,8 @@ def slot_premarket(date_str: str, args) -> int:
     # per-candidate order cards (the listen daemon places them on confirmation).
     if wl_data is not None and _watchlist_is_fresh(wl_data, _today):
         _send_watchlist_cards(date_str, dec, args)
+    # Шаг 3: rule-violation exit cards for open positions (gate-independent).
+    _send_close_cards(date_str, args)
     return 0 if ok or args.dry_run else 1
 
 
@@ -2335,11 +2381,12 @@ TIME_STOP_WARN_AHEAD_DAYS = 2
 SMA50_TRAIL_AFTER_TRADING_DAYS = 20
 
 
-def _position_care_warnings(args) -> list[str]:
-    """Plan rules the automation previously left to the human (step 3 table):
-    time stops (15 t.d. long / 10 t.d. short), daily close below EMA20(≈21),
-    SMA50 trail after ~4 weeks in trade. Advisory lines for the evening digest;
-    nothing is executed automatically."""
+def _position_care_signals(args) -> list[dict]:
+    """Structured step-3 management events (shared by the digest text + close cards).
+
+    Each event carries ticker/side/shares/thesis_id/price + a digest ``text`` and,
+    when actionable, a short ``reason`` and ``exit_reason`` ('time_stop'/'manual').
+    Advisory-only events (time-stop approaching) have ``exit_reason=None``."""
     if args.dry_run:
         return []
     heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
@@ -2356,12 +2403,21 @@ def _position_care_warnings(args) -> list[str]:
         log(f"position care: индикаторы недоступны: {exc}", logging.WARNING)
         indicators = {}
 
-    warnings: list[str] = []
+    events: list[dict] = []
     for p in positions:
         ticker = str(p.get("ticker", "")).upper()
         if not ticker:
             continue
         side = str(p.get("side") or "long").lower()
+        ind = indicators.get(ticker) or {}
+        close, ema20, sma50 = ind.get("close"), ind.get("ema20"), ind.get("sma50")
+        base = {
+            "ticker": ticker,
+            "side": side,
+            "shares": p.get("shares"),
+            "thesis_id": p.get("thesis_id"),
+            "price": close or p.get("entry_price"),
+        }
         limit = SHORT_TIME_STOP_TRADING_DAYS if side == "short" else long_ts
         days = None
         entry_date = str(p.get("entry_date") or "")[:10]
@@ -2369,27 +2425,45 @@ def _position_care_warnings(args) -> list[str]:
             days = _weekdays_since(entry_date)
         if days is not None:
             if days >= limit:
-                warnings.append(
-                    f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
-                    "НАСТУПИЛ: закрыть, если нет +1R"
+                events.append(
+                    {
+                        **base,
+                        "text": f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
+                        "НАСТУПИЛ: закрыть, если нет +1R",
+                        "reason": f"тайм-стоп {limit} т.д. наступил",
+                        "exit_reason": "time_stop",
+                    }
                 )
             elif days >= limit - TIME_STOP_WARN_AHEAD_DAYS:
-                warnings.append(
-                    f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
-                    f"через {limit - days} т.д."
+                events.append(
+                    {
+                        **base,
+                        "text": f"⏱ {ticker}: {days} т.д. в позиции — тайм-стоп {limit} т.д. "
+                        f"через {limit - days} т.д.",
+                        "reason": None,
+                        "exit_reason": None,
+                    }
                 )
-        ind = indicators.get(ticker) or {}
-        close, ema20, sma50 = ind.get("close"), ind.get("ema20"), ind.get("sma50")
         if close and ema20:
             if side == "long" and close < ema20:
-                warnings.append(
-                    f"📉 {ticker}: закрытие {close:g} ниже EMA20(≈21) {ema20:g} — "
-                    "по плану выйти из остатка"
+                events.append(
+                    {
+                        **base,
+                        "text": f"📉 {ticker}: закрытие {close:g} ниже EMA20(≈21) {ema20:g} — "
+                        "по плану выйти из остатка",
+                        "reason": "закрытие ниже EMA20",
+                        "exit_reason": "manual",
+                    }
                 )
             elif side == "short" and close > ema20:
-                warnings.append(
-                    f"📈 {ticker}: закрытие {close:g} выше EMA20(≈21) {ema20:g} — "
-                    "слабость шорта, рассмотреть выход"
+                events.append(
+                    {
+                        **base,
+                        "text": f"📈 {ticker}: закрытие {close:g} выше EMA20(≈21) {ema20:g} — "
+                        "слабость шорта, рассмотреть выход",
+                        "reason": "закрытие выше EMA20 (слабость шорта)",
+                        "exit_reason": "manual",
+                    }
                 )
         if (
             side == "long"
@@ -2399,11 +2473,69 @@ def _position_care_warnings(args) -> list[str]:
             and sma50
             and close < sma50
         ):
-            warnings.append(
-                f"📉 {ticker}: >4 недель в позиции и закрытие {close:g} ниже "
-                f"SMA50 {sma50:g} — трейл-выход"
+            events.append(
+                {
+                    **base,
+                    "text": f"📉 {ticker}: >4 недель в позиции и закрытие {close:g} ниже "
+                    f"SMA50 {sma50:g} — трейл-выход",
+                    "reason": "трейл-выход ниже SMA50",
+                    "exit_reason": "manual",
+                }
             )
-    return warnings
+    return events
+
+
+def _position_care_warnings(args) -> list[str]:
+    """Plan step-3 management rules as advisory digest lines (text only)."""
+    return [e["text"] for e in _position_care_signals(args)]
+
+
+def _send_close_cards(date_str: str, args) -> None:
+    """Send a rule-violation exit confirmation card per position with an actionable
+    exit (time-stop / close<EMA20 / SMA50 trail). On confirmation the listen daemon
+    market-closes the position and cancels its protective legs. One card per thesis
+    per day (producer ledger dedup); time_stop wins as the recorded exit reason."""
+    if args.dry_run or args.no_telegram:
+        return
+    grouped: dict[str, dict] = {}
+    for e in _position_care_signals(args):
+        if not e.get("exit_reason"):
+            continue
+        tid = e.get("thesis_id")
+        if not tid or not e.get("shares"):
+            continue
+        g = grouped.setdefault(tid, {"event": e, "reasons": [], "exit_reason": "manual"})
+        if e.get("reason"):
+            g["reasons"].append(e["reason"])
+        if e["exit_reason"] == "time_stop":
+            g["exit_reason"] = "time_stop"
+    for g in grouped.values():
+        e = g["event"]
+        run_skill_script(
+            [
+                WATCHLIST_ORDERS_SCRIPT,
+                "close-card",
+                "--date",
+                date_str,
+                "--thesis-id",
+                e["thesis_id"],
+                "--ticker",
+                e["ticker"],
+                "--side",
+                e["side"],
+                "--shares",
+                str(e["shares"]),
+                "--price",
+                str(e["price"]),
+                "--reason",
+                "; ".join(g["reasons"]) or "правило ведения",
+                "--exit-reason",
+                g["exit_reason"],
+            ],
+            label=f"close card {e['ticker']}",
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
 
 
 def _care_block(args) -> str:
@@ -2565,6 +2697,10 @@ def slot_evening_prep(date_str: str, args) -> int:
     # side before screening/ingesting this evening's same-side candidates.
     terminated_offside = _terminate_offside_theses(dec, args)
 
+    # Шаг 3: rule-violation exit cards on the fresh daily close (gate-independent;
+    # runs for both branches, deduped per day with the premarket cards).
+    _send_close_cards(date_str, args)
+
     if dec["decision"] != "allow":
         return _evening_short_branch(
             date_str, dec, args, regime_ok=ok, terminated_offside=terminated_offside
@@ -2674,6 +2810,11 @@ def slot_intraday(date_str: str, args) -> int:
     if not signals:
         log(f"intraday: {len(tickers)} тикеров проверено — новых сигналов нет")
         return 0
+
+    # +2R signals also get an actionable Telegram confirmation card (sell 50% +
+    # stop->breakeven on tap), handled by the listen daemon. The one-way digest
+    # still lists them for context.
+    _send_scale_cards(date_str, signals, args)
 
     # Entries that ran away (MISSED) are no longer actionable -> drop their
     # [WL] TradingView alerts right now; warn when TV is down.

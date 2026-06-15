@@ -194,14 +194,10 @@ def test_run_claude_requires_expected_output(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
     # File not written -> failure even though rc=0 and stdout is non-empty.
-    assert ts.run_claude(
-        "x", label="t", dry_run=False, timeout=10, expected_output=out
-    ) is False
+    assert ts.run_claude("x", label="t", dry_run=False, timeout=10, expected_output=out) is False
     # Once the expected file exists with content -> success.
     out.write_text(json.dumps({"ok": True}))
-    assert ts.run_claude(
-        "x", label="t", dry_run=False, timeout=10, expected_output=out
-    ) is True
+    assert ts.run_claude("x", label="t", dry_run=False, timeout=10, expected_output=out) is True
 
 
 # --------------------------------------------------------------------------- #
@@ -283,9 +279,9 @@ def test_terminate_offside_long_regime_kills_only_nonopen_shorts(monkeypatch):
     theses = [
         {"thesis_id": "s_idea", "side": "short", "status": "IDEA"},
         {"thesis_id": "s_ready", "side": "short", "status": "ENTRY_READY"},
-        {"thesis_id": "s_active", "side": "short", "status": "ACTIVE"},        # open position
-        {"thesis_id": "s_term", "side": "short", "status": "INVALIDATED"},     # terminal
-        {"thesis_id": "l_idea", "side": "long", "status": "IDEA"},             # right side
+        {"thesis_id": "s_active", "side": "short", "status": "ACTIVE"},  # open position
+        {"thesis_id": "s_term", "side": "short", "status": "INVALIDATED"},  # terminal
+        {"thesis_id": "l_idea", "side": "long", "status": "IDEA"},  # right side
     ]
     killed = _patch_theses(monkeypatch, theses)
     out = ts._terminate_offside_theses({"decision": "allow"}, types.SimpleNamespace(dry_run=False))
@@ -298,11 +294,13 @@ def test_terminate_offside_short_regime_kills_only_nonopen_longs(monkeypatch):
         {"thesis_id": "l_idea", "side": "long", "status": "IDEA"},
         {"thesis_id": "l_ready", "side": "long", "status": "ENTRY_READY"},
         {"thesis_id": "l_active", "side": "long", "status": "PARTIALLY_CLOSED"},  # open position
-        {"thesis_id": "nul_idea", "status": "IDEA"},                              # null side -> long
-        {"thesis_id": "s_idea", "side": "short", "status": "IDEA"},               # right side
+        {"thesis_id": "nul_idea", "status": "IDEA"},  # null side -> long
+        {"thesis_id": "s_idea", "side": "short", "status": "IDEA"},  # right side
     ]
     killed = _patch_theses(monkeypatch, theses)
-    out = ts._terminate_offside_theses({"decision": "restrict"}, types.SimpleNamespace(dry_run=False))
+    out = ts._terminate_offside_theses(
+        {"decision": "restrict"}, types.SimpleNamespace(dry_run=False)
+    )
     assert sorted(out) == ["l_idea", "l_ready", "nul_idea"]
     assert sorted(killed) == ["l_idea", "l_ready", "nul_idea"]
 
@@ -316,10 +314,12 @@ def test_terminate_offside_degraded_gate_is_noop(monkeypatch):
 
 
 def test_terminate_offside_dry_run_lists_without_terminating(monkeypatch):
-    killed = _patch_theses(monkeypatch, [{"thesis_id": "s_idea", "side": "short", "status": "IDEA"}])
+    killed = _patch_theses(
+        monkeypatch, [{"thesis_id": "s_idea", "side": "short", "status": "IDEA"}]
+    )
     out = ts._terminate_offside_theses({"decision": "allow"}, types.SimpleNamespace(dry_run=True))
     assert out == ["s_idea"]  # reported as "would invalidate"
-    assert killed == []       # but not actually terminated
+    assert killed == []  # but not actually terminated
 
 
 # --------------------------------------------------------------------------- #
@@ -1000,12 +1000,30 @@ class TestPositionCareWarnings:
 
     def test_time_stop_reached_and_approaching(self, monkeypatch, tmp_path):
         positions = [
-            {"ticker": "OLD", "side": "long", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 95.0, "entry_date": _weekdays_ago(16)},
-            {"ticker": "MID", "side": "long", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 95.0, "entry_date": _weekdays_ago(13)},
-            {"ticker": "NEW", "side": "long", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 95.0, "entry_date": _weekdays_ago(3)},
+            {
+                "ticker": "OLD",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(16),
+            },
+            {
+                "ticker": "MID",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(13),
+            },
+            {
+                "ticker": "NEW",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(3),
+            },
         ]
         args = self._setup(monkeypatch, tmp_path, positions)
         lines = "\n".join(ts._position_care_warnings(args))
@@ -1015,8 +1033,14 @@ class TestPositionCareWarnings:
 
     def test_short_uses_10_day_time_stop(self, monkeypatch, tmp_path):
         positions = [
-            {"ticker": "SHRT", "side": "short", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 105.0, "entry_date": _weekdays_ago(11)},
+            {
+                "ticker": "SHRT",
+                "side": "short",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 105.0,
+                "entry_date": _weekdays_ago(11),
+            },
         ]
         args = self._setup(monkeypatch, tmp_path, positions)
         lines = "\n".join(ts._position_care_warnings(args))
@@ -1024,8 +1048,14 @@ class TestPositionCareWarnings:
 
     def test_ema_break_and_sma50_trail(self, monkeypatch, tmp_path):
         positions = [
-            {"ticker": "AAPL", "side": "long", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 95.0, "entry_date": _weekdays_ago(21)},
+            {
+                "ticker": "AAPL",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(21),
+            },
         ]
         indicators = {"AAPL": {"close": 96.0, "ema20": 98.0, "sma50": 97.0}}
         args = self._setup(monkeypatch, tmp_path, positions, indicators)
@@ -1035,8 +1065,14 @@ class TestPositionCareWarnings:
 
     def test_short_ema_break_mirrored(self, monkeypatch, tmp_path):
         positions = [
-            {"ticker": "NFLX", "side": "short", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 105.0, "entry_date": _weekdays_ago(2)},
+            {
+                "ticker": "NFLX",
+                "side": "short",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 105.0,
+                "entry_date": _weekdays_ago(2),
+            },
         ]
         indicators = {"NFLX": {"close": 103.0, "ema20": 101.0, "sma50": 110.0}}
         args = self._setup(monkeypatch, tmp_path, positions, indicators)
@@ -1045,12 +1081,87 @@ class TestPositionCareWarnings:
 
     def test_quiet_positions_produce_no_warnings(self, monkeypatch, tmp_path):
         positions = [
-            {"ticker": "OK", "side": "long", "entry_price": 100.0, "shares": 10,
-             "stop_loss": 95.0, "entry_date": _weekdays_ago(3)},
+            {
+                "ticker": "OK",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(3),
+            },
         ]
         indicators = {"OK": {"close": 105.0, "ema20": 102.0, "sma50": 100.0}}
         args = self._setup(monkeypatch, tmp_path, positions, indicators)
         assert ts._position_care_warnings(args) == []
+
+    def test_care_signals_mark_exit_reason(self, monkeypatch, tmp_path):
+        positions = [
+            {
+                "ticker": "OLD",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(16),
+                "thesis_id": "th_old_pvt_20260101_0001",
+            },
+            {
+                "ticker": "MID",
+                "side": "long",
+                "entry_price": 100.0,
+                "shares": 10,
+                "stop_loss": 95.0,
+                "entry_date": _weekdays_ago(13),
+                "thesis_id": "th_mid_pvt_20260101_0002",
+            },
+        ]
+        args = self._setup(monkeypatch, tmp_path, positions)
+        events = ts._position_care_signals(args)
+        by_ticker = {e["ticker"]: e for e in events}
+        assert by_ticker["OLD"]["exit_reason"] == "time_stop"  # reached -> actionable
+        assert by_ticker["MID"]["exit_reason"] is None  # approaching -> advisory only
+
+
+class TestSendCloseCards:
+    def test_send_close_cards_shells_out_for_exits(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(tmp_path / "trading_profile.json", {"time_stop_trading_days": 15})
+        _heat_file(
+            tmp_path,
+            positions=[
+                {
+                    "ticker": "AAPL",
+                    "side": "long",
+                    "entry_price": 100.0,
+                    "shares": 50,
+                    "stop_loss": 95.0,
+                    "entry_date": _weekdays_ago(21),
+                    "thesis_id": "th_aapl_pvt_20260101_0003",
+                },
+            ],
+        )
+        # close below both EMA20 and SMA50 + >4 weeks -> actionable exits
+        monkeypatch.setattr(
+            ts.tsig,
+            "fetch_indicators",
+            lambda tickers, **k: {"AAPL": {"close": 96.0, "ema20": 98.0, "sma50": 97.0}},
+        )
+        calls = []
+        monkeypatch.setattr(ts, "run_skill_script", lambda cmd, **k: calls.append(cmd))
+        args = types.SimpleNamespace(dry_run=False, no_telegram=False, timeout=60)
+        ts._send_close_cards("2026-06-15", args)
+        assert len(calls) == 1  # one close card for the position
+        cmd = [str(c) for c in calls[0]]
+        assert "close-card" in cmd and "th_aapl_pvt_20260101_0003" in cmd
+        assert "--exit-reason" in cmd and "time_stop" in cmd  # time_stop wins
+
+    def test_send_close_cards_skips_when_no_telegram(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        called = []
+        monkeypatch.setattr(ts, "run_skill_script", lambda cmd, **k: called.append(cmd))
+        args = types.SimpleNamespace(dry_run=False, no_telegram=True, timeout=60)
+        ts._send_close_cards("2026-06-15", args)
+        assert called == []
 
 
 # --------------------------------------------------------------------------- #
@@ -1105,7 +1216,8 @@ class TestWatchlistFreshness:
         )
         monkeypatch.setattr(ts, "run_skill_script", lambda *a, **k: None)
         monkeypatch.setattr(
-            ts, "run_regime_gate",
+            ts,
+            "run_regime_gate",
             lambda *a, **k: (True, {"decision": "allow", "rationale": "x"}),
         )
         monkeypatch.setattr(ts, "tv_available", lambda **k: True)
@@ -1232,8 +1344,10 @@ class TestShortConditions:
     def _ftd_report(state, ftd_date, *, invalidated=False):
         return {
             "market_state": {"combined_state": state},
-            "sp500": {"state": state, "ftd": {"ftd_detected": state == "FTD_CONFIRMED",
-                                              "ftd_date": ftd_date}},
+            "sp500": {
+                "state": state,
+                "ftd": {"ftd_detected": state == "FTD_CONFIRMED", "ftd_date": ftd_date},
+            },
             "nasdaq": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
             "ftd_invalidation": {"invalidated": invalidated},
         }
@@ -1265,8 +1379,14 @@ class TestShortConditions:
 
     def test_ibd_dd_count_preferred_over_market_top(self, monkeypatch, tmp_path):
         # market_top overstates DD (no rally invalidation); IBD says only 1.
-        ibd = {"market_distribution_state": {"index_results": [
-            {"symbol": "QQQ", "d25_count": 1}, {"symbol": "SPY", "d25_count": 0}]}}
+        ibd = {
+            "market_distribution_state": {
+                "index_results": [
+                    {"symbol": "QQQ", "d25_count": 1},
+                    {"symbol": "SPY", "d25_count": 0},
+                ]
+            }
+        }
         self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ibd=ibd)
         active, reason = ts._short_conditions()
         assert active is False
@@ -1343,8 +1463,14 @@ class TestAutoAnalyzeReconcile:
 
     def test_levels_update_resizes_from_profile_with_caps(self, monkeypatch, tmp_path):
         cand = {
-            "ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5,
-            "target": 63.0, "shares": 639, "risk_dollars": 517.59, "score": 80.3,
+            "ticker": "AOS",
+            "side": "long",
+            "pivot": 59.0,
+            "stop": 56.5,
+            "target": 63.0,
+            "shares": 639,
+            "risk_dollars": 517.59,
+            "score": 80.3,
         }
         out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
         c = out["candidates"][0]
@@ -1366,8 +1492,12 @@ class TestAutoAnalyzeReconcile:
             ts, "_invalidate_thesis", lambda tid, *, reason: invalidated.append(tid)
         )
         cand = {
-            "ticker": "AOS", "side": "short", "pivot": 58.66, "stop": 59.47,
-            "shares": 639, "thesis_id": "th_aos_pvt_20260611_ab12",
+            "ticker": "AOS",
+            "side": "short",
+            "pivot": 58.66,
+            "stop": 59.47,
+            "shares": 639,
+            "thesis_id": "th_aos_pvt_20260611_ab12",
         }
         out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
         assert out["candidates"] == []
@@ -1436,10 +1566,25 @@ class TestApplyValidationLevels:
         return ts._apply_validation_levels(wl, wl_path, validation, args)
 
     def test_long_pass_overrides_levels_and_resizes(self, monkeypatch, tmp_path):
-        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5,
-                "target": 63.0, "shares": 100, "score": 80.3}
-        v = [{"ticker": "AOS", "verdict": "pass", "note": "base ok",
-              "entry": 60.0, "stop": 56.0, "target": 66.0}]
+        cand = {
+            "ticker": "AOS",
+            "side": "long",
+            "pivot": 59.0,
+            "stop": 56.5,
+            "target": 63.0,
+            "shares": 100,
+            "score": 80.3,
+        }
+        v = [
+            {
+                "ticker": "AOS",
+                "verdict": "pass",
+                "note": "base ok",
+                "entry": 60.0,
+                "stop": 56.0,
+                "target": 66.0,
+            }
+        ]
         out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v)
         c = out["candidates"][0]
         assert c["pivot"] == 60.0 and c["stop"] == 56.0 and c["target"] == 66.0

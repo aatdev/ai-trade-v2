@@ -164,8 +164,21 @@ def build_card(cand: dict, thesis: dict, date_str: str) -> dict | None:
     }
 
 
-def select_cards(wl: dict, theses: list[dict], date_str: str) -> list[dict]:
-    """All order cards for watchlist candidates that map to an ENTRY_READY thesis."""
+def _side_allowed(side: str, gate_decision: str) -> bool:
+    """Side permitted by the regime gate (mirrors trading_signals._candidate_open_signal):
+    longs only under ``allow``; shorts only under ``restrict`` / ``cash-priority``."""
+    if str(side or "long").lower() == "long":
+        return gate_decision == "allow"
+    return gate_decision in ("restrict", "cash-priority")
+
+
+def select_cards(wl: dict, theses: list[dict], date_str: str, gate_decision: str) -> list[dict]:
+    """Order cards for ENTRY_READY watchlist candidates whose side the gate permits.
+
+    Long candidates surface only under ``allow``; short candidates only under
+    ``restrict`` / ``cash-priority`` — so a fresh short watchlist (built by the
+    evening short branch) gets confirmation cards too, not just longs.
+    """
     by_id, by_ts = _entry_ready_index(theses)
     cards: list[dict] = []
     for cand in wl.get("candidates", []):
@@ -175,7 +188,7 @@ def select_cards(wl: dict, theses: list[dict], date_str: str) -> list[dict]:
         if not thesis:
             continue
         card = build_card(cand, thesis, date_str)
-        if card:
+        if card and _side_allowed(card["side"], gate_decision):
             cards.append(card)
     return cards
 
@@ -197,13 +210,13 @@ def _parse_date(date_str: str) -> dt.date:
 def cmd_send(args) -> int:
     date_str = _today_iso(args.date)
     gate = sched.read_decision(sched.decision_path(date_str))
-    if gate.get("degraded") or gate.get("decision") != "allow":
-        log.info(
-            "gate=%s degraded=%s → карточки не рассылаются",
-            gate.get("decision"),
-            bool(gate.get("degraded")),
-        )
+    # Only a degraded/unknown regime blocks cards outright. A clean allow sends
+    # long cards; a clean restrict/cash-priority sends short cards (per-side
+    # filtering happens in select_cards).
+    if gate.get("degraded"):
+        log.info("gate degraded (%s) → карточки не рассылаются", gate.get("decision"))
         return 0
+    decision = gate.get("decision")
 
     wl_file = sched.latest_watchlist()
     wl = sched._read_json(wl_file) if wl_file else None
@@ -214,9 +227,9 @@ def cmd_send(args) -> int:
         log.warning("watchlist устарел (%s) → карточки не рассылаются", wl.get("date"))
         return 0
 
-    cards = select_cards(wl, sched._list_theses(), date_str)
+    cards = select_cards(wl, sched._list_theses(), date_str, decision)
     if not cards:
-        log.info("нет ENTRY_READY-кандидатов с геометрией → нечего слать")
+        log.info("нет ENTRY_READY-кандидатов (по стороне гейта %s) → нечего слать", decision)
         return 0
 
     ledger = load_ledger(date_str)
@@ -258,6 +271,7 @@ def cmd_send(args) -> int:
                 continue
         ledger["orders"][tid] = {
             **card,
+            "kind": "open",
             "message_id": message_id,
             "chat_id": chat_id,
             "status": "pending",
@@ -273,6 +287,101 @@ def cmd_send(args) -> int:
         ledger["mode"] = "paper" if pib.is_paper() else "live"
         save_ledger(date_str, ledger)
     log.info("разослано карточек: %d/%d", sent, len(cards))
+    return 0
+
+
+SCALE_TOKEN_PREFIX = "2r-"
+_SCALE_RESOLVED = {"pending", "scaled", "skipped", "preview", "expired", "error"}
+
+
+def cmd_scale_card(args) -> int:
+    """Producer: send a +2R scale-out card for one open position (one per day/thesis)."""
+    date_str = _today_iso(args.date)
+    token = SCALE_TOKEN_PREFIX + args.thesis_id
+    card = {
+        "kind": "scale",
+        "thesis_id": args.thesis_id,
+        "ticker": args.ticker,
+        "side": (args.side or "long").lower(),
+        "shares": args.shares,
+        "entry_price": args.entry,
+        "current_price": args.price,
+    }
+    ledger = load_ledger(date_str)
+    existing = ledger["orders"].get(token)
+    if existing and existing.get("status") in _SCALE_RESOLVED:
+        log.info("+2R карточка уже была сегодня для %s", token)
+        return 0
+    if args.dry_run:
+        log.info("(dry-run) +2R карточка %s x%s @ ~%s", args.ticker, args.shares, args.price)
+        return 0
+    bot_token, chat_id = ti.resolve_credentials()
+    mid = ti.send_scale_card(
+        card, token, bot_token=bot_token, chat_id=chat_id, mode_badge=pib.mode_badge()
+    )
+    if mid is None:
+        log.warning("не удалось отправить +2R карточку %s", token)
+        return 0
+    ledger["orders"][token] = {
+        **card,
+        "message_id": mid,
+        "chat_id": chat_id,
+        "status": "pending",
+        "sold_qty": None,
+        "remaining_qty": None,
+        "scale_order_ids": [],
+        "error": None,
+    }
+    ledger["mode"] = "paper" if pib.is_paper() else "live"
+    save_ledger(date_str, ledger)
+    log.info("+2R карточка отправлена: %s", token)
+    return 0
+
+
+CLOSE_TOKEN_PREFIX = "close-"
+_CLOSE_RESOLVED = {"pending", "closed", "skipped", "preview", "expired", "error"}
+
+
+def cmd_close_card(args) -> int:
+    """Producer: send a position-management exit card (one per day/thesis)."""
+    date_str = _today_iso(args.date)
+    token = CLOSE_TOKEN_PREFIX + args.thesis_id
+    card = {
+        "kind": "close",
+        "thesis_id": args.thesis_id,
+        "ticker": args.ticker,
+        "side": (args.side or "long").lower(),
+        "shares": args.shares,
+        "price": args.price,
+        "reason": args.reason,
+        "exit_reason": args.exit_reason,
+    }
+    ledger = load_ledger(date_str)
+    existing = ledger["orders"].get(token)
+    if existing and existing.get("status") in _CLOSE_RESOLVED:
+        log.info("close карточка уже была сегодня для %s", token)
+        return 0
+    if args.dry_run:
+        log.info("(dry-run) close карточка %s: %s", args.ticker, args.reason)
+        return 0
+    bot_token, chat_id = ti.resolve_credentials()
+    mid = ti.send_close_card(
+        card, token, bot_token=bot_token, chat_id=chat_id, mode_badge=pib.mode_badge()
+    )
+    if mid is None:
+        log.warning("не удалось отправить close карточку %s", token)
+        return 0
+    ledger["orders"][token] = {
+        **card,
+        "message_id": mid,
+        "chat_id": chat_id,
+        "status": "pending",
+        "close_order_ids": [],
+        "error": None,
+    }
+    ledger["mode"] = "paper" if pib.is_paper() else "live"
+    save_ledger(date_str, ledger)
+    log.info("close карточка отправлена: %s", token)
     return 0
 
 
@@ -450,6 +559,209 @@ def handle_skip(entry: dict, *, bot_token: str) -> None:
     _edit(entry, "✋ Пропущено — тезис остаётся ENTRY_READY.", bot_token)
 
 
+def record_trim(thesis_id: str, shares_sold: float, price: float) -> bool:
+    """Record a +2R partial close in trader-memory (ACTIVE -> PARTIALLY_CLOSED)."""
+    cmd = [
+        sys.executable,
+        str(sched.TRADER_MEMORY_CLI),
+        "store",
+        "trim",
+        thesis_id,
+        "--shares-sold",
+        str(shares_sold),
+        "--price",
+        str(price),
+        "--date",
+        _now_iso(),
+        "--reason",
+        "+2R partial (confirmed)",
+    ]
+    try:
+        res = subprocess.run(
+            cmd, cwd=sched.PROJECT_ROOT, capture_output=True, text=True, timeout=120
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        log.warning("trim failed for %s: %s", thesis_id, exc)
+        return False
+    if res.returncode != 0:
+        log.warning(
+            "trim rc=%s for %s: %s", res.returncode, thesis_id, (res.stderr or "").strip()[:200]
+        )
+        return False
+    return True
+
+
+def handle_scale_out(entry: dict, port: int | None, *, live: bool, bot_token: str) -> None:
+    """Tap "Зафиксировать 50%" on a +2R card: sell 50% MKT, move stop to breakeven.
+
+    Sells half the position at market (exit side), tears down the old bracket's
+    working stop/target, arms a fresh breakeven stop for the remainder, and
+    records the partial close (ACTIVE -> PARTIALLY_CLOSED) in trader-memory.
+    """
+    if entry.get("status") in {"scaled"}:
+        return  # idempotent: already scaled
+
+    allowed, why = pib.order_placement_status(live)
+    if not allowed:
+        entry["status"] = "preview"
+        entry["error"] = why
+        _edit(entry, f"👁 Preview ({why}): +2R не исполнен. Позиция без изменений.", bot_token)
+        return
+    if port is None:
+        entry["status"] = "error"
+        entry["error"] = "gateway unavailable"
+        _edit(entry, "❗️IB Gateway недоступен — +2R не исполнен. Позиция без изменений.", bot_token)
+        return
+
+    shares = entry.get("shares") or 0
+    sell_qty = max(1, int(shares // 2))
+    remaining = shares - sell_qty
+    side = entry["side"]
+    exit_action = pib.exit_action_for(side)
+    try:
+        conid = pib.resolve_conid(port, entry["ticker"])
+        account_id = pib.resolve_account_id(port)
+        close = pib.place_market_close(port, account_id, conid, exit_action, sell_qty)
+        if not close.get("ok"):
+            entry["status"] = "error"
+            entry["error"] = "scale MKT rejected"
+            _edit(entry, "❗️Рыночный ордер на 50% отклонён — позиция без изменений.", bot_token)
+            return
+        # Tear down the old (full-size) bracket children, arm a breakeven stop.
+        for oid in pib.working_exit_orders(port, conid, exit_action):
+            pib.cancel_order(port, account_id, oid)
+        be_ok = True
+        if remaining > 0:
+            be = pib.place_stop(
+                port, account_id, conid, exit_action, remaining, entry["entry_price"]
+            )
+            be_ok = bool(be.get("ok"))
+    except (ConnectionError, LookupError, ValueError) as exc:
+        entry["status"] = "error"
+        entry["error"] = str(exc)
+        _edit(entry, f"❗️Ошибка +2R: {exc}. Проверь позицию вручную.", bot_token)
+        return
+
+    trim_price = entry.get("current_price") or entry["entry_price"]
+    record_trim(entry["thesis_id"], sell_qty, trim_price)
+    entry["status"] = "scaled"
+    entry["sold_qty"] = sell_qty
+    entry["remaining_qty"] = remaining
+    entry["scale_order_ids"] = close.get("order_ids", [])
+    be_note = (
+        f"стоп остатка {remaining} → безубыток ${entry['entry_price']:g}"
+        if remaining > 0 and be_ok
+        else (
+            "остаток без стопа — выставь вручную" if remaining > 0 else "позиция закрыта полностью"
+        )
+    )
+    _edit(entry, f"💰 +2R: продано {sell_qty} рыночным; {be_note}.", bot_token)
+
+
+def handle_scale_skip(entry: dict, *, bot_token: str) -> None:
+    """Tap "Не сейчас" on a +2R card: leave the position untouched."""
+    if entry.get("status") in {"scaled"}:
+        return
+    entry["status"] = "skipped"
+    _edit(entry, "✋ +2R пропущен — позиция без изменений.", bot_token)
+
+
+def record_close(thesis_id: str, price: float, exit_reason: str) -> bool:
+    """Full close in trader-memory (ACTIVE/PARTIALLY_CLOSED -> CLOSED)."""
+    cmd = [
+        sys.executable,
+        str(sched.TRADER_MEMORY_CLI),
+        "store",
+        "close",
+        thesis_id,
+        "--exit-reason",
+        exit_reason,
+        "--actual-price",
+        str(price),
+        "--actual-date",
+        _now_iso(),
+    ]
+    try:
+        res = subprocess.run(
+            cmd, cwd=sched.PROJECT_ROOT, capture_output=True, text=True, timeout=120
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        log.warning("close failed for %s: %s", thesis_id, exc)
+        return False
+    if res.returncode != 0:
+        log.warning(
+            "close rc=%s for %s: %s", res.returncode, thesis_id, (res.stderr or "").strip()[:200]
+        )
+        return False
+    return True
+
+
+def handle_close(entry: dict, port: int | None, *, live: bool, bot_token: str) -> None:
+    """Tap "Закрыть" on a position-management exit card: market-close the full
+    remaining position and cancel the protective bracket legs.
+
+    Cancels the working stop/target FIRST (so they cannot fire against a flat
+    position), then closes at market, then records the close (-> CLOSED) in
+    trader-memory."""
+    if entry.get("status") in {"closed"}:
+        return  # idempotent
+
+    allowed, why = pib.order_placement_status(live)
+    if not allowed:
+        entry["status"] = "preview"
+        entry["error"] = why
+        _edit(entry, f"👁 Preview ({why}): закрытие не исполнено. Позиция без изменений.", bot_token)
+        return
+    if port is None:
+        entry["status"] = "error"
+        entry["error"] = "gateway unavailable"
+        _edit(
+            entry,
+            "❗️IB Gateway недоступен — закрытие не исполнено. Позиция без изменений.",
+            bot_token,
+        )
+        return
+
+    shares = entry.get("shares") or 0
+    side = entry["side"]
+    exit_action = pib.exit_action_for(side)
+    try:
+        conid = pib.resolve_conid(port, entry["ticker"])
+        account_id = pib.resolve_account_id(port)
+        # Tear down protective legs BEFORE closing, else they'd fire on a flat book.
+        for oid in pib.working_exit_orders(port, conid, exit_action):
+            pib.cancel_order(port, account_id, oid)
+        close = pib.place_market_close(port, account_id, conid, exit_action, shares)
+        if not close.get("ok"):
+            entry["status"] = "error"
+            entry["error"] = "close MKT rejected"
+            _edit(
+                entry, "❗️Рыночный ордер на закрытие отклонён — проверь позицию вручную.", bot_token
+            )
+            return
+    except (ConnectionError, LookupError, ValueError) as exc:
+        entry["status"] = "error"
+        entry["error"] = str(exc)
+        _edit(entry, f"❗️Ошибка закрытия: {exc}. Проверь позицию вручную.", bot_token)
+        return
+
+    price = entry.get("price") or entry.get("entry_price") or 0
+    record_close(entry["thesis_id"], price, entry.get("exit_reason") or "manual")
+    entry["status"] = "closed"
+    entry["close_order_ids"] = close.get("order_ids", [])
+    _edit(
+        entry, f"⛔️ Закрыто рыночным {shares} шт; защитные ордера сняты. Тезис → CLOSED.", bot_token
+    )
+
+
+def handle_close_skip(entry: dict, *, bot_token: str) -> None:
+    """Tap "Оставить" on an exit card: leave the position untouched."""
+    if entry.get("status") in {"closed"}:
+        return
+    entry["status"] = "skipped"
+    _edit(entry, "✋ Оставлено — позиция без изменений.", bot_token)
+
+
 def expire_pending_cards(ledger: dict, *, bot_token: str) -> bool:
     """On daemon timeout, strip buttons from any still-pending card.
 
@@ -597,9 +909,19 @@ def cmd_listen(args) -> int:
                 entry = ledger["orders"].get(cb["token"])
                 if entry is None:
                     continue  # stale / unknown token
+                kind = entry.get("kind", "open")
                 if cb["action"] == ti.ACTION_OPEN:
                     port = _connect_port(args, port_cache)
-                    handle_open(entry, port, live=args.live, bot_token=bot_token)
+                    if kind == "scale":
+                        handle_scale_out(entry, port, live=args.live, bot_token=bot_token)
+                    elif kind == "close":
+                        handle_close(entry, port, live=args.live, bot_token=bot_token)
+                    else:
+                        handle_open(entry, port, live=args.live, bot_token=bot_token)
+                elif kind == "scale":
+                    handle_scale_skip(entry, bot_token=bot_token)
+                elif kind == "close":
+                    handle_close_skip(entry, bot_token=bot_token)
                 else:
                     handle_skip(entry, bot_token=bot_token)
                 changed = True
@@ -683,6 +1005,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--once", action="store_true", help="single poll/fill pass then exit (testing)"
     )
     p_listen.set_defaults(func=cmd_listen)
+
+    p_scale = sub.add_parser("scale-card", help="send a +2R scale-out card for one open position")
+    p_scale.add_argument("--thesis-id", required=True)
+    p_scale.add_argument("--ticker", required=True)
+    p_scale.add_argument("--side", choices=["long", "short"], default="long")
+    p_scale.add_argument("--shares", type=float, required=True)
+    p_scale.add_argument("--entry", type=float, required=True, help="entry price (breakeven stop)")
+    p_scale.add_argument("--price", type=float, required=True, help="current price (~+2R)")
+    p_scale.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_scale.add_argument("--dry-run", action="store_true", help="log only, send nothing")
+    p_scale.set_defaults(func=cmd_scale_card)
+
+    p_close = sub.add_parser("close-card", help="send a rule-violation exit card for one position")
+    p_close.add_argument("--thesis-id", required=True)
+    p_close.add_argument("--ticker", required=True)
+    p_close.add_argument("--side", choices=["long", "short"], default="long")
+    p_close.add_argument("--shares", type=float, required=True)
+    p_close.add_argument(
+        "--price", type=float, required=True, help="reference price for the close record"
+    )
+    p_close.add_argument("--reason", required=True, help="why (time-stop / EMA20 / SMA50)")
+    p_close.add_argument("--exit-reason", choices=["time_stop", "manual"], default="manual")
+    p_close.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_close.add_argument("--dry-run", action="store_true", help="log only, send nothing")
+    p_close.set_defaults(func=cmd_close_card)
     return parser
 
 

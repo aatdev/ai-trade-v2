@@ -230,6 +230,75 @@ def test_live_order_refs_collects_coid(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Scale-out / close helpers (+2R)
+# --------------------------------------------------------------------------- #
+def test_exit_action_for():
+    assert pib.exit_action_for("long") == "SELL"
+    assert pib.exit_action_for("short") == "BUY"
+    assert pib.exit_action_for(None) == "SELL"
+
+
+def test_place_market_close_builds_mkt(monkeypatch):
+    seen = {}
+
+    def fake(port, account_id, body, timeout=20.0):
+        seen["body"] = body
+        return [{"order_id": "200", "order_status": "Submitted"}]
+
+    monkeypatch.setattr(pib, "place_with_confirmations", fake)
+    res = pib.place_market_close(9000, "DU1", 265598, "SELL", 25)
+    assert res["ok"] is True and res["order_ids"] == ["200"]
+    o = seen["body"]["orders"][0]
+    assert o["orderType"] == "MKT" and o["side"] == "SELL" and o["quantity"] == 25
+
+
+def test_place_stop_builds_stp(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        pib,
+        "place_with_confirmations",
+        lambda port, acct, body, timeout=20.0: seen.update(body=body) or [{"order_id": "201"}],
+    )
+    res = pib.place_stop(9000, "DU1", 1, "SELL", 25, 150.0)
+    assert res["ok"] is True
+    o = seen["body"]["orders"][0]
+    assert o["orderType"] == "STP" and o["auxPrice"] == 150.0 and o["tif"] == "GTC"
+
+
+def test_cancel_order_calls_delete(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        pib,
+        "http_delete_json",
+        lambda port, path, timeout=20.0: seen.update(path=path) or {"msg": "ok"},
+    )
+    pib.cancel_order(9000, "DU1", "201")
+    assert seen["path"] == "/iserver/account/DU1/order/201"
+
+
+def test_working_exit_orders_filters_by_conid_side_status(monkeypatch):
+    monkeypatch.setattr(
+        pib,
+        "http_get_json",
+        lambda *a, **k: {
+            "orders": [
+                {"orderId": "1", "conid": 100, "side": "SELL", "status": "Submitted"},  # keep
+                {"orderId": "2", "conid": 100, "side": "SELL", "status": "Filled"},  # done -> skip
+                {"orderId": "3", "conid": 100, "side": "BUY", "status": "Submitted"},  # wrong side
+                {
+                    "orderId": "4",
+                    "conid": 999,
+                    "side": "SELL",
+                    "status": "PreSubmitted",
+                },  # wrong conid
+                {"orderId": "5", "conid": 100, "side": "SELL", "status": "PreSubmitted"},  # keep
+            ]
+        },
+    )
+    assert pib.working_exit_orders(9000, 100, "SELL") == ["1", "5"]
+
+
+# --------------------------------------------------------------------------- #
 # CLI preview path posts nothing
 # --------------------------------------------------------------------------- #
 def test_cli_preview_does_not_post(monkeypatch, capsys):
