@@ -256,6 +256,10 @@ ALERTS_STATE_FILE = TRADING_DATA_DIR / "logs" / "watchlist_alerts_state.json"
 # Deterministic skill scripts orchestrated by the auto mode (hybrid pipeline).
 SKILLS_DIR = PROJECT_ROOT / "skills"
 VCP_SCREEN_SCRIPT = SKILLS_DIR / "vcp-screener" / "scripts" / "screen_vcp.py"
+# Optional expanded VCP universe (liquid NASDAQ+NYSE). Built by
+# scripts/build_vcp_universe.py; when present the evening-prep VCP screen runs
+# against it instead of the bundled S&P 500. Delete the file to revert.
+VCP_UNIVERSE_FILE = PROJECT_ROOT / "scripts" / "lib" / "data" / "vcp_universe.txt"
 SHORT_SCREEN_SCRIPT = SKILLS_DIR / "swing-short-screener" / "scripts" / "screen_short.py"
 PLANNER_SCRIPT = SKILLS_DIR / "breakout-trade-planner" / "scripts" / "plan_breakout_trades.py"
 TRADER_MEMORY_CLI = SKILLS_DIR / "trader-memory-core" / "scripts" / "trader_memory_cli.py"
@@ -725,6 +729,17 @@ def _read_json(path) -> dict | None:
     except (OSError, json.JSONDecodeError, TypeError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def _read_vcp_universe() -> list[str]:
+    """Tickers from the optional expanded VCP universe file (one per line, `#`
+    comments and blanks skipped). Returns [] when the file is absent/empty, in
+    which case the screener falls back to its bundled S&P 500."""
+    try:
+        lines = VCP_UNIVERSE_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    return [s.strip() for ln in lines if (s := ln.strip()) and not s.startswith("#")]
 
 
 def _latest(directory: Path, pattern: str) -> Path | None:
@@ -2219,9 +2234,19 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
             ),
         )
 
+    vcp_cmd = [VCP_SCREEN_SCRIPT, "--top", "10"]
+    universe = _read_vcp_universe()
+    vcp_label = "vcp-screener (top 10)"
+    if universe:
+        # Bars are fetched for the whole universe at the quote/pre-filter stage,
+        # so raising --max-candidates only adds (cheap) local VCP math — it does
+        # NOT add network cost. Without it the pre-filter would cap full analysis
+        # at the default 100 and the wider universe would be largely wasted.
+        vcp_cmd += ["--universe", *universe, "--max-candidates", str(len(universe))]
+        vcp_label = f"vcp-screener (top 10, universe={len(universe)})"
     vcp = run_skill_script(
-        [VCP_SCREEN_SCRIPT, "--top", "10"],
-        label="vcp-screener (top 10)",
+        vcp_cmd,
+        label=vcp_label,
         dry_run=args.dry_run,
         timeout=args.timeout,
         output_glob=(SCREENERS_DIR, "vcp_screener_*.json"),
