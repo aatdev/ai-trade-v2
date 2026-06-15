@@ -11,12 +11,15 @@ export function Modal({
   children,
   footer,
   fullscreen,
+  wide,
 }: {
   title?: ReactNode;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
   fullscreen?: boolean;
+  /** Roomier variant for content-heavy dialogs (reports, charts). */
+  wide?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -28,7 +31,10 @@ export function Modal({
 
   return (
     <div className={`modal-backdrop${fullscreen ? ' modal-backdrop-full' : ''}`} onClick={onClose}>
-      <div className={`modal${fullscreen ? ' modal-full' : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`modal${fullscreen ? ' modal-full' : ''}${wide ? ' modal-wide' : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         {title != null ? (
           <div className="modal-head">
             <h3>{title}</h3>
@@ -100,24 +106,35 @@ export function GradeBadge({ grade }: { grade?: string | null }) {
   );
 }
 
-/** Link through to a ticker's saved analysis report; renders nothing if none. */
+/**
+ * Pointer to a ticker's saved analysis; renders nothing if none exists. With
+ * `onOpen` it renders a button that opens the analysis modal in place; without
+ * it, a link through to the standalone ticker page.
+ */
 export function AnalysisLink({
   ticker,
   entry,
   compact = false,
+  onOpen,
 }: {
   ticker: string;
   entry?: AnalysisIndexEntry;
   compact?: boolean;
+  onOpen?: (ticker: string) => void;
 }) {
   if (!entry) return null;
+  const label = compact ? '📄' : '📄 analysis →';
+  const title = `Analysis available — latest ${entry.latest} (${entry.count} day${entry.count === 1 ? '' : 's'})`;
+  if (onOpen) {
+    return (
+      <button type="button" className="analysis-link" title={title} onClick={() => onOpen(ticker)}>
+        {label}
+      </button>
+    );
+  }
   return (
-    <Link
-      to={`/ticker/${ticker}`}
-      className="analysis-link"
-      title={`Analysis available — latest ${entry.latest} (${entry.count} day${entry.count === 1 ? '' : 's'})`}
-    >
-      {compact ? '📄' : '📄 analysis →'}
+    <Link to={`/ticker/${ticker}`} className="analysis-link" title={title}>
+      {label}
     </Link>
   );
 }

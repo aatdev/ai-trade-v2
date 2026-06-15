@@ -3,11 +3,13 @@ import type { AnalysisIndexEntry, ScreenerCandidate, ScreenerResult, Sourced } f
 import { useAnalysisIndex, useScreeners, type Refetch } from '../api';
 import { fmtNum, fmtScore } from '../lib/format';
 import { scoreColor } from '../lib/zones';
+import AnalysisModal from './AnalysisModal';
 import type { ChartLevels } from './CandleChart';
 import { AnalysisLink, Card, Empty, ErrorNote, GradeBadge, Loading } from './ui';
 
 // Same code-split chunk as the watchlist — the charting library only loads once
-// a symbol is clicked.
+// a symbol is clicked. (AnalysisModal shares react-markdown with the analyses
+// tab, so it stays in the main chunk.)
 const TickerChartModal = lazy(() => import('./TickerChartModal'));
 
 type Index = Record<string, AnalysisIndexEntry>;
@@ -31,10 +33,12 @@ function ScreenerTable({
   result,
   index,
   onOpenChart,
+  onOpenAnalysis,
 }: {
   result: ScreenerResult;
   index: Index;
   onOpenChart: (c: ScreenerCandidate) => void;
+  onOpenAnalysis: (ticker: string) => void;
 }) {
   if (result.candidates.length === 0) return <Empty>No candidates.</Empty>;
   return (
@@ -64,7 +68,12 @@ function ScreenerTable({
                 >
                   {c.symbol}
                 </button>
-                <AnalysisLink ticker={c.symbol.toUpperCase()} entry={index[c.symbol.toUpperCase()]} compact />
+                <AnalysisLink
+                  ticker={c.symbol.toUpperCase()}
+                  entry={index[c.symbol.toUpperCase()]}
+                  compact
+                  onOpen={onOpenAnalysis}
+                />
               </td>
               <td>
                 <GradeBadge grade={c.grade} />
@@ -91,6 +100,7 @@ export default function ScreenersCard({ date, refetch }: { date: string | null; 
   const index: Index = analysisIndex?.tickers ?? {};
   const [tab, setTab] = useState<'vcp' | 'swingShort'>('swingShort');
   const [chartFor, setChartFor] = useState<{ c: ScreenerCandidate; kind: string } | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
 
   if (isLoading)
     return (
@@ -129,6 +139,7 @@ export default function ScreenersCard({ date, refetch }: { date: string | null; 
           result={active.data}
           index={index}
           onOpenChart={(c) => setChartFor({ c, kind: active.data!.kind })}
+          onOpenAnalysis={setAnalysisFor}
         />
       ) : (
         <Empty>No screener run for this date.</Empty>
@@ -141,8 +152,17 @@ export default function ScreenersCard({ date, refetch }: { date: string | null; 
             levels={screenerLevels(chartFor.c, chartFor.kind)}
             hasAnalysis={!!index[chartFor.c.symbol.toUpperCase()]}
             onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.c.symbol.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
           />
         </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </Card>
   );

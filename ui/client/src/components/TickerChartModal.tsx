@@ -41,11 +41,15 @@ export default function TickerChartModal({
   levels,
   hasAnalysis,
   onClose,
+  onOpenAnalysis,
 }: {
   ticker: string;
   levels: ChartLevels;
   hasAnalysis: boolean;
   onClose: () => void;
+  /** When set, the "Open analysis" control opens the analysis modal in place
+   *  instead of navigating to the standalone ticker page. */
+  onOpenAnalysis?: () => void;
 }) {
   const [tf, setTf] = useState('D');
   const ticker = tickerProp.toUpperCase();
@@ -95,9 +99,15 @@ export default function TickerChartModal({
         </div>
         <span style={{ flex: 1 }} />
         {hasAnalysis ? (
-          <Link to={`/ticker/${ticker}`} className="chart-analysis-link">
-            📄 Open analysis →
-          </Link>
+          onOpenAnalysis ? (
+            <button type="button" className="chart-analysis-link link-btn" onClick={onOpenAnalysis}>
+              📄 Open analysis →
+            </button>
+          ) : (
+            <Link to={`/ticker/${ticker}`} className="chart-analysis-link">
+              📄 Open analysis →
+            </Link>
+          )
         ) : null}
       </div>
 

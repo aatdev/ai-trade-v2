@@ -1,81 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { chartUrl, useAnalysisIndex, useTickerAnalysis, type Refetch } from '../api';
-import { Card, Empty, ErrorNote, Loading, Modal } from './ui';
-
-function AnalysisModal({
-  symbol,
-  date,
-  onClose,
-}: {
-  symbol: string;
-  date: string;
-  onClose: () => void;
-}) {
-  const { data, isLoading } = useTickerAnalysis(symbol, date);
-  const [tab, setTab] = useState<string | null>(null);
-  const docs = data?.docs ?? [];
-  const activeName = tab ?? docs[0]?.name ?? null;
-  const activeDoc = docs.find((d) => d.name === activeName);
-
-  return (
-    <Modal
-      title={`${symbol} — ${date}`}
-      onClose={onClose}
-      footer={
-        <>
-          <Link to={`/ticker/${symbol}/${date}`} className="back-link">
-            Открыть страницу ↗
-          </Link>
-          <button onClick={onClose}>Закрыть</button>
-        </>
-      }
-    >
-      {isLoading ? (
-        <Loading />
-      ) : docs.length === 0 ? (
-        <Empty>Нет отчётов для {symbol} на {date}.</Empty>
-      ) : (
-        <>
-          {docs.length > 1 ? (
-            <div className="tabs">
-              {docs.map((d) => (
-                <button
-                  key={d.name}
-                  className={`tab ${d.name === activeName ? 'active' : ''}`}
-                  onClick={() => setTab(d.name)}
-                >
-                  {d.name}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="md">
-            {activeDoc ? <Markdown remarkPlugins={[remarkGfm]}>{activeDoc.content}</Markdown> : null}
-          </div>
-          {data && data.charts.length > 0 ? (
-            <div style={{ display: 'grid', gap: 16, marginTop: 16 }}>
-              {data.charts.map((tf) => (
-                <figure key={tf} style={{ margin: 0 }}>
-                  <figcaption className="muted" style={{ marginBottom: 6 }}>
-                    {tf}
-                  </figcaption>
-                  <img
-                    src={chartUrl(symbol, date, tf)}
-                    alt={`${symbol} ${tf}`}
-                    style={{ width: '100%', borderRadius: 8, border: '1px solid var(--border)' }}
-                  />
-                </figure>
-              ))}
-            </div>
-          ) : null}
-        </>
-      )}
-    </Modal>
-  );
-}
+import { useAnalysisIndex, type Refetch } from '../api';
+import AnalysisModal from './AnalysisModal';
+import { Card, Empty, ErrorNote, Loading } from './ui';
 
 export default function AnalysesTab({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useAnalysisIndex(refetch);

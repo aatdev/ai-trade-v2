@@ -2,12 +2,15 @@ import { lazy, Suspense, useState } from 'react';
 import type { AnalysisIndexEntry, WatchlistCandidate } from '@shared/types';
 import { useAnalysisIndex, useWatchlist, type Refetch } from '../api';
 import { fmtMoney, fmtNum, fmtScore } from '../lib/format';
+import AnalysisModal from './AnalysisModal';
 import AnalyzeButton from './AnalyzeButton';
 import type { ChartLevels } from './CandleChart';
 import { AnalysisLink, Card, Collapsible, Empty, ErrorNote, Loading, SideBadge } from './ui';
 
 // Code-split the charting library (lightweight-charts) — only loaded once a
-// ticker is clicked, keeping the dashboard's initial bundle lean.
+// ticker is clicked, keeping the dashboard's initial bundle lean. (The analysis
+// modal shares react-markdown with the always-loaded analyses tab, so it stays
+// in the main chunk.)
 const TickerChartModal = lazy(() => import('./TickerChartModal'));
 
 type Index = Record<string, AnalysisIndexEntry>;
@@ -45,12 +48,14 @@ function CandidateTable({
   date,
   withAnalyze,
   onOpenChart,
+  onOpenAnalysis,
 }: {
   rows: WatchlistCandidate[];
   index: Index;
   date: string | null;
   withAnalyze: boolean;
   onOpenChart: (c: WatchlistCandidate) => void;
+  onOpenAnalysis: (ticker: string) => void;
 }) {
   return (
     <div className="scroll-x">
@@ -85,7 +90,9 @@ function CandidateTable({
                   >
                     {c.ticker}
                   </button>
-                  {!withAnalyze ? <AnalysisLink ticker={c.ticker.toUpperCase()} entry={entry} /> : null}
+                  {!withAnalyze ? (
+                    <AnalysisLink ticker={c.ticker.toUpperCase()} entry={entry} onOpen={onOpenAnalysis} />
+                  ) : null}
                 </td>
                 <td style={{ textAlign: 'left' }}>
                   <SideBadge side={c.side} />
@@ -113,7 +120,7 @@ function CandidateTable({
                   <td style={{ textAlign: 'left' }}>
                     <div className="analyze-cell">
                       <AnalyzeButton ticker={c.ticker.toUpperCase()} date={date} />
-                      <AnalysisLink ticker={c.ticker.toUpperCase()} entry={entry} />
+                      <AnalysisLink ticker={c.ticker.toUpperCase()} entry={entry} onOpen={onOpenAnalysis} />
                     </div>
                   </td>
                 ) : null}
@@ -131,6 +138,7 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
   const { data: analysisIndex } = useAnalysisIndex(refetch);
   const index: Index = analysisIndex?.tickers ?? {};
   const [chartFor, setChartFor] = useState<WatchlistCandidate | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
 
   if (isLoading)
     return (
@@ -162,7 +170,14 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
       {wl.candidates.length === 0 ? (
         <Empty>No candidates.</Empty>
       ) : (
-        <CandidateTable rows={wl.candidates} index={index} date={date} withAnalyze onOpenChart={setChartFor} />
+        <CandidateTable
+          rows={wl.candidates}
+          index={index}
+          date={date}
+          withAnalyze
+          onOpenChart={setChartFor}
+          onOpenAnalysis={setAnalysisFor}
+        />
       )}
       {wl.rejected_by_validation.length > 0 ? (
         <Collapsible label="Rejected by chart validation" count={wl.rejected_by_validation.length}>
@@ -172,6 +187,7 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
             date={date}
             withAnalyze={false}
             onOpenChart={setChartFor}
+            onOpenAnalysis={setAnalysisFor}
           />
         </Collapsible>
       ) : null}
@@ -183,8 +199,17 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
             levels={levelsFromCandidate(chartFor)}
             hasAnalysis={!!index[chartFor.ticker.toUpperCase()]}
             onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.ticker.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
           />
         </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </Card>
   );
