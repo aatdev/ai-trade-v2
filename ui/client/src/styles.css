@@ -143,6 +143,10 @@ label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--
 .banner .decision { font-size: 26px; font-weight: 750; text-transform: uppercase; letter-spacing: 0.02em; }
 .banner .ceiling { font-size: 15px; color: var(--muted); }
 .banner .rationale { margin: 10px 0 12px; color: var(--text); max-width: 90ch; }
+.breadth-link { font-size: 13px; padding: 4px 10px; border-radius: 6px; background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+.breadth-link:hover { border-color: var(--accent); color: var(--accent); }
+.breadth-ext { color: var(--muted); text-decoration: none; font-weight: 400; }
+.breadth-ext:hover { color: var(--accent); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font-size: 12px; padding: 3px 9px; border-radius: 6px; background: var(--bg-elev2); border: 1px solid var(--border); color: var(--text); }
 

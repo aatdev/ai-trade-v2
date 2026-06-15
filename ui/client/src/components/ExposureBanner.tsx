@@ -1,10 +1,15 @@
+import { useState } from 'react';
 import { useExposure, type Refetch } from '../api';
 import { decisionColor, decisionLabel, term } from '../lib/zones';
 import { fmtPct } from '../lib/format';
-import { ErrorNote, Loading } from './ui';
+import { ErrorNote, Loading, Modal } from './ui';
+
+/** TraderMonty's S&P 500 market breadth dashboard — the breadth backdrop behind the exposure decision. */
+const BREADTH_URL = 'https://tradermonty.github.io/market-breadth-analysis/';
 
 export default function ExposureBanner({ date, refetch }: { date: string | null; refetch: Refetch }) {
   const { data, isLoading, error } = useExposure(date, refetch);
+  const [showBreadth, setShowBreadth] = useState(false);
   if (isLoading)
     return (
       <div className="banner">
@@ -39,6 +44,14 @@ export default function ExposureBanner({ date, refetch }: { date: string | null;
           </span>
         ) : null}
         <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="breadth-link"
+          onClick={() => setShowBreadth(true)}
+          title="Открыть дашборд рыночной широты (TraderMonty)"
+        >
+          📊 Market Breadth
+        </button>
         {data?.gate.source ? <span className="src" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#586069' }}>{data.gate.source}</span> : null}
       </div>
       {dl.hint ? <div className="muted" style={{ marginTop: 4 }}>{dl.hint}</div> : null}
@@ -51,6 +64,27 @@ export default function ExposureBanner({ date, refetch }: { date: string | null;
             </span>
           ))}
         </div>
+      ) : null}
+      {showBreadth ? (
+        <Modal
+          title={
+            <>
+              📊 Market Breadth{' '}
+              <a href={BREADTH_URL} target="_blank" rel="noreferrer" className="breadth-ext" title="Открыть в новой вкладке">
+                ↗
+              </a>
+            </>
+          }
+          onClose={() => setShowBreadth(false)}
+          fullscreen
+          footer={<button onClick={() => setShowBreadth(false)}>Закрыть</button>}
+        >
+          <iframe
+            src={BREADTH_URL}
+            title="Market Breadth Analysis"
+            style={{ flex: 1, minHeight: 0, width: '100%', border: 'none', borderRadius: 8, background: '#fff' }}
+          />
+        </Modal>
       ) : null}
     </div>
   );
