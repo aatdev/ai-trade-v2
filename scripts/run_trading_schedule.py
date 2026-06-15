@@ -263,6 +263,7 @@ WATCHLIST_ORDERS_SCRIPT = PROJECT_ROOT / "scripts" / "watchlist_orders.py"
 IBD_SCRIPT = SKILLS_DIR / "ibd-distribution-day-monitor" / "scripts" / "ibd_monitor.py"
 MACRO_SCRIPT = SKILLS_DIR / "macro-regime-detector" / "scripts" / "macro_regime_detector.py"
 FTD_SCRIPT = SKILLS_DIR / "ftd-detector" / "scripts" / "ftd_detector.py"
+IB_SNAPSHOT_SCRIPT = SKILLS_DIR / "ib-portfolio-manager" / "scripts" / "fetch_ib_snapshot.py"
 
 # Intraday monitoring window: derived per date from US Eastern (see
 # intraday_window_local below) — fixed CET constants drift during the
@@ -1487,6 +1488,8 @@ def slot_premarket(date_str: str, args) -> int:
         _send_watchlist_cards(date_str, dec, args)
     # Шаг 3: rule-violation exit cards for open positions (gate-independent).
     _send_close_cards(date_str, args)
+    # Safety-net: positions closed outside the system since the last check.
+    _reconcile_ib_closes(date_str, args)
     return 0 if ok or args.dry_run else 1
 
 
@@ -2538,6 +2541,134 @@ def _send_close_cards(date_str: str, args) -> None:
         )
 
 
+def _exit_price_from_trades(snapshot: dict, ticker: str, side: str) -> float | None:
+    """Best-effort exit price for a closed position: the latest closing-side fill
+    for ``ticker`` in the snapshot trades (SELL for a long, BUY for a short).
+    None when no usable fill is present (caller falls back to the entry price)."""
+    closing = "SELL" if side == "long" else "BUY"
+    best_time, best_price = "", None
+    for t in snapshot.get("trades") or []:
+        if str(t.get("symbol", "")).upper() != ticker:
+            continue
+        if t.get("side") and t.get("side") != closing:
+            continue
+        price = t.get("price")
+        if price is None:
+            continue
+        tt = str(t.get("trade_time") or "")
+        if best_price is None or tt >= best_time:
+            best_time, best_price = tt, price
+    return best_price
+
+
+def detect_external_closes(open_positions: list, snapshot: dict | None) -> list[dict]:
+    """Tracked-open theses that are no longer present in the live IB snapshot.
+
+    SAFETY: returns ``[]`` unless the snapshot is trustworthy — ``ok`` is True AND
+    it carries account context (``account_ids``/``summary``). A failed, empty, or
+    unauthenticated snapshot must never be read as "every position closed", which
+    would fire spurious close cards. Even past this guard the result only drives a
+    confirm-gated Telegram card, so a stale snapshot at worst costs a dismissal.
+
+    Each returned dict carries ticker/side/shares/thesis_id + an approximate exit
+    ``price`` (latest matching fill, else the entry price) for the card body."""
+    if not open_positions:
+        return []
+    if not isinstance(snapshot, dict) or snapshot.get("ok") is not True:
+        return []
+    if not snapshot.get("account_ids") and not snapshot.get("summary"):
+        return []
+    held = {
+        str(p.get("symbol", "")).upper()
+        for p in snapshot.get("positions") or []
+        if p.get("position")  # 0 / None == flat -> not held
+    } - {""}
+    out: list[dict] = []
+    for p in open_positions:
+        ticker = str(p.get("ticker", "")).upper()
+        thesis_id = p.get("thesis_id")
+        if not ticker or not thesis_id or ticker in held:
+            continue
+        side = str(p.get("side") or "long").lower()
+        price = _exit_price_from_trades(snapshot, ticker, side)
+        if price is None:
+            price = p.get("entry_price")
+        out.append(
+            {
+                "thesis_id": thesis_id,
+                "ticker": ticker,
+                "side": side,
+                "shares": p.get("shares"),
+                "price": price,
+            }
+        )
+    return out
+
+
+def _load_ib_snapshot(args) -> dict | None:
+    """Fetch the read-only IB snapshot as a dict (None on launch/parse failure).
+
+    Runs ``fetch_ib_snapshot.py`` and parses its stdout JSON. The script prints an
+    ``ok:false`` snapshot (exit code 2) when the Gateway is down/unauthenticated;
+    we still parse it so :func:`detect_external_closes` applies the trust guard."""
+    cmd = [sys.executable, str(IB_SNAPSHOT_SCRIPT)]
+    fixture = getattr(args, "ib_fixture", None)
+    if fixture:
+        cmd += ["--fixture", str(fixture)]
+    try:
+        res = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as exc:
+        log(f"reconcile: IB snapshot launch error: {exc}", logging.WARNING)
+        return None
+    try:
+        data = json.loads(res.stdout)
+    except (json.JSONDecodeError, ValueError):
+        log(f"reconcile: IB snapshot stdout not JSON (rc={res.returncode})", logging.WARNING)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _reconcile_ib_closes(date_str: str, args) -> None:
+    """Safety-net (variant B): tracked-open theses that vanished from the live IB
+    snapshot were likely closed OUTSIDE the system. Send one confirm-to-record
+    card per missing thesis. No order is placed; confirming records the close +
+    postmortem. Deduped per day by the watchlist_orders ledger, and suppressed
+    when the same thesis was already closed through the system today."""
+    if args.dry_run or args.no_telegram:
+        return
+    heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
+    heat = _read_json(heat_path) if heat_path else None
+    positions = (heat or {}).get("positions") or []
+    if not positions:
+        return
+    closes = detect_external_closes(positions, _load_ib_snapshot(args))
+    if not closes:
+        return
+    for c in closes:
+        cmd = [
+            WATCHLIST_ORDERS_SCRIPT,
+            "close-detected-card",
+            "--date",
+            date_str,
+            "--thesis-id",
+            c["thesis_id"],
+            "--ticker",
+            c["ticker"],
+            "--side",
+            c["side"],
+        ]
+        if c.get("shares") is not None:
+            cmd += ["--shares", str(c["shares"])]
+        if c.get("price") is not None:
+            cmd += ["--price", str(c["price"])]
+        run_skill_script(
+            cmd,
+            label=f"detected-close card {c['ticker']}",
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+        )
+
+
 def _care_block(args) -> str:
     care = _position_care_warnings(args)
     return ("\n\n🛎 ОТКРЫТЫЕ ПОЗИЦИИ\n" + "\n".join(care)) if care else ""
@@ -2700,6 +2831,8 @@ def slot_evening_prep(date_str: str, args) -> int:
     # Шаг 3: rule-violation exit cards on the fresh daily close (gate-independent;
     # runs for both branches, deduped per day with the premarket cards).
     _send_close_cards(date_str, args)
+    # Safety-net: positions closed outside the system during the session.
+    _reconcile_ib_closes(date_str, args)
 
     if dec["decision"] != "allow":
         return _evening_short_branch(
@@ -2757,6 +2890,9 @@ def slot_intraday(date_str: str, args) -> int:
                 f"{start_t:%H:%M}–{end_t:%H:%M} (US-сессия, локальное время) — пропуск"
             )
             return 0
+
+    # Safety-net: positions closed outside the system (IB diff) -> confirm cards.
+    _reconcile_ib_closes(date_str, args)
 
     wl_path = latest_watchlist()
     wl = _read_json(wl_path) if wl_path else None
@@ -3017,6 +3153,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Per-workflow claude timeout in seconds (default 1800).",
     )
     p.add_argument("-v", "--verbose", action="store_true", help="Verbose (DEBUG-level) logging.")
+    p.add_argument(
+        "--ib-fixture",
+        default=None,
+        help="Read the IB snapshot from a fixture JSON instead of the live Gateway "
+        "(offline testing of the external-close reconcile).",
+    )
     args = p.parse_args(argv)
 
     setup_logging(verbose=args.verbose)

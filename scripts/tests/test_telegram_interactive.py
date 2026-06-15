@@ -229,6 +229,44 @@ def test_send_close_card_buttons_and_plain(monkeypatch):
     assert row[1]["text"] == "✋ Оставить"
 
 
+def test_close_detected_card_text_and_buttons():
+    card = {
+        "ticker": "AAPL",
+        "side": "long",
+        "shares": 100,
+        "price": 96.0,
+        "reason": "позиции нет в IB",
+    }
+    txt = ti.close_detected_card_text(card, mode_badge="📝 PAPER")
+    assert "ЗАКРЫТИЕ ОБНАРУЖЕНО" in txt and "AAPL" in txt
+    assert "ордер НЕ выставляется" in txt
+    assert "*" not in txt
+
+
+def test_send_close_detected_card_buttons_and_plain(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        ti,
+        "_tg_post",
+        lambda bt, m, p, timeout=30: (
+            captured.update(p=p) or {"ok": True, "result": {"message_id": 13}}
+        ),
+    )
+    card = {
+        "ticker": "AAPL",
+        "side": "long",
+        "shares": 100,
+        "price": 96.0,
+        "reason": "позиции нет в IB",
+    }
+    mid = ti.send_close_detected_card(card, "closed-th_x", bot_token="B", chat_id="C")
+    assert mid == 13
+    assert "parse_mode" not in captured["p"]
+    row = captured["p"]["reply_markup"]["inline_keyboard"][0]
+    assert row[0]["text"] == "✅ Записать закрытие" and row[0]["callback_data"] == "o:closed-th_x"
+    assert row[1]["text"] == "✋ Не сейчас"
+
+
 def test_card_and_edit_are_plain_text(monkeypatch):
     # Regression: underscores in card content / outcome text must NOT be sent
     # with parse_mode (Markdown would reject ENTRY_READY-style strings).

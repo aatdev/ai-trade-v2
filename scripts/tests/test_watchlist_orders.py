@@ -821,14 +821,41 @@ def test_handle_close_success(monkeypatch):
     monkeypatch.setattr(
         wo, "record_close", lambda tid, price, reason: closed.append((tid, price, reason)) or True
     )
+    pms = []
+    monkeypatch.setattr(wo, "generate_postmortem", lambda tid: pms.append(tid) or True)
+    edits = []
     entry = _close_entry(message_id=5, chat_id=-1)
-    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
 
     wo.handle_close(entry, port=9000, live=True, bot_token="B")
     assert entry["status"] == "closed"
     assert cancelled == ["s1", "t1"]  # protective legs cancelled FIRST
     assert order == [("SELL", 100)]  # full position closed at market
     assert closed == [("th_aapl_pvt_20260612_aaaa", 96.0, "time_stop")]
+    # A confirmed close auto-generates the per-trade postmortem (variant A).
+    assert pms == ["th_aapl_pvt_20260612_aaaa"]
+    assert "Постмортем сохранён" in edits[-1][-1]
+
+
+def test_handle_close_postmortem_failure_still_closes(monkeypatch):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(wo.pib, "exit_action_for", lambda side: "SELL")
+    monkeypatch.setattr(wo.pib, "working_exit_orders", lambda *a, **k: [])
+    monkeypatch.setattr(
+        wo.pib, "place_market_close", lambda *a, **k: {"ok": True, "order_ids": ["500"]}
+    )
+    monkeypatch.setattr(wo, "record_close", lambda *a, **k: True)
+    monkeypatch.setattr(wo, "generate_postmortem", lambda tid: False)  # PM step fails
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+    entry = _close_entry(message_id=5, chat_id=-1)
+
+    wo.handle_close(entry, port=9000, live=True, bot_token="B")
+    # The close still completes; the card flags that the PM needs a manual rerun.
+    assert entry["status"] == "closed"
+    assert "Постмортем не сгенерён" in edits[-1][-1]
 
 
 def test_handle_close_gateway_down(monkeypatch):
@@ -864,6 +891,136 @@ def test_handle_close_skip():
     entry = _close_entry()
     wo.handle_close_skip(entry, bot_token="B")
     assert entry["status"] == "skipped"
+
+
+# --------------------------------------------------------------------------- #
+# Daemon: detected external close (variant B safety-net)
+# --------------------------------------------------------------------------- #
+def _detected_entry(status="pending", **kw):
+    e = {
+        "kind": "close_detected",
+        "thesis_id": "th_aapl_pvt_20260612_aaaa",
+        "ticker": "AAPL",
+        "side": "long",
+        "shares": 100,
+        "price": 96.0,
+        "reason": "позиции нет в IB",
+        "exit_reason": "manual",
+        "message_id": 5,
+        "chat_id": -1,
+        "status": status,
+        "close_order_ids": [],
+        "error": None,
+    }
+    e.update(kw)
+    return e
+
+
+def test_handle_close_detected_records_without_order(monkeypatch):
+    # Confirming a detected close must NEVER place a broker order.
+    monkeypatch.setattr(
+        wo.pib,
+        "place_market_close",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no order on detected close")),
+    )
+    closed, pms = [], []
+    monkeypatch.setattr(
+        wo, "record_close", lambda tid, price, reason: closed.append((tid, price, reason)) or True
+    )
+    monkeypatch.setattr(wo, "generate_postmortem", lambda tid: pms.append(tid) or True)
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+    entry = _detected_entry()
+
+    wo.handle_close_detected(entry, bot_token="B")
+    assert entry["status"] == "closed"
+    assert closed == [("th_aapl_pvt_20260612_aaaa", 96.0, "manual")]
+    assert pms == ["th_aapl_pvt_20260612_aaaa"]
+    assert "Закрытие записано" in edits[-1][-1] and "Постмортем сохранён" in edits[-1][-1]
+
+
+def test_handle_close_detected_record_failure(monkeypatch):
+    monkeypatch.setattr(wo, "record_close", lambda *a, **k: False)
+    monkeypatch.setattr(
+        wo, "generate_postmortem", lambda tid: (_ for _ in ()).throw(AssertionError("no PM"))
+    )
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+    entry = _detected_entry()
+    wo.handle_close_detected(entry, bot_token="B")
+    assert entry["status"] == "error"
+    assert "Не удалось записать закрытие" in edits[-1][-1]
+
+
+def test_handle_close_detected_idempotent(monkeypatch):
+    monkeypatch.setattr(
+        wo, "record_close", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no re-record"))
+    )
+    entry = _detected_entry(status="closed")
+    wo.handle_close_detected(entry, bot_token="B")
+    assert entry["status"] == "closed"
+
+
+def test_handle_close_detected_skip_message(monkeypatch):
+    edits = []
+    monkeypatch.setattr(wo.ti, "edit_card", lambda *a, **k: edits.append(a) or {"ok": True})
+    entry = _detected_entry()
+    wo.handle_close_skip(entry, bot_token="B")
+    assert entry["status"] == "skipped"
+    assert "Закрытие не записано" in edits[-1][-1]
+
+
+class _DetectedArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.thesis_id = "th_aapl_pvt_20260612_aaaa"
+        self.ticker = "AAPL"
+        self.side = "long"
+        self.shares = 100.0
+        self.price = 96.0
+        self.reason = "позиции нет в IB"
+        self.exit_reason = "manual"
+        self.dry_run = False
+        self.__dict__.update(kw)
+
+
+def test_cmd_close_detected_card_sends_and_writes(monkeypatch, patched):
+    sent = {}
+    monkeypatch.setattr(
+        wo.ti, "send_close_detected_card", lambda card, token, **k: sent.update(token=token) or 91
+    )
+    rc = wo.cmd_close_detected_card(_DetectedArgs())
+    assert rc == 0 and sent["token"] == "closed-th_aapl_pvt_20260612_aaaa"
+    e = wo.load_ledger("2026-06-15")["orders"]["closed-th_aapl_pvt_20260612_aaaa"]
+    assert e["kind"] == "close_detected" and e["status"] == "pending"
+
+
+def test_cmd_close_detected_card_idempotent(monkeypatch, patched):
+    calls = []
+    monkeypatch.setattr(wo.ti, "send_close_detected_card", lambda *a, **k: calls.append(1) or 91)
+    wo.cmd_close_detected_card(_DetectedArgs())
+    wo.cmd_close_detected_card(_DetectedArgs())
+    assert len(calls) == 1
+
+
+def test_cmd_close_detected_card_suppressed_when_system_closed(monkeypatch, patched):
+    # If the thesis was already closed via the system today, no detected card.
+    ledger = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            "close-th_aapl_pvt_20260612_aaaa": _close_entry(status="closed"),
+        },
+    }
+    wo.save_ledger("2026-06-15", ledger)
+    monkeypatch.setattr(
+        wo.ti,
+        "send_close_detected_card",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("should be suppressed")),
+    )
+    rc = wo.cmd_close_detected_card(_DetectedArgs())
+    assert rc == 0
+    assert "closed-th_aapl_pvt_20260612_aaaa" not in wo.load_ledger("2026-06-15")["orders"]
 
 
 class _CloseArgs:
@@ -1020,6 +1177,48 @@ def test_cmd_listen_once_routes_close_tap(monkeypatch, patched):
     )
     monkeypatch.setattr(
         wo, "handle_scale_out", lambda *a, **k: (_ for _ in ()).throw(AssertionError("wrong route"))
+    )
+
+    rc = wo.cmd_listen(_ListenArgs())
+    assert rc == 0 and routed == ["th_x_pvt_20260101_0001"]
+    assert wo.load_ledger("2026-06-15")["orders"][token]["status"] == "closed"
+
+
+def test_cmd_listen_once_routes_close_detected_tap(monkeypatch, patched):
+    # A tapped detected-close card routes to handle_close_detected and NEVER
+    # touches the Gateway (no _connect_port / handle_close).
+    token = "closed-th_x_pvt_20260101_0001"
+    ledger = {
+        "date": "2026-06-15",
+        "mode": "paper",
+        "orders": {
+            token: _detected_entry(thesis_id="th_x_pvt_20260101_0001", message_id=1, chat_id=-100)
+        },
+    }
+    wo.save_ledger("2026-06-15", ledger)
+    update = {
+        "update_id": 31,
+        "callback_query": {
+            "id": "cq",
+            "data": f"o:{token}",
+            "message": {"message_id": 1, "chat": {"id": -100}},
+        },
+    }
+    monkeypatch.setattr(wo.ti, "poll_updates", lambda *a, **k: [update])
+    monkeypatch.setattr(wo.ti, "answer_callback", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(
+        wo.pib, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no Gateway"))
+    )
+    routed = []
+    monkeypatch.setattr(
+        wo,
+        "handle_close_detected",
+        lambda entry, *, bot_token: (
+            routed.append(entry["thesis_id"]) or entry.update(status="closed")
+        ),
+    )
+    monkeypatch.setattr(
+        wo, "handle_close", lambda *a, **k: (_ for _ in ()).throw(AssertionError("wrong route"))
     )
 
     rc = wo.cmd_listen(_ListenArgs())

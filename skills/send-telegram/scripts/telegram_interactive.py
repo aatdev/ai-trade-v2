@@ -227,6 +227,44 @@ def send_close_card(
     return resp.get("result", {}).get("message_id")
 
 
+def close_detected_card_text(card: dict, mode_badge: str = "📝 PAPER") -> str:
+    """Detected-external-close confirmation card body (PLAIN text).
+
+    Unlike the rule-violation close card, the position is ALREADY flat at the
+    broker (it disappeared from the IB snapshot). Confirming only RECORDS the
+    close in the journal and generates the postmortem — no order is placed.
+    Keys: ticker/side/shares/reason/price."""
+    side = (card.get("side") or "long").lower()
+    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
+    lines = [
+        f"{mode_badge}  📍 ЗАКРЫТИЕ ОБНАРУЖЕНО  {card['ticker']}  ({arrow})",
+        f"Позиции нет в IB ({card.get('reason') or 'закрыта вне системы'}).",
+    ]
+    if card.get("price"):
+        lines.append(
+            f"Цена выхода (≈): ${_fmt(card.get('price'))} — поправь в журнале при необходимости."
+        )
+    lines.append("Действие: записать закрытие в журнал + постмортем (ордер НЕ выставляется).")
+    return "\n".join(lines)
+
+
+def send_close_detected_card(
+    card: dict, token: str, *, bot_token: str, chat_id: str, mode_badge: str = "📝 PAPER"
+) -> int | None:
+    """Send a detected-external-close confirmation card; return message_id."""
+    payload = {
+        "chat_id": chat_id,
+        "text": close_detected_card_text(card, mode_badge),
+        "reply_markup": inline_keyboard(
+            token, confirm_label="✅ Записать закрытие", decline_label="✋ Не сейчас"
+        ),
+    }
+    resp = _tg_post(bot_token, "sendMessage", payload)
+    if not resp.get("ok"):
+        return None
+    return resp.get("result", {}).get("message_id")
+
+
 def poll_updates(
     bot_token: str, offset: int | None, timeout: int = DEFAULT_POLL_TIMEOUT
 ) -> list[dict]:

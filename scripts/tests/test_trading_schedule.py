@@ -1939,3 +1939,131 @@ def test_run_skill_script_disables_tv_cache(monkeypatch):
     monkeypatch.setattr(ts.subprocess, "run", fake_run)
     ts.run_skill_script(["echo"], label="x", dry_run=False, timeout=10)
     assert captured["env"]["TV_NO_CACHE"] == "1"
+
+
+# --------------------------------------------------------------------------- #
+# External-close reconcile (variant B safety-net)
+# --------------------------------------------------------------------------- #
+def _ok_snapshot(positions, trades=None):
+    return {
+        "ok": True,
+        "account_ids": ["DU1"],
+        "summary": {"net_liquidation": 1000.0},
+        "positions": positions,
+        "trades": trades or [],
+        "error": None,
+    }
+
+
+def test_detect_external_closes_flags_missing_position():
+    open_positions = [
+        {"ticker": "AAPL", "side": "long", "shares": 100, "thesis_id": "th_a", "entry_price": 90.0},
+        {"ticker": "MSFT", "side": "long", "shares": 50, "thesis_id": "th_m", "entry_price": 300.0},
+    ]
+    snap = _ok_snapshot(
+        [{"symbol": "MSFT", "position": 50}],
+        trades=[
+            {"symbol": "AAPL", "side": "SELL", "price": 96.0, "trade_time": "2026-06-15T18:00:00"}
+        ],
+    )
+    out = ts.detect_external_closes(open_positions, snap)
+    assert len(out) == 1
+    assert out[0]["thesis_id"] == "th_a" and out[0]["ticker"] == "AAPL"
+    assert out[0]["price"] == 96.0  # latest closing-side fill, not the entry price
+
+
+def test_detect_external_closes_zero_qty_is_flat():
+    open_positions = [
+        {"ticker": "AAPL", "side": "long", "shares": 100, "thesis_id": "th_a", "entry_price": 90.0}
+    ]
+    snap = _ok_snapshot([{"symbol": "AAPL", "position": 0}])  # flat row -> not held
+    out = ts.detect_external_closes(open_positions, snap)
+    assert [o["thesis_id"] for o in out] == ["th_a"]
+    assert out[0]["price"] == 90.0  # no fill in trades -> entry-price fallback
+
+
+def test_detect_external_closes_untrusted_snapshot_returns_empty():
+    open_positions = [
+        {"ticker": "AAPL", "side": "long", "shares": 100, "thesis_id": "th_a", "entry_price": 90.0}
+    ]
+    # ok=False (Gateway down), None, and ok-but-no-account-context must all be
+    # treated as "unknown", never "everything closed".
+    assert ts.detect_external_closes(open_positions, {"ok": False, "positions": []}) == []
+    assert ts.detect_external_closes(open_positions, None) == []
+    assert ts.detect_external_closes(open_positions, {"ok": True, "positions": []}) == []
+
+
+def test_detect_external_closes_held_position_not_flagged():
+    open_positions = [
+        {"ticker": "AAPL", "side": "long", "shares": 100, "thesis_id": "th_a", "entry_price": 90.0}
+    ]
+    snap = _ok_snapshot([{"symbol": "AAPL", "position": 100}])
+    assert ts.detect_external_closes(open_positions, snap) == []
+
+
+def test_exit_price_from_trades_short_uses_buy_side():
+    snap = _ok_snapshot(
+        [],
+        trades=[
+            {"symbol": "TSLA", "side": "BUY", "price": 200.0, "trade_time": "2026-06-15T15:00:00"},
+            {"symbol": "TSLA", "side": "BUY", "price": 190.0, "trade_time": "2026-06-15T18:00:00"},
+            {"symbol": "TSLA", "side": "SELL", "price": 999.0, "trade_time": "2026-06-15T19:00:00"},
+        ],
+    )
+    # Covering a short = BUY; latest BUY fill wins (190 over 200), SELL ignored.
+    assert ts._exit_price_from_trades(snap, "TSLA", "short") == 190.0
+
+
+def test_reconcile_ib_closes_sends_detected_card(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "JOURNAL_DIR", tmp_path)
+    monkeypatch.setattr(ts, "_latest", lambda d, p: tmp_path / "portfolio_heat_x.json")
+    monkeypatch.setattr(
+        ts,
+        "_read_json",
+        lambda p: {
+            "positions": [
+                {
+                    "ticker": "AAPL",
+                    "side": "long",
+                    "shares": 100,
+                    "thesis_id": "th_a",
+                    "entry_price": 90.0,
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        ts, "_load_ib_snapshot", lambda args: _ok_snapshot([{"symbol": "MSFT", "position": 5}])
+    )
+    sent = []
+    monkeypatch.setattr(ts, "run_skill_script", lambda cmd, **k: sent.append(cmd))
+    args = types.SimpleNamespace(dry_run=False, no_telegram=False, timeout=60, ib_fixture=None)
+    ts._reconcile_ib_closes("2026-06-15", args)
+    assert len(sent) == 1
+    cmd = [str(c) for c in sent[0]]
+    assert "close-detected-card" in cmd
+    assert "--thesis-id" in cmd and "th_a" in cmd
+    assert "--ticker" in cmd and "AAPL" in cmd
+
+
+def test_reconcile_ib_closes_dry_run_noop(monkeypatch):
+    monkeypatch.setattr(
+        ts, "_load_ib_snapshot", lambda args: (_ for _ in ()).throw(AssertionError("no snapshot"))
+    )
+    monkeypatch.setattr(
+        ts, "run_skill_script", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no card"))
+    )
+    args = types.SimpleNamespace(dry_run=True, no_telegram=False, timeout=60, ib_fixture=None)
+    ts._reconcile_ib_closes("2026-06-15", args)  # returns without touching IB
+
+
+def test_reconcile_ib_closes_no_positions_noop(monkeypatch, tmp_path):
+    monkeypatch.setattr(ts, "_latest", lambda d, p: None)  # no heat file
+    monkeypatch.setattr(
+        ts, "_load_ib_snapshot", lambda args: (_ for _ in ()).throw(AssertionError("no snapshot"))
+    )
+    sent = []
+    monkeypatch.setattr(ts, "run_skill_script", lambda cmd, **k: sent.append(cmd))
+    args = types.SimpleNamespace(dry_run=False, no_telegram=False, timeout=60, ib_fixture=None)
+    ts._reconcile_ib_closes("2026-06-15", args)
+    assert sent == []

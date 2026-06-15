@@ -385,6 +385,63 @@ def cmd_close_card(args) -> int:
     return 0
 
 
+CLOSE_DETECTED_TOKEN_PREFIX = "closed-"
+
+
+def cmd_close_detected_card(args) -> int:
+    """Producer: send a detected-external-close confirmation card (one/day/thesis).
+
+    Fires when the scheduler notices a tracked-open thesis is no longer in the
+    live IB snapshot — i.e. it was likely closed OUTSIDE the system (manual exit
+    in TWS, stop filled while we weren't watching). The card is confirm-gated and
+    places NO order; confirming only records the close + postmortem. Suppressed
+    when the same thesis was already closed through the system today (a resolved
+    ``close-<id>`` card), to avoid a redundant second card on the race."""
+    date_str = _today_iso(args.date)
+    token = CLOSE_DETECTED_TOKEN_PREFIX + args.thesis_id
+    ledger = load_ledger(date_str)
+    sys_close = ledger["orders"].get(CLOSE_TOKEN_PREFIX + args.thesis_id)
+    if sys_close and sys_close.get("status") == "closed":
+        log.info("detected-close: %s уже закрыт через систему сегодня — пропуск", args.thesis_id)
+        return 0
+    existing = ledger["orders"].get(token)
+    if existing and existing.get("status") in _CLOSE_RESOLVED:
+        log.info("detected-close карточка уже была сегодня для %s", token)
+        return 0
+    card = {
+        "kind": "close_detected",
+        "thesis_id": args.thesis_id,
+        "ticker": args.ticker,
+        "side": (args.side or "long").lower(),
+        "shares": args.shares,
+        "price": args.price,
+        "reason": args.reason,
+        "exit_reason": args.exit_reason or "manual",
+    }
+    if args.dry_run:
+        log.info("(dry-run) detected-close карточка %s: %s", args.ticker, args.reason)
+        return 0
+    bot_token, chat_id = ti.resolve_credentials()
+    mid = ti.send_close_detected_card(
+        card, token, bot_token=bot_token, chat_id=chat_id, mode_badge=pib.mode_badge()
+    )
+    if mid is None:
+        log.warning("не удалось отправить detected-close карточку %s", token)
+        return 0
+    ledger["orders"][token] = {
+        **card,
+        "message_id": mid,
+        "chat_id": chat_id,
+        "status": "pending",
+        "close_order_ids": [],
+        "error": None,
+    }
+    ledger["mode"] = "paper" if pib.is_paper() else "live"
+    save_ledger(date_str, ledger)
+    log.info("detected-close карточка отправлена: %s", token)
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # PID lock (mirrors run_trading_autopilot)
 # --------------------------------------------------------------------------- #
@@ -696,6 +753,51 @@ def record_close(thesis_id: str, price: float, exit_reason: str) -> bool:
     return True
 
 
+def generate_postmortem(thesis_id: str) -> bool:
+    """Generate the postmortem markdown for a just-closed thesis (best-effort).
+
+    Runs the trader-memory ``review postmortem`` step right after the thesis is
+    recorded CLOSED, so the per-trade postmortem is produced automatically rather
+    than waiting on a manual trade-memory-loop run. A failure here never breaks
+    the close itself — it is logged and surfaced on the card so the trader can
+    regenerate it manually. Idempotent: re-running overwrites ``pm_<id>.md``."""
+    cmd = [
+        sys.executable,
+        str(sched.TRADER_MEMORY_CLI),
+        "review",
+        "postmortem",
+        thesis_id,
+    ]
+    try:
+        res = subprocess.run(
+            cmd, cwd=sched.PROJECT_ROOT, capture_output=True, text=True, timeout=180
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        log.warning("postmortem failed for %s: %s", thesis_id, exc)
+        return False
+    if res.returncode != 0:
+        log.warning(
+            "postmortem rc=%s for %s: %s",
+            res.returncode,
+            thesis_id,
+            (res.stderr or "").strip()[:200],
+        )
+        return False
+    return True
+
+
+def _record_close_and_postmortem(thesis_id: str, price: float, exit_reason: str) -> str:
+    """Record a CLOSED outcome and auto-generate its postmortem.
+
+    Returns a short Telegram suffix describing what happened: postmortem saved,
+    postmortem failed (close recorded), or close not recorded at all."""
+    if not record_close(thesis_id, price, exit_reason):
+        return " ⚠️ Закрытие в журнале не записано — сделай вручную."
+    if generate_postmortem(thesis_id):
+        return " Постмортем сохранён."
+    return " Постмортем не сгенерён — запусти review postmortem вручную."
+
+
 def handle_close(entry: dict, port: int | None, *, live: bool, bot_token: str) -> None:
     """Tap "Закрыть" on a position-management exit card: market-close the full
     remaining position and cancel the protective bracket legs.
@@ -746,20 +848,51 @@ def handle_close(entry: dict, port: int | None, *, live: bool, bot_token: str) -
         return
 
     price = entry.get("price") or entry.get("entry_price") or 0
-    record_close(entry["thesis_id"], price, entry.get("exit_reason") or "manual")
+    pm_note = _record_close_and_postmortem(
+        entry["thesis_id"], price, entry.get("exit_reason") or "manual"
+    )
     entry["status"] = "closed"
     entry["close_order_ids"] = close.get("order_ids", [])
     _edit(
-        entry, f"⛔️ Закрыто рыночным {shares} шт; защитные ордера сняты. Тезис → CLOSED.", bot_token
+        entry,
+        f"⛔️ Закрыто рыночным {shares} шт; защитные ордера сняты. Тезис → CLOSED.{pm_note}",
+        bot_token,
     )
 
 
+def handle_close_detected(entry: dict, *, bot_token: str) -> None:
+    """Tap "Записать закрытие" on a detected-external-close card.
+
+    The position is already flat at the broker (it dropped out of the IB
+    snapshot), so this places NO order — it only records the CLOSED outcome and
+    auto-generates the postmortem. Idempotent on a card already resolved closed;
+    on a failed journal write the card flags it for a manual fix."""
+    if entry.get("status") in {"closed"}:
+        return  # idempotent
+    price = entry.get("price") or entry.get("entry_price") or 0
+    if not record_close(entry["thesis_id"], price, entry.get("exit_reason") or "manual"):
+        entry["status"] = "error"
+        entry["error"] = "record close failed"
+        _edit(entry, "❗️Не удалось записать закрытие в журнал — сделай вручную.", bot_token)
+        return
+    pm_note = (
+        " Постмортем сохранён."
+        if generate_postmortem(entry["thesis_id"])
+        else " Постмортем не сгенерён — запусти review postmortem вручную."
+    )
+    entry["status"] = "closed"
+    _edit(entry, f"✅ Закрытие записано, тезис → CLOSED.{pm_note}", bot_token)
+
+
 def handle_close_skip(entry: dict, *, bot_token: str) -> None:
-    """Tap "Оставить" on an exit card: leave the position untouched."""
+    """Tap "Оставить"/"Не сейчас" on an exit card: leave things untouched."""
     if entry.get("status") in {"closed"}:
         return
     entry["status"] = "skipped"
-    _edit(entry, "✋ Оставлено — позиция без изменений.", bot_token)
+    if entry.get("kind") == "close_detected":
+        _edit(entry, "✋ Закрытие не записано — тезис без изменений.", bot_token)
+    else:
+        _edit(entry, "✋ Оставлено — позиция без изменений.", bot_token)
 
 
 def expire_pending_cards(ledger: dict, *, bot_token: str) -> bool:
@@ -911,16 +1044,20 @@ def cmd_listen(args) -> int:
                     continue  # stale / unknown token
                 kind = entry.get("kind", "open")
                 if cb["action"] == ti.ACTION_OPEN:
-                    port = _connect_port(args, port_cache)
-                    if kind == "scale":
-                        handle_scale_out(entry, port, live=args.live, bot_token=bot_token)
-                    elif kind == "close":
-                        handle_close(entry, port, live=args.live, bot_token=bot_token)
+                    if kind == "close_detected":
+                        # Position already flat at the broker — no Gateway needed.
+                        handle_close_detected(entry, bot_token=bot_token)
                     else:
-                        handle_open(entry, port, live=args.live, bot_token=bot_token)
+                        port = _connect_port(args, port_cache)
+                        if kind == "scale":
+                            handle_scale_out(entry, port, live=args.live, bot_token=bot_token)
+                        elif kind == "close":
+                            handle_close(entry, port, live=args.live, bot_token=bot_token)
+                        else:
+                            handle_open(entry, port, live=args.live, bot_token=bot_token)
                 elif kind == "scale":
                     handle_scale_skip(entry, bot_token=bot_token)
-                elif kind == "close":
+                elif kind in ("close", "close_detected"):
                     handle_close_skip(entry, bot_token=bot_token)
                 else:
                     handle_skip(entry, bot_token=bot_token)
@@ -1030,6 +1167,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_close.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     p_close.add_argument("--dry-run", action="store_true", help="log only, send nothing")
     p_close.set_defaults(func=cmd_close_card)
+
+    p_cdet = sub.add_parser(
+        "close-detected-card",
+        help="confirm-record a position that disappeared from the IB snapshot",
+    )
+    p_cdet.add_argument("--thesis-id", required=True)
+    p_cdet.add_argument("--ticker", required=True)
+    p_cdet.add_argument("--side", choices=["long", "short"], default="long")
+    p_cdet.add_argument("--shares", type=float, default=None)
+    p_cdet.add_argument(
+        "--price", type=float, default=None, help="approx exit price for the close record"
+    )
+    p_cdet.add_argument("--reason", default="позиции нет в IB", help="why the close was detected")
+    p_cdet.add_argument("--exit-reason", choices=["time_stop", "manual"], default="manual")
+    p_cdet.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_cdet.add_argument("--dry-run", action="store_true", help="log only, send nothing")
+    p_cdet.set_defaults(func=cmd_close_detected_card)
     return parser
 
 
