@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Trading autopilot — self-dispatching wrapper over run_trading_schedule.py.
 
-Designed to be fired every 15 minutes by cron/launchd
-(``*/15 * * * *`` — the intraday monitor needs that cadence; all other slots
-simply dedupe themselves). Each run:
+Designed to be fired on a fixed cron cadence (``*/15 * * * *`` historically,
+``*/5`` for tighter intraday price checks — see ``INTRADAY_INTERVAL_MIN``;
+the intraday monitor paces itself to that interval and all other slots simply
+dedupe themselves). Each run:
 
   1. Looks at the clock (CET wall time), the US trading calendar, and its own
      state file, and decides which scheduled step — if any — is due:
@@ -33,8 +34,8 @@ only after INTRADAY_FAILURE_ALERT_STREAK consecutive failures. A PID lock
 file prevents overlapping runs. ``--dry-run`` decides and logs but mutates no
 state and sends nothing.
 
-Cron line (auto mode):
-    */15 * * * * cd <repo> && /usr/bin/python3 scripts/run_trading_autopilot.py >> trading-data/logs/autopilot_cron.log 2>&1
+Cron line (auto mode, 5-min intraday cadence):
+    */5 * * * * cd <repo> && INTRADAY_INTERVAL_MIN=5 /usr/bin/python3 scripts/run_trading_autopilot.py >> trading-data/logs/autopilot_cron.log 2>&1
 
 Stdlib only. Manual testing:
     python3 scripts/run_trading_autopilot.py --dry-run
@@ -90,8 +91,11 @@ def _windows_local(d: dt.date) -> dict:
 
 MAX_ATTEMPTS = 2
 # The intraday monitor is repeatable: re-run no sooner than this many minutes
-# after the previous run (cron fires every 15 min: `*/15 * * * *`).
-INTRADAY_INTERVAL_MIN = 15
+# after the previous run. Keep this in sync with the cron cadence — set both
+# from the crontab line (e.g. `*/5 ... INTRADAY_INTERVAL_MIN=5 python3 ...`).
+# Read at import, before .env loads, so override it in the crontab env or the
+# process env, not in .env. Default 15 matches the historical `*/15` cron.
+INTRADAY_INTERVAL_MIN = int(os.environ.get("INTRADAY_INTERVAL_MIN", "15"))
 # The run stamps last_at a second or two AFTER the cron tick (15:15:01), so the
 # next tick at 15:30:00 sees ~14m59s elapsed; a strict `< 15` check skipped
 # every other tick (observed 30-min effective cadence). Compare with slack.

@@ -7,7 +7,9 @@ metadata:
   originSessionId: f0936442-e171-4aeb-9497-38ea0df5f730
 ---
 
-`run_trading_autopilot.py` runs from crontab (`*/15 * * * *`), so it inherits cron's minimal environment: `PATH=/usr/bin:/bin` and no access to the GUI/Aqua security session. Two failure modes seen on 2026-06-10 (evening-prep rc=1):
+`run_trading_autopilot.py` runs from crontab, so it inherits cron's minimal environment: `PATH=/usr/bin:/bin` and no access to the GUI/Aqua security session. Two failure modes seen on 2026-06-10 (evening-prep rc=1):
+
+**Cadence (changed 2026-06-15):** cron now fires `*/5` (was `*/15`) for tighter intraday price checks, and the crontab line also exports `INTRADAY_INTERVAL_MIN=5`. Both halves must match — the cron step AND the dedup interval — or the intraday slot self-dedupes and the extra ticks are no-ops. `INTRADAY_INTERVAL_MIN` is read at **module import** (default 15), which is BEFORE `load_env_file()` runs, so it must be set in the crontab env (`VAR=val ... python3`) or process env — putting it in `.env` does NOT work. To retune cadence, edit the live crontab (`crontab -e`); the constant lives in `scripts/run_trading_autopilot.py`.
 
 1. **`FileNotFoundError: 'node'`** — the vendored `tv` CLI shells out to `node` (`/opt/homebrew/bin/node`); neither `node` nor `tv` is on cron's PATH. Fixed in code: `run_trading_schedule.ensure_runtime_path()` (called at module level) prepends `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`. A bare `PATH=` line in `.env` does NOT help because `load_env_file()` uses `setdefault` and cron already exports PATH.
 
