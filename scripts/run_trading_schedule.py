@@ -1019,8 +1019,18 @@ def _rationale_block(dec: dict) -> str:
     return f"\n\n💬 ОБОСНОВАНИЕ\n{rationale}" if rationale else ""
 
 
+# Date-suffixed watchlist files ONLY. A bare glob("watchlist_*.json") also
+# matches watchlist_validation_<date>.json (a different schema -- {date, verdicts},
+# no `candidates`), which sorts AFTER watchlist_<date>.json lexicographically
+# ('v' > any digit) and would be wrongly returned as the latest list -- making a
+# fresh watchlist look stale/missing and suppressing OPEN signals + order cards.
+_WATCHLIST_FILE_RE = re.compile(r"^watchlist_\d{4}-\d{2}-\d{2}\.json$")
+
+
 def latest_watchlist() -> Path | None:
-    files = sorted(SCHEDULE_DIR.glob("watchlist_*.json"))
+    files = sorted(
+        f for f in SCHEDULE_DIR.glob("watchlist_*.json") if _WATCHLIST_FILE_RE.match(f.name)
+    )
     return files[-1] if files else None
 
 

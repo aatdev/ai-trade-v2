@@ -1229,6 +1229,45 @@ class TestWatchlistFreshness:
 
 
 # --------------------------------------------------------------------------- #
+# latest_watchlist() file selection (must ignore validation siblings)
+# --------------------------------------------------------------------------- #
+class TestLatestWatchlist:
+    def test_ignores_validation_sibling(self, monkeypatch, tmp_path):
+        """watchlist_validation_<date>.json must never be returned: it sorts
+        AFTER watchlist_<date>.json lexicographically ('v' > digit) and carries
+        a different schema (verdicts, no candidates), so a naive glob would pick
+        it and make a fresh watchlist look stale/missing."""
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        sched = tmp_path / "schedule"
+        _write_json(
+            sched / "watchlist_2026-06-15.json",
+            {"date": "2026-06-15", "candidates": [_NVDA_CANDIDATE]},
+        )
+        _write_json(
+            sched / "watchlist_validation_2026-06-11.json",
+            {"date": "2026-06-11", "verdicts": []},
+        )
+        latest = ts.latest_watchlist()
+        assert latest is not None
+        assert latest.name == "watchlist_2026-06-15.json"
+
+    def test_none_when_only_validation_files(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(
+            tmp_path / "schedule" / "watchlist_validation_2026-06-11.json",
+            {"date": "2026-06-11", "verdicts": []},
+        )
+        assert ts.latest_watchlist() is None
+
+    def test_picks_most_recent_real_watchlist(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        sched = tmp_path / "schedule"
+        for d in ("2026-06-10", "2026-06-12", "2026-06-15"):
+            _write_json(sched / f"watchlist_{d}.json", {"date": d, "candidates": []})
+        assert ts.latest_watchlist().name == "watchlist_2026-06-15.json"
+
+
+# --------------------------------------------------------------------------- #
 # signals.md parsing (must mirror the REAL ticker-analysis block format)
 # --------------------------------------------------------------------------- #
 _REAL_SIGNALS_MD = """# Trading Signals Journal
