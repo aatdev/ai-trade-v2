@@ -12,7 +12,7 @@
 - [Skill docs nav_order pitfall](skill-docs-navorder-pitfall.md) — generate_skill_docs.py --skill/--overwrite пишут nav_order не так, как ждёт --check; рендерить через модуль с check-семантикой
 - [Use tradingview-screener, not finviz](use-tradingview-screener-not-finviz.md) — для скрининга всегда tradingview-screener; finviz-screener только по явной просьбе
 - [.claude/skills symlink footgun](claude-skills-symlink-footgun.md) — .claude/skills → ../skills; rm/cp на .claude/skills/<x> бьёт по реальному источнику, синхронизация не нужна
-- [Trading system profile](trading-system-profile.md) — $150k, риск 1.5–2%/сделка, heat ≤6%, ≤6 позиций, горизонт 2 нед–3 мес, лонг + шорт в слабом рынке; профиль/каталоги скрипты находят сами
+- [Trading system profile](trading-system-profile.md) — $150k, риск 0.33%/сделка (намеренно, подтв. 2026-06-16), heat ≤6%, ≤6 позиций, горизонт 2 нед–3 мес, лонг + шорт в слабом рынке; профиль/каталоги скрипты находят сами
 - [Trading data layout](trading-data-layout.md) — все торговые артефакты в $TRADING_DATE_DIR (trading-data/): schedule/market/screeners/plans/journal/analysis/logs
 - [Breakout-planner auto-loads profile](breakout-planner-autoloads-profile.md) — планировщик/sizer/heat читают trading_profile.json через --profile; argparse-дефолты (0.5%/gate 0/10%) мертвы в проде — проверять по plans/*.json
 - [Autopilot cron env gotchas](autopilot-cron-env-gotchas.md) — cron-запуск autopilot: PATH чинит ensure_runtime_path(), Claude login требует CLAUDE_CODE_OAUTH_TOKEN в .env (keychain недоступен)
