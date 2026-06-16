@@ -2,9 +2,11 @@ import { lazy, Suspense, useState } from 'react';
 import type { AnalysisIndexEntry, ScreenerCandidate, ScreenerResult, Sourced } from '@shared/types';
 import { useAnalysisIndex, useScreeners, type Refetch } from '../api';
 import { fmtNum, fmtScore } from '../lib/format';
+import { useVersionedSource } from '../lib/useVersionedSource';
 import { scoreColor } from '../lib/zones';
 import AnalysisModal from './AnalysisModal';
 import type { ChartLevels } from './CandleChart';
+import SourceSelect from './SourceSelect';
 import { AnalysisLink, Card, Empty, ErrorNote, GradeBadge, Loading } from './ui';
 
 // Same code-split chunk as the watchlist — the charting library only loads once
@@ -95,7 +97,13 @@ function ScreenerTable({
 }
 
 export default function ScreenersCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
-  const { data, isLoading, error } = useScreeners(date, refetch);
+  const [vcpSource, setVcpSource] = useVersionedSource(date);
+  const [swingSource, setSwingSource] = useVersionedSource(date);
+  const { data, isLoading, error } = useScreeners(
+    date,
+    { vcp: vcpSource, swing: swingSource },
+    refetch,
+  );
   const { data: analysisIndex } = useAnalysisIndex(refetch);
   const index: Index = analysisIndex?.tickers ?? {};
   const [tab, setTab] = useState<'vcp' | 'swingShort'>('swingShort');
@@ -121,8 +129,28 @@ export default function ScreenersCard({ date, refetch }: { date: string | null; 
   const vcpN = data?.vcp.data?.candidates.length ?? 0;
   const shortN = data?.swingShort.data?.candidates.length ?? 0;
 
+  // The version picker tracks the active tab's screener kind.
+  const sourceSelect =
+    tab === 'vcp' ? (
+      <SourceSelect
+        kind="vcp"
+        value={vcpSource}
+        latest={data?.vcp.source ?? null}
+        onChange={setVcpSource}
+        refetch={refetch}
+      />
+    ) : (
+      <SourceSelect
+        kind="swing-short"
+        value={swingSource}
+        latest={data?.swingShort.source ?? null}
+        onChange={setSwingSource}
+        refetch={refetch}
+      />
+    );
+
   return (
-    <Card title="Screeners" source={active?.source}>
+    <Card title="Screeners" sourceSelect={sourceSelect}>
       <div className="tabs">
         <button
           className={`tab ${tab === 'swingShort' ? 'active' : ''}`}

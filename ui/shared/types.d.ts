@@ -35,6 +35,17 @@ export interface DatesResponse {
   latest: string | null;
 }
 
+/**
+ * GET /api/versions?kind=<kind> — the last ~10 file basenames for a selectable
+ * data kind, newest first. Pin one via the matching `?source=`/`*Source=` param
+ * on the kind's state endpoint. Valid kinds: exposure, watchlist, portfolio,
+ * vcp, swing-short, breadth, uptrend, top, macro.
+ */
+export interface VersionsResponse {
+  kind: string;
+  versions: string[];
+}
+
 /** Wraps every state response so the client knows which date/file it got. */
 export interface Sourced<T> {
   date: string | null; // the date actually resolved

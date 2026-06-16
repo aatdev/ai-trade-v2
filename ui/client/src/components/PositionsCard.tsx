@@ -1,11 +1,14 @@
 import { Link } from 'react-router-dom';
 import { usePortfolio, type Refetch } from '../api';
 import { fmtDateTime, fmtMoney, fmtNum, fmtPct, fmtSignedPct } from '../lib/format';
+import { useVersionedSource } from '../lib/useVersionedSource';
 import { pnlColor } from '../lib/zones';
+import SourceSelect from './SourceSelect';
 import { Card, Empty, ErrorNote, Loading, SideBadge, Stat } from './ui';
 
 export default function PositionsCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
-  const { data, isLoading, error } = usePortfolio(date, refetch);
+  const [source, setSource] = useVersionedSource(date);
+  const { data, isLoading, error } = usePortfolio(date, source, refetch);
   if (isLoading)
     return (
       <Card title="Open Positions / Heat">
@@ -27,7 +30,18 @@ export default function PositionsCard({ date, refetch }: { date: string | null; 
     );
 
   return (
-    <Card title="Open Positions / Heat" source={data?.source}>
+    <Card
+      title="Open Positions / Heat"
+      sourceSelect={
+        <SourceSelect
+          kind="portfolio"
+          value={source}
+          latest={data?.source ?? null}
+          onChange={setSource}
+          refetch={refetch}
+        />
+      }
+    >
       <div className="stats">
         <Stat k="Open Risk" v={`${fmtPct(h.open_risk_pct)} · ${fmtMoney(h.open_risk_dollars)}`} />
         <Stat

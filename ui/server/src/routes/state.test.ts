@@ -70,6 +70,60 @@ describe('GET /api/screeners', () => {
   });
 });
 
+describe('GET /api/versions', () => {
+  it('lists matching files for a kind, newest first', async () => {
+    const res = await request(app).get('/api/versions?kind=exposure');
+    expect(res.status).toBe(200);
+    expect(res.body.kind).toBe('exposure');
+    expect(res.body.versions).toEqual([
+      'exposure_decision_2026-06-11.json',
+      'exposure_decision_2026-06-10.json',
+    ]);
+  });
+
+  it('orders timestamped snapshots newest first', async () => {
+    const res = await request(app).get('/api/versions?kind=portfolio');
+    expect(res.body.versions).toEqual([
+      'portfolio_heat_2026-06-11_143000.json',
+      'portfolio_heat_2026-06-11_120000.json',
+    ]);
+  });
+
+  it('400s for an unknown kind', async () => {
+    expect((await request(app).get('/api/versions?kind=bogus')).status).toBe(400);
+    expect((await request(app).get('/api/versions')).status).toBe(400);
+  });
+});
+
+describe('?source= pins a specific file version', () => {
+  it('reads the requested historical exposure gate', async () => {
+    const res = await request(app).get('/api/exposure?source=exposure_decision_2026-06-10.json');
+    expect(res.body.gate.source).toBe('exposure_decision_2026-06-10.json');
+    expect(res.body.gate.data.decision).toBe('allow');
+  });
+
+  it('reads an older portfolio heat snapshot', async () => {
+    const res = await request(app).get('/api/portfolio?source=portfolio_heat_2026-06-11_120000.json');
+    expect(res.body.source).toBe('portfolio_heat_2026-06-11_120000.json');
+    expect(res.body.data.positions_count).toBe(0);
+  });
+
+  it('honors per-kind market source params', async () => {
+    const res = await request(app).get('/api/market?breadthSource=market_breadth_2026-06-11_120000.json');
+    expect(res.body.breadth.source).toBe('market_breadth_2026-06-11_120000.json');
+    expect(res.body.breadth.data.composite_score).toBe(40);
+  });
+
+  it('falls back to the latest file when source is invalid or unknown', async () => {
+    // path-traversal / wrong-pattern names are rejected, then resolved to latest
+    const evil = await request(app).get('/api/portfolio?source=../secrets.json');
+    expect(evil.body.source).toBe('portfolio_heat_2026-06-11_143000.json');
+    expect(evil.body.data.positions_count).toBe(1);
+    const missing = await request(app).get('/api/portfolio?source=portfolio_heat_1999-01-01_000000.json');
+    expect(missing.body.source).toBe('portfolio_heat_2026-06-11_143000.json');
+  });
+});
+
 describe('GET /api/theses', () => {
   it('flags past-due reviews', async () => {
     const res = await request(app).get('/api/theses');

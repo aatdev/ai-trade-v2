@@ -2,7 +2,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearListCache, findLatest, listDates, readJson, tailLines } from './files';
+import {
+  clearListCache,
+  findLatest,
+  listDates,
+  listLatest,
+  readJson,
+  resolveFile,
+  tailLines,
+} from './files';
 import { RE } from './mappers';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
@@ -30,6 +38,39 @@ describe('findLatest', () => {
 
   it('returns null for an empty/missing directory without throwing', () => {
     expect(findLatest(path.join(FIXTURE, 'does-not-exist'), RE.breadth)).toBeNull();
+  });
+});
+
+describe('listLatest', () => {
+  it('returns matching files newest first, capped at the limit', () => {
+    const all = listLatest(path.join(FIXTURE, 'schedule'), RE.exposureDecision);
+    expect(all).toEqual(['exposure_decision_2026-06-11.json', 'exposure_decision_2026-06-10.json']);
+    expect(listLatest(path.join(FIXTURE, 'schedule'), RE.exposureDecision, 1)).toEqual([
+      'exposure_decision_2026-06-11.json',
+    ]);
+  });
+
+  it('returns [] for an empty/missing directory', () => {
+    expect(listLatest(path.join(FIXTURE, 'nope'), RE.breadth)).toEqual([]);
+  });
+});
+
+describe('resolveFile', () => {
+  const dir = path.join(FIXTURE, 'schedule');
+
+  it('returns the requested file when it exists and matches the pattern', () => {
+    const f = resolveFile(dir, RE.exposureDecision, null, 'exposure_decision_2026-06-10.json');
+    expect(path.basename(f!)).toBe('exposure_decision_2026-06-10.json');
+  });
+
+  it('falls back to latest for traversal / wrong-pattern / missing sources', () => {
+    const latest = 'exposure_decision_2026-06-11.json';
+    expect(path.basename(resolveFile(dir, RE.exposureDecision, null, '../etc/passwd')!)).toBe(latest);
+    expect(path.basename(resolveFile(dir, RE.exposureDecision, null, 'watchlist_2026-06-11.json')!)).toBe(
+      latest,
+    );
+    expect(path.basename(resolveFile(dir, RE.exposureDecision, null, 'nope.json')!)).toBe(latest);
+    expect(path.basename(resolveFile(dir, RE.exposureDecision, null, null)!)).toBe(latest);
   });
 });
 

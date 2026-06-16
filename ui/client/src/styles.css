@@ -115,6 +115,25 @@ label.check { display: inline-flex; align-items: center; gap: 6px; color: var(--
 }
 .card h2 .src { margin-left: auto; font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--src); font-family: var(--mono); }
 
+/* version picker that replaces the plain `.src` filename badge in a card header */
+select.src {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--src);
+  background: var(--bg-elev2);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 4px;
+  cursor: pointer;
+  max-width: 100%;
+  text-transform: none;
+  letter-spacing: 0;
+}
+select.src:hover { border-color: var(--accent); color: var(--text); }
+.card h2 select.src { margin-left: auto; min-width: 200px; max-width: 360px; }
+.gauges select.src { font-size: 10px; min-width: 150px; max-width: 100%; }
+.banner select.src { margin-left: 0; min-width: 220px; max-width: 420px; }
+
 /* ---------- badges & pills ---------- */
 .badge {
   display: inline-flex;

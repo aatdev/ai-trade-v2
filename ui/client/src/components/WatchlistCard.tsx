@@ -2,9 +2,11 @@ import { lazy, Suspense, useState } from 'react';
 import type { AnalysisIndexEntry, WatchlistCandidate } from '@shared/types';
 import { useAnalysisIndex, useWatchlist, type Refetch } from '../api';
 import { fmtMoney, fmtNum, fmtScore } from '../lib/format';
+import { useVersionedSource } from '../lib/useVersionedSource';
 import AnalysisModal from './AnalysisModal';
 import AnalyzeButton from './AnalyzeButton';
 import type { ChartLevels } from './CandleChart';
+import SourceSelect from './SourceSelect';
 import { AnalysisLink, Card, Collapsible, Empty, ErrorNote, Loading, SideBadge } from './ui';
 
 // Code-split the charting library (lightweight-charts) — only loaded once a
@@ -134,7 +136,8 @@ function CandidateTable({
 }
 
 export default function WatchlistCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
-  const { data, isLoading, error } = useWatchlist(date, refetch);
+  const [source, setSource] = useVersionedSource(date);
+  const { data, isLoading, error } = useWatchlist(date, source, refetch);
   const { data: analysisIndex } = useAnalysisIndex(refetch);
   const index: Index = analysisIndex?.tickers ?? {};
   const [chartFor, setChartFor] = useState<WatchlistCandidate | null>(null);
@@ -161,7 +164,18 @@ export default function WatchlistCard({ date, refetch }: { date: string | null; 
     );
 
   return (
-    <Card title="Watchlist" source={data?.source}>
+    <Card
+      title="Watchlist"
+      sourceSelect={
+        <SourceSelect
+          kind="watchlist"
+          value={source}
+          latest={data?.source ?? null}
+          onChange={setSource}
+          refetch={refetch}
+        />
+      }
+    >
       {wl.notes ? (
         <div className="muted" style={{ marginBottom: 10, fontSize: 13 }}>
           {wl.notes}

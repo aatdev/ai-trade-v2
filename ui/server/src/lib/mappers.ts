@@ -1,6 +1,6 @@
 import path from 'node:path';
 import YAML from 'yaml';
-import { basename, findLatest, listDir, readJson, readText } from './files';
+import { basename, findLatest, listDir, readJson, readText, resolveFile } from './files';
 import type {
   ExposureGate,
   ExposurePosture,
@@ -60,8 +60,12 @@ export const RE = {
 
 /* ---------------- exposure ---------------- */
 
-export function getExposureGate(dataDir: string, date: string | null): Sourced<ExposureGate> {
-  const file = findLatest(sub(dataDir, 'schedule'), RE.exposureDecision, date);
+export function getExposureGate(
+  dataDir: string,
+  date: string | null,
+  source?: string | null,
+): Sourced<ExposureGate> {
+  const file = resolveFile(sub(dataDir, 'schedule'), RE.exposureDecision, date, source);
   const raw = asRecord(readJson(file));
   if (!file) return sourced<ExposureGate>(null, null, date);
   const gate: ExposureGate = {
@@ -130,9 +134,13 @@ function mapWatchlistCandidate(c: Record<string, unknown>): WatchlistCandidate {
   return out;
 }
 
-export function getWatchlist(dataDir: string, date: string | null): Sourced<Watchlist> {
+export function getWatchlist(
+  dataDir: string,
+  date: string | null,
+  source?: string | null,
+): Sourced<Watchlist> {
   const dir = sub(dataDir, 'schedule');
-  const file = findLatest(dir, RE.watchlist, date);
+  const file = resolveFile(dir, RE.watchlist, date, source);
   if (!file) return sourced<Watchlist>(null, null, date);
   const raw = asRecord(readJson(file));
 
@@ -212,8 +220,12 @@ function mapPosition(p: Record<string, unknown>): Position {
   };
 }
 
-export function getPortfolio(dataDir: string, date: string | null): Sourced<PortfolioHeat> {
-  const file = findLatest(sub(dataDir, 'journal'), RE.portfolioHeat, date);
+export function getPortfolio(
+  dataDir: string,
+  date: string | null,
+  source?: string | null,
+): Sourced<PortfolioHeat> {
+  const file = resolveFile(sub(dataDir, 'journal'), RE.portfolioHeat, date, source);
   if (!file) return sourced<PortfolioHeat>(null, null, date);
   const raw = asRecord(readJson(file));
   const sectorRaw = asRecord(raw.sector_exposure);
@@ -268,8 +280,9 @@ export function getRegime(
   dataDir: string,
   pattern: RegExp,
   date: string | null,
+  source?: string | null,
 ): Sourced<RegimeComposite> {
-  const file = findLatest(sub(dataDir, 'market'), pattern, date);
+  const file = resolveFile(sub(dataDir, 'market'), pattern, date, source);
   return sourced(file, mapRegime(readJson(file)), date);
 }
 
@@ -307,9 +320,10 @@ export function getScreener(
   dataDir: string,
   kind: 'vcp' | 'swing-short',
   date: string | null,
+  source?: string | null,
 ): Sourced<ScreenerResult> {
   const pattern = kind === 'vcp' ? RE.vcp : RE.swingShort;
-  const file = findLatest(sub(dataDir, 'screeners'), pattern, date);
+  const file = resolveFile(sub(dataDir, 'screeners'), pattern, date, source);
   if (!file) return sourced<ScreenerResult>(null, null, date);
   const raw = asRecord(readJson(file));
   const result: ScreenerResult = {

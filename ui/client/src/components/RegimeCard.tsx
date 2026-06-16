@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import type { RegimeComposite, Sourced } from '@shared/types';
-import { useMarket, type Refetch } from '../api';
+import { useMarket, type Refetch, type VersionKind } from '../api';
 import { fmtScore } from '../lib/format';
+import { useVersionedSource } from '../lib/useVersionedSource';
 import { scoreColor, term } from '../lib/zones';
+import SourceSelect from './SourceSelect';
 import { Card, Empty, ErrorNote, Gauge, Loading, ScoreBar, Stat, ZoneBadge } from './ui';
 
-const PANELS: { key: 'breadth' | 'uptrend' | 'top' | 'macro'; label: string }[] = [
+type PanelKey = 'breadth' | 'uptrend' | 'top' | 'macro';
+
+const PANELS: { key: PanelKey; label: string }[] = [
   { key: 'breadth', label: 'Breadth' },
   { key: 'uptrend', label: 'Uptrend' },
   { key: 'top', label: 'Top Risk' },
@@ -32,7 +36,19 @@ function Components({ regime }: { regime: RegimeComposite }) {
 }
 
 export default function RegimeCard({ date, refetch }: { date: string | null; refetch: Refetch }) {
-  const { data, isLoading, error } = useMarket(date, refetch);
+  // One pinned version per regime panel; each resets to latest on a date change.
+  const [breadth, setBreadth] = useVersionedSource(date);
+  const [uptrend, setUptrend] = useVersionedSource(date);
+  const [top, setTop] = useVersionedSource(date);
+  const [macro, setMacro] = useVersionedSource(date);
+  const sources: Record<PanelKey, string> = { breadth, uptrend, top, macro };
+  const setSource: Record<PanelKey, (s: string) => void> = {
+    breadth: setBreadth,
+    uptrend: setUptrend,
+    top: setTop,
+    macro: setMacro,
+  };
+  const { data, isLoading, error } = useMarket(date, sources, refetch);
   const [expanded, setExpanded] = useState<string | null>(null);
 
   if (isLoading)
@@ -86,8 +102,23 @@ export default function RegimeCard({ date, refetch }: { date: string | null; ref
                 onClick={() => setExpanded(open ? null : p.key)}
               >
                 <Gauge label={p.label} score={regime?.composite_score ?? null} />
-                <div style={{ marginTop: 4 }}>
+                <div
+                  style={{
+                    marginTop: 4,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 6,
+                  }}
+                >
                   <ZoneBadge zone={regime?.zone} color={regime?.zone_color} />
+                  <SourceSelect
+                    kind={p.key as VersionKind}
+                    value={sources[p.key]}
+                    latest={sourced.source}
+                    onChange={setSource[p.key]}
+                    refetch={refetch}
+                  />
                 </div>
                 {open && regime ? <Components regime={regime} /> : null}
               </div>

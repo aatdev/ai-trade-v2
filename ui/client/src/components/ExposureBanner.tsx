@@ -2,13 +2,16 @@ import { useState } from 'react';
 import { useExposure, type Refetch } from '../api';
 import { decisionColor, decisionLabel, term } from '../lib/zones';
 import { fmtPct } from '../lib/format';
+import { useVersionedSource } from '../lib/useVersionedSource';
+import SourceSelect from './SourceSelect';
 import { ErrorNote, Loading, Modal } from './ui';
 
 /** TraderMonty's S&P 500 market breadth dashboard — the breadth backdrop behind the exposure decision. */
 const BREADTH_URL = 'https://tradermonty.github.io/market-breadth-analysis/';
 
 export default function ExposureBanner({ date, refetch }: { date: string | null; refetch: Refetch }) {
-  const { data, isLoading, error } = useExposure(date, refetch);
+  const [source, setSource] = useVersionedSource(date);
+  const { data, isLoading, error } = useExposure(date, source, refetch);
   const [showBreadth, setShowBreadth] = useState(false);
   if (isLoading)
     return (
@@ -52,7 +55,13 @@ export default function ExposureBanner({ date, refetch }: { date: string | null;
         >
           📊 Market Breadth
         </button>
-        {data?.gate.source ? <span className="src" style={{ fontFamily: 'var(--mono)', fontSize: 11, color: '#586069' }}>{data.gate.source}</span> : null}
+        <SourceSelect
+          kind="exposure"
+          value={source}
+          latest={data?.gate.source ?? null}
+          onChange={setSource}
+          refetch={refetch}
+        />
       </div>
       {dl.hint ? <div className="muted" style={{ marginTop: 4 }}>{dl.hint}</div> : null}
       {gate.rationale ? <p className="rationale">{gate.rationale}</p> : null}

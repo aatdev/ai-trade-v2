@@ -44,6 +44,35 @@ export function findLatest(dir: string, pattern: RegExp, date?: string | null): 
   return path.join(dir, names[names.length - 1]);
 }
 
+/**
+ * The most recent `limit` files in `dir` matching `pattern`, newest first.
+ * Filenames embed `YYYY-MM-DD[_HHMMSS]` so a lexicographic sort is chronological.
+ */
+export function listLatest(dir: string, pattern: RegExp, limit = 10): string[] {
+  const names = listDir(dir).filter((n) => pattern.test(n));
+  names.sort();
+  return names.slice(Math.max(0, names.length - limit)).reverse();
+}
+
+/**
+ * Resolve which file to read for a sourced state response. When `source` is an
+ * exact, pattern-matching basename that exists in `dir`, that file wins (lets
+ * the UI pin a specific historical version); otherwise fall back to the latest
+ * matching file (optionally constrained to `date`). The strict `pattern` test +
+ * directory-membership check make `source` safe against path traversal.
+ */
+export function resolveFile(
+  dir: string,
+  pattern: RegExp,
+  date?: string | null,
+  source?: string | null,
+): string | null {
+  if (source && pattern.test(source) && listDir(dir).includes(source)) {
+    return path.join(dir, source);
+  }
+  return findLatest(dir, pattern, date);
+}
+
 /** Collect every distinct YYYY-MM-DD date token across the given directories. */
 export function listDates(dirs: string[]): string[] {
   const seen = new Set<string>();

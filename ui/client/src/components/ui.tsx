@@ -57,11 +57,14 @@ export function Modal({
 export function Card({
   title,
   source,
+  sourceSelect,
   children,
   className,
 }: {
   title: string;
   source?: string | null;
+  /** Renders in the header in place of the plain `source` badge (e.g. a version picker). */
+  sourceSelect?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
@@ -69,7 +72,7 @@ export function Card({
     <section className={`card ${className ?? ''}`}>
       <h2>
         {title}
-        {source ? <span className="src">{source}</span> : null}
+        {sourceSelect ?? (source ? <span className="src">{source}</span> : null)}
       </h2>
       {children}
     </section>

@@ -28,8 +28,21 @@ import type {
   TickerAnalysisResponse,
   TickerDatesResponse,
   TradingProfile,
+  VersionsResponse,
   Watchlist,
 } from '@shared/types';
+
+/** A selectable file kind for GET /api/versions and the matching `*Source` params. */
+export type VersionKind =
+  | 'exposure'
+  | 'watchlist'
+  | 'portfolio'
+  | 'vcp'
+  | 'swing-short'
+  | 'breadth'
+  | 'uptrend'
+  | 'top'
+  | 'macro';
 
 export type Refetch = number | false;
 
@@ -62,6 +75,14 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
 
 const dq = (date: string | null) => (date ? `?date=${encodeURIComponent(date)}` : '');
 
+/** Build a query string from defined, non-empty params (drops null/undefined/''). */
+function qs(params: Record<string, string | null | undefined>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${encodeURIComponent(v as string)}`);
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
 /* ---------------- auth ---------------- */
 
 export const useAuthStatus = () =>
@@ -83,24 +104,45 @@ export const logout = () => postJSON<AuthActionResponse>('/api/logout', {});
 export const useDates = (refetchInterval: Refetch = false) =>
   useQuery({ queryKey: ['dates'], queryFn: () => getJSON<DatesResponse>('/api/dates'), refetchInterval });
 
-export const useExposure = (date: string | null, refetchInterval: Refetch = false) =>
+/** Last ~10 selectable file versions for a kind (newest first); used by SourceSelect. */
+export const useVersions = (kind: VersionKind, refetchInterval: Refetch = false) =>
   useQuery({
-    queryKey: ['exposure', date],
-    queryFn: () => getJSON<ExposureResponse>(`/api/exposure${dq(date)}`),
+    queryKey: ['versions', kind],
+    queryFn: () => getJSON<VersionsResponse>(`/api/versions?kind=${encodeURIComponent(kind)}`),
+    refetchInterval,
+    staleTime: 30_000,
+  });
+
+export const useExposure = (
+  date: string | null,
+  source: string | null = null,
+  refetchInterval: Refetch = false,
+) =>
+  useQuery({
+    queryKey: ['exposure', date, source],
+    queryFn: () => getJSON<ExposureResponse>(`/api/exposure${qs({ date, source })}`),
     refetchInterval,
   });
 
-export const useWatchlist = (date: string | null, refetchInterval: Refetch = false) =>
+export const useWatchlist = (
+  date: string | null,
+  source: string | null = null,
+  refetchInterval: Refetch = false,
+) =>
   useQuery({
-    queryKey: ['watchlist', date],
-    queryFn: () => getJSON<Sourced<Watchlist>>(`/api/watchlist${dq(date)}`),
+    queryKey: ['watchlist', date, source],
+    queryFn: () => getJSON<Sourced<Watchlist>>(`/api/watchlist${qs({ date, source })}`),
     refetchInterval,
   });
 
-export const usePortfolio = (date: string | null, refetchInterval: Refetch = false) =>
+export const usePortfolio = (
+  date: string | null,
+  source: string | null = null,
+  refetchInterval: Refetch = false,
+) =>
   useQuery({
-    queryKey: ['portfolio', date],
-    queryFn: () => getJSON<Sourced<PortfolioHeat>>(`/api/portfolio${dq(date)}`),
+    queryKey: ['portfolio', date, source],
+    queryFn: () => getJSON<Sourced<PortfolioHeat>>(`/api/portfolio${qs({ date, source })}`),
     refetchInterval,
   });
 
@@ -111,17 +153,49 @@ export const useIbSnapshot = (refetchInterval: Refetch = false) =>
     refetchInterval,
   });
 
-export const useMarket = (date: string | null, refetchInterval: Refetch = false) =>
+export interface MarketSources {
+  breadth?: string | null;
+  uptrend?: string | null;
+  top?: string | null;
+  macro?: string | null;
+}
+
+export const useMarket = (
+  date: string | null,
+  sources: MarketSources = {},
+  refetchInterval: Refetch = false,
+) =>
   useQuery({
-    queryKey: ['market', date],
-    queryFn: () => getJSON<MarketResponse>(`/api/market${dq(date)}`),
+    queryKey: ['market', date, sources.breadth, sources.uptrend, sources.top, sources.macro],
+    queryFn: () =>
+      getJSON<MarketResponse>(
+        `/api/market${qs({
+          date,
+          breadthSource: sources.breadth,
+          uptrendSource: sources.uptrend,
+          topSource: sources.top,
+          macroSource: sources.macro,
+        })}`,
+      ),
     refetchInterval,
   });
 
-export const useScreeners = (date: string | null, refetchInterval: Refetch = false) =>
+export interface ScreenerSources {
+  vcp?: string | null;
+  swing?: string | null;
+}
+
+export const useScreeners = (
+  date: string | null,
+  sources: ScreenerSources = {},
+  refetchInterval: Refetch = false,
+) =>
   useQuery({
-    queryKey: ['screeners', date],
-    queryFn: () => getJSON<ScreenersResponse>(`/api/screeners${dq(date)}`),
+    queryKey: ['screeners', date, sources.vcp, sources.swing],
+    queryFn: () =>
+      getJSON<ScreenersResponse>(
+        `/api/screeners${qs({ date, vcpSource: sources.vcp, swingSource: sources.swing })}`,
+      ),
     refetchInterval,
   });
 
