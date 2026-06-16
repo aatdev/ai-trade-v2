@@ -298,6 +298,21 @@ export interface IbSnapshot {
   source: string | null; // "live" | "fixture"
 }
 
+/**
+ * Lightweight IB Gateway liveness probe (GET /api/ib/health) — cheap enough to
+ * poll on an interval. `ok` means the Gateway is reachable AND the IBKR session
+ * is authenticated; anything else surfaces as `ok:false` with a reason.
+ */
+export interface IbHealth {
+  ok: boolean; // reachable AND authenticated — safe to fetch a snapshot
+  reachable: boolean; // Gateway port responded to the probe
+  authenticated: boolean; // IBKR session is authenticated
+  port: number | null; // Gateway port read from gateway-session.json
+  error: string | null;
+  source: string | null; // "live" | "fixture"
+  checked_at: string; // ISO timestamp of this probe
+}
+
 /* ---------------- Market regime ---------------- */
 
 export interface RegimeComponent {

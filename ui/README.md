@@ -106,6 +106,15 @@ and the tab renders a friendly notice (with the same refresh button, so you can
 retry after completing IB login / 2FA). Set `TRADING_UI_IB_FIXTURE` to serve a
 recorded snapshot without a live connection.
 
+`/api/ib/health` — a cheap Gateway **liveness probe** (`{ ok, reachable,
+authenticated, port, error, source, checked_at }`), meant to be polled on an
+interval. It avoids the Python snapshot entirely: it reads the Gateway's
+`gateway-session.json` for the port and POSTs the Client Portal
+`/iserver/auth/status` endpoint (self-signed cert, short timeout). The client
+polls it (independent of the active tab) and turns the **Счёт IB** tab red with
+a `●` marker + tooltip whenever `ok:false`. Honors `TRADING_UI_IB_FIXTURE`
+(derives health from the fixture's `ok`).
+
 Live (no `?date`): `/api/ohlcv/:symbol?tf=D&n=300` — read-only OHLCV bars from
 the live TradingView data layer. The server shells out to the vendored `tv`
 CLI (`tv bars … -t <tf>`), normalizes the envelope, and degrades to

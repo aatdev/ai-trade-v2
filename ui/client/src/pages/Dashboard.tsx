@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { logout, useAuthStatus, useDates } from '../api';
+import { logout, useAuthStatus, useDates, useIbHealth } from '../api';
 import ActionsPanel from '../components/ActionsPanel';
 import AnalysesTab from '../components/AnalysesTab';
 import AnalyzeDialog from '../components/AnalyzeDialog';
@@ -46,6 +46,11 @@ export default function Dashboard() {
   const refetch = autoRefresh ? 30_000 : false;
   const latest = dates?.latest ?? null;
 
+  // Poll the IB Gateway liveness on its own interval (independent of the IB
+  // tab) so the "Счёт IB" tab turns red whenever the Gateway is down/logged out.
+  const { data: ibHealth } = useIbHealth(autoRefresh ? 30_000 : false);
+  const ibDown = ibHealth ? !ibHealth.ok : false;
+
   return (
     <div className="app">
       <div className="topbar">
@@ -85,15 +90,20 @@ export default function Dashboard() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 16 }}>
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={`tab ${tab === t.key ? 'active' : ''}`}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-          </button>
-        ))}
+        {TABS.map((t) => {
+          const down = t.key === 'ib' && ibDown;
+          return (
+            <button
+              key={t.key}
+              className={`tab ${tab === t.key ? 'active' : ''}${down ? ' tab-alert' : ''}`}
+              onClick={() => setTab(t.key)}
+              title={down ? ibHealth?.error ?? 'IB Gateway недоступен' : undefined}
+            >
+              {t.label}
+              {down ? ' ●' : ''}
+            </button>
+          );
+        })}
       </div>
 
       {tab === 'overview' ? (

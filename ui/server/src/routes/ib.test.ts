@@ -56,3 +56,27 @@ describe('GET /api/ib', () => {
     expect(res.body.positions).toEqual([]);
   });
 });
+
+describe('GET /api/ib/health', () => {
+  it('reports ok when the fixture snapshot is healthy', async () => {
+    process.env.TRADING_UI_IB_FIXTURE = SNAPSHOT;
+    const res = await request(app).get('/api/ib/health');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.authenticated).toBe(true);
+    expect(res.body.reachable).toBe(true);
+    expect(res.body.source).toBe('fixture');
+    expect(typeof res.body.checked_at).toBe('string');
+  });
+
+  it('reports not-ok with a reason when the Gateway is unavailable', async () => {
+    process.env.TRADING_UI_IB_FIXTURE = path.join(FIXTURE_DIR, 'does_not_exist.json');
+    const res = await request(app).get('/api/ib/health');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.authenticated).toBe(false);
+    expect(res.body.source).toBe('fixture');
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error.length).toBeGreaterThan(0);
+  });
+});

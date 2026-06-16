@@ -207,6 +207,8 @@ td.sym { font-weight: 650; }
 .tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
 .tab { padding: 5px 12px; border-radius: 6px; background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 13px; }
 .tab.active { background: var(--bg-elev2); color: var(--text); border-color: var(--accent); }
+.tab.tab-alert { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.tab.tab-alert.active { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 18%, var(--bg-elev2)); }
 
 /* ---------- collapsible ---------- */
 .collapse-head { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; }

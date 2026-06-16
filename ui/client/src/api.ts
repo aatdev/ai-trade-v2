@@ -11,6 +11,7 @@ import type {
   DocSectionResponse,
   ReconcileResult,
   ExposureResponse,
+  IbHealth,
   IbSnapshot,
   JobDetail,
   JobSummary,
@@ -155,6 +156,21 @@ export const useIbSnapshot = (refetchInterval: Refetch = false) =>
     queryKey: ['ib'],
     queryFn: () => getJSON<IbSnapshot>('/api/ib'),
     refetchInterval,
+  });
+
+/**
+ * Lightweight IB Gateway liveness probe. Cheap enough to poll on an interval
+ * (independent of the IB tab) so the "Счёт IB" tab can flag a downed Gateway.
+ * Keeps polling in the background so the indicator stays live.
+ */
+export const useIbHealth = (refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['ibHealth'],
+    queryFn: () => getJSON<IbHealth>('/api/ib/health'),
+    refetchInterval,
+    refetchIntervalInBackground: true,
+    retry: false,
+    staleTime: 10_000,
   });
 
 export interface MarketSources {
