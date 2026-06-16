@@ -26,6 +26,7 @@ State Caps:
   Extended               → max "Developing VCP"  (chase risk too high)
   Early-post-breakout    → max "Strong VCP"      (volume unconfirmed)
   Wide-and-Loose pattern → max "Developing VCP"  (Textbook/Strong/Good禁止)
+  Lagging sector         → max "Developing VCP"  (long fighting a weak group)
 """
 
 from typing import Optional
@@ -60,6 +61,9 @@ def calculate_composite_score(
     pattern_type: Optional[str] = None,
     wide_and_loose: bool = False,
     sma200_extension_pct: Optional[float] = None,
+    sector_etf: Optional[str] = None,
+    sector_rs: Optional[float] = None,
+    sector_leadership: Optional[str] = None,
 ) -> dict:
     """
     Calculate weighted composite VCP score with State Caps applied.
@@ -131,6 +135,17 @@ def calculate_composite_score(
         cap_applied = True
         rating_info = _get_rating_info_for(rating)
 
+    # Sector cap: a long fighting a lagging sector (its SPDR ETF materially
+    # weaker than SPY) is a poorer setup — like wide-and-loose, cap to Developing.
+    if sector_leadership == "lagging" and rating in ("Textbook VCP", "Strong VCP", "Good VCP"):
+        rs_note = f"{sector_rs:+.0f}%" if sector_rs is not None else "weak"
+        cap_reason = (cap_reason or "") + (
+            f" | Sector cap ({sector_etf} {rs_note} vs SPY): {rating} → Developing VCP"
+        )
+        rating = "Developing VCP"
+        cap_applied = True
+        rating_info = _get_rating_info_for(rating)
+
     return {
         "composite_score": composite,
         "quality_rating": quality_rating,
@@ -142,6 +157,9 @@ def calculate_composite_score(
         "pattern_type": pattern_type,
         "state_cap_applied": cap_applied,
         "cap_reason": cap_reason,
+        "sector_etf": sector_etf,
+        "sector_rs": sector_rs,
+        "sector_leadership": sector_leadership,
         "weakest_component": COMPONENT_LABELS[weakest_key],
         "weakest_score": component_scores[weakest_key],
         "strongest_component": COMPONENT_LABELS[strongest_key],

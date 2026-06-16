@@ -87,11 +87,12 @@ For each top candidate, present:
 - **Quality** (`composite_score` / rating) — how well-formed is the VCP pattern?
 - **Execution State** (`execution_state`) — is it buyable now? (Pre-breakout / Breakout = actionable)
 - **Pattern Type** (`pattern_type`) — Textbook VCP / VCP-adjacent / Post-breakout / Extended Leader / Damaged
-- `★` marker if a State Cap was applied (raw score was downgraded)
+- `★` marker if a State Cap was applied (raw score downgraded — execution state, wide-and-loose, or a lagging sector)
 - Contraction details (T1/T2/T3 depths and ratios)
 - Trade setup: pivot price, stop-loss, risk percentage
 - Volume dry-up ratio and breakout_volume_score
 - Relative strength rank
+- **Sector leadership** (`sector_leadership` / `sector_rs` / `sector_etf`): a long whose sector ETF lags SPY by ≥ 5% over ~3 months is capped to Developing VCP (don't buy into a weak group). Sector ETF vs SPY, no API key.
 
 ### Step 4: Provide Actionable Guidance
 

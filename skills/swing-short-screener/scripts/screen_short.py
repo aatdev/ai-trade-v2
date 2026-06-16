@@ -126,13 +126,14 @@ def analyze_symbol(
     rs_lookback: int = 63,
     min_stop_pct: float = DEFAULT_MIN_STOP_PCT,
     max_stop_pct: float = DEFAULT_MAX_STOP_PCT,
+    sector_info: dict | None = None,
 ) -> tuple[dict, str]:
     """Run one symbol end-to-end. Returns (record_or_None, reject_reason)."""
     metrics = compute_metrics(bars, rs_lookback=rs_lookback)
     passed, reason = passes_short_filter(metrics, min_price, min_dollar_vol)
     if not passed:
         return None, reason
-    score = score_candidate(metrics, spy_return)
+    score = score_candidate(metrics, spy_return, sector_info=sector_info)
     geometry = stop_geometry_reason(
         (score.get("trade_levels") or {}).get("stop_pct") or 0.0, min_stop_pct, max_stop_pct
     )
@@ -196,7 +197,9 @@ def run_live(args) -> tuple[list[dict], dict]:
 
     _sys.path.insert(
         0,
-        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"),
+        _os.path.join(
+            _os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"
+        ),
     )  # shared TradingView data layer
     from tv_client import FMPClient
 
@@ -224,6 +227,17 @@ def run_live(args) -> tuple[list[dict], dict]:
         if args.max_candidates:
             universe = universe[: args.max_candidates]
 
+    # Sector relative strength (SPDR ETF vs SPY): a short into a leading sector
+    # is fighting the group — score_candidate caps it at C.
+    from sector_strength import compute_sector_rs
+
+    sector_rs_map = compute_sector_rs(
+        client,
+        {e.get("sector") for e in universe if e.get("sector")},
+        lookback=args.rs_lookback,
+        spy_history=(spy_hist or {}).get("historical"),
+    )
+
     results = []
     for entry in universe:
         if client.rate_limit_reached:
@@ -242,6 +256,7 @@ def run_live(args) -> tuple[list[dict], dict]:
             rs_lookback=args.rs_lookback,
             min_stop_pct=args.min_stop_pct,
             max_stop_pct=args.max_stop_pct,
+            sector_info=sector_rs_map.get(entry["sector"]),
         )
         if record is not None:
             record["symbol"] = entry["symbol"]

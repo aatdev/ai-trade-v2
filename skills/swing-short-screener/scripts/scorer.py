@@ -157,7 +157,9 @@ def _detect_squeeze(m: dict) -> tuple[bool, Optional[str]]:
     return (bool(reasons), "; ".join(reasons) if reasons else None)
 
 
-def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
+def score_candidate(
+    m: dict, spy_return: Optional[float], sector_info: Optional[dict] = None
+) -> dict:
     """Full weakness score for one symbol's metrics dict.
 
     Returns composite_score, grade, component breakdown, flags, and short
@@ -184,7 +186,14 @@ def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
     pct_below_ma50 = m.get("pct_below_ma50", 0.0) or 0.0
     oversold_extended = (rsi14 is not None and rsi14 < 25) or pct_below_ma50 > 20
     squeeze_risk, squeeze_reason = _detect_squeeze(m)
-    grade = _cap_grade_at_c(raw_grade) if (oversold_extended or squeeze_risk) else raw_grade
+    sector_info = sector_info or {}
+    sector_leadership = sector_info.get("leadership")
+    sector_fight = sector_leadership == "leading"  # shorting into a leading sector
+    grade = (
+        _cap_grade_at_c(raw_grade)
+        if (oversold_extended or squeeze_risk or sector_fight)
+        else raw_grade
+    )
     cap_applied = grade != raw_grade
 
     # Short trade levels: enter near current price, stop above the most recent
@@ -211,6 +220,10 @@ def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
         "oversold_extended": oversold_extended,
         "squeeze_risk": squeeze_risk,
         "squeeze_reason": squeeze_reason,
+        "sector_fight": sector_fight,
+        "sector_etf": sector_info.get("etf"),
+        "sector_rs": sector_info.get("sector_rs"),
+        "sector_leadership": sector_leadership,
         "components": components,
         "strongest_signal": weakest,
         "weakest_signal": laggard,

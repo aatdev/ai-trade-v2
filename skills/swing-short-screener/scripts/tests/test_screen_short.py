@@ -67,7 +67,7 @@ def test_analyze_symbol_rejects_noise_stop(downtrend_bars, monkeypatch):
         "weakest_signal": "liquidity",
         "trade_levels": {"entry": 100.0, "stop": 100.5, "stop_pct": 0.5, "target_2r": 99.0},
     }
-    monkeypatch.setattr(screen_short, "score_candidate", lambda m, s: fake_score)
+    monkeypatch.setattr(screen_short, "score_candidate", lambda m, s, sector_info=None: fake_score)
     record, reason = analyze_symbol(downtrend_bars, spy_return=0.0)
     assert record is None
     assert reason == "stop_too_tight_noise"

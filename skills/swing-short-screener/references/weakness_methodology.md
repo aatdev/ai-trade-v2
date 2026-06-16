@@ -72,6 +72,18 @@ squeeze hardest; absent an interest feed the price-action proxy is the no-API
 guard. The better entry, again, is a failed lower-high retest once the pop fades
 — not adding short risk into an active bounce.
 
+## The Counter-Sector Cap
+
+Don't fight the group. A structurally weak stock whose **sector is leading the
+market** — its SPDR Select Sector ETF (XLK, XLV, XLF, …) outperforming SPY by
+≥ 5% over the trailing ~3 months — is a poor short: sector inflows lift even the
+laggards. Such names have their grade capped at **C** (flagged ★) and record
+`sector_fight` + `sector_etf` / `sector_rs` / `sector_leadership`. The mirror
+holds for the long side (vcp-screener caps a long in a *lagging* sector). Sector
+RS uses the same TradingView data layer as the index benchmark — no API key, no
+short-interest feed. Prefer shorts in lagging groups, where the tide is already
+out.
+
 ## How This Differs From parabolic-short-trade-planner
 
 | | swing-short-screener | parabolic-short-trade-planner |

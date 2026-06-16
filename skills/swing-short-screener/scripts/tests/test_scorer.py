@@ -114,6 +114,27 @@ def test_no_squeeze_when_price_action_is_quiet():
     assert result["grade"] == "A"
 
 
+def test_short_into_leading_sector_caps_grade_at_c():
+    # Shorting a clean Stage 4 name whose sector is leading SPY — fighting the group.
+    m = _clean_stage4_metrics()
+    result = score_candidate(
+        m, spy_return=0.0, sector_info={"etf": "XLK", "sector_rs": 8.0, "leadership": "leading"}
+    )
+    assert result["sector_fight"] is True
+    assert result["state_cap_applied"] is True
+    assert result["grade"] == "C"
+    assert result["raw_grade"] in ("A", "B")
+
+
+def test_short_in_lagging_sector_not_capped():
+    m = _clean_stage4_metrics()
+    result = score_candidate(
+        m, spy_return=0.0, sector_info={"etf": "XLF", "sector_rs": -8.0, "leadership": "lagging"}
+    )
+    assert result["sector_fight"] is False
+    assert result["grade"] == "A"
+
+
 def test_stop_uses_swing_high_plus_atr_buffer_not_20d_max():
     # ADBE-like post-crash shape: the 20d absolute max (275) is the pre-crash
     # top; the relevant lower high is the recent bounce (222). The stop must

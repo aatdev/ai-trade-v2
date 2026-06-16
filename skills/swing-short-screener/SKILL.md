@@ -79,11 +79,13 @@ for the full rubric):
 4. **Lower Highs (15%)** — descending swing-high structure
 5. **Liquidity / Borrow (10%)** — tradable, borrowable, low squeeze risk
 
-A name gets its grade **capped at C** (bounce risk, flagged ★) when it is either
-RSI-oversold / >20% below its MA50 (falling-knife) **or** being squeezed up: a
+A name gets its grade **capped at C** (bounce risk, flagged ★) when it is
+RSI-oversold / >20% below its MA50 (falling-knife), being squeezed up (a
 single-day pop ≥ 10% in the last 10 sessions, or price ≥ 15% above its 20-session
-low. The squeeze check is price-action only (no short-interest feed); a flagged
-name carries `squeeze_risk` + `squeeze_reason`.
+low), **or** shorting into a leading sector (its SPDR ETF outperforming SPY by
+≥ 5% over ~3 months — don't fight a strong group). All three are price-action
+only (no short-interest feed); flags carried: `squeeze_risk` / `squeeze_reason`
+and `sector_fight` / `sector_etf` / `sector_rs` / `sector_leadership`.
 
 ### Step 3: Present the Watchlist
 
@@ -96,7 +98,7 @@ For each top candidate, present:
   Candidates whose stop distance falls outside 2–10% of entry are rejected
   (`--min-stop-pct` / `--max-stop-pct`): below the floor the stop sits in daily
   noise, above the ceiling the geometry is post-crash junk
-- ★ marker if the oversold/extended **or squeeze** state cap was applied
+- ★ marker if the oversold/extended, squeeze, **or counter-sector** state cap was applied
 - Relative strength vs the index and volume ratio on the breakdown
 
 Read `references/weakness_methodology.md` for Stage 4 interpretation context.

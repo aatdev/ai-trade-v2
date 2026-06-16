@@ -499,6 +499,27 @@ class TestScorer:
         assert result["rating"] == "Weak VCP"
         assert result["valid_vcp"] is False
 
+    def test_sector_lagging_caps_to_developing(self):
+        """A long fighting a lagging sector -> rating capped to Developing VCP."""
+        # 95,90,85,80,80 -> composite 87.25 -> Strong VCP (buyable) before the cap.
+        result = calculate_composite_score(
+            95, 90, 85, 80, 80, sector_etf="XLF", sector_rs=-8.0, sector_leadership="lagging"
+        )
+        assert result["rating"] == "Developing VCP"
+        assert result["state_cap_applied"] is True
+        assert "Sector cap" in (result["cap_reason"] or "")
+        assert result["sector_leadership"] == "lagging"
+
+    def test_sector_leading_does_not_cap(self):
+        """A long in a leading sector keeps its rating (only laggards are capped)."""
+        base = calculate_composite_score(95, 90, 85, 80, 80)
+        led = calculate_composite_score(
+            95, 90, 85, 80, 80, sector_etf="XLK", sector_rs=8.0, sector_leadership="leading"
+        )
+        assert led["rating"] == base["rating"]  # unchanged (Strong VCP)
+        assert led["state_cap_applied"] is False
+        assert led["sector_leadership"] == "leading"
+
 
 # ===========================================================================
 # Report Generator Tests (Fix 2: market_cap=None, Fix 3/4: summary counts)
@@ -2119,17 +2140,26 @@ def test_prefilter_score_capped_at_100():
 def test_prefilter_enforces_price_and_dollar_volume_floors():
     """Plan checklist 5.3: price >= $15 and >= $25M/day dollar volume."""
     # sub-$15 price
-    assert pre_filter_stock(
-        {"price": 12.0, "yearLow": 8.0, "yearHigh": 13.0, "avgVolume": 5_000_000}
-    )[0] is False
+    assert (
+        pre_filter_stock({"price": 12.0, "yearLow": 8.0, "yearHigh": 13.0, "avgVolume": 5_000_000})[
+            0
+        ]
+        is False
+    )
     # $20 × 200k shares = $4M/day — below the $25M dollar floor
-    assert pre_filter_stock(
-        {"price": 20.0, "yearLow": 12.0, "yearHigh": 22.0, "avgVolume": 200_000}
-    )[0] is False
+    assert (
+        pre_filter_stock({"price": 20.0, "yearLow": 12.0, "yearHigh": 22.0, "avgVolume": 200_000})[
+            0
+        ]
+        is False
+    )
     # $100 × 300k = $30M/day — passes
-    assert pre_filter_stock(
-        {"price": 100.0, "yearLow": 60.0, "yearHigh": 105.0, "avgVolume": 300_000}
-    )[0] is True
+    assert (
+        pre_filter_stock(
+            {"price": 100.0, "yearLow": 60.0, "yearHigh": 105.0, "avgVolume": 300_000}
+        )[0]
+        is True
+    )
 
 
 def test_below_stop_report_shows_stop_violated():

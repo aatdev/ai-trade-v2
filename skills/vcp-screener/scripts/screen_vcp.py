@@ -29,6 +29,9 @@ from typing import Optional
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(__file__))
 
+import os as _os
+import sys as _sys
+
 from calculators.execution_state import compute_execution_state
 from calculators.pattern_classifier import classify_pattern
 from calculators.pivot_proximity_calculator import calculate_pivot_proximity
@@ -39,10 +42,14 @@ from calculators.relative_strength_calculator import (
 from calculators.trend_template_calculator import calculate_trend_template
 from calculators.vcp_pattern_calculator import calculate_vcp_pattern
 from calculators.volume_pattern_calculator import calculate_volume_pattern
-import os as _os, sys as _sys; _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"))  # shared TradingView data layer
-from tv_client import FMPClient
+
+_sys.path.insert(
+    0,
+    _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "..", "..", "scripts", "lib"),
+)  # shared TradingView data layer
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import calculate_composite_score
+from tv_client import FMPClient
 
 
 def _trading_data_dir():
@@ -310,6 +317,7 @@ def analyze_stock(
     breakout_volume_ratio: float = 1.5,
     max_sma200_extension: float = 50.0,
     wide_and_loose_threshold: float = 15.0,
+    sector_info: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Full VCP analysis for a single stock (Phase 3).
@@ -397,7 +405,8 @@ def analyze_stock(
         wide_and_loose=wide_and_loose,
     )
 
-    # 8. Composite Score (with State Caps)
+    # 8. Composite Score (with State Caps + sector cap)
+    sec = sector_info or {}
     composite = calculate_composite_score(
         trend_score=tt_result.get("score", 0),
         contraction_score=vcp_result.get("score", 0),
@@ -409,6 +418,9 @@ def analyze_stock(
         pattern_type=pattern_type,
         wide_and_loose=wide_and_loose,
         sma200_extension_pct=sma200_distance_pct,
+        sector_etf=sec.get("etf"),
+        sector_rs=sec.get("sector_rs"),
+        sector_leadership=sec.get("leadership"),
     )
 
     return {
@@ -429,6 +441,9 @@ def analyze_stock(
         "wide_and_loose": wide_and_loose,
         "state_cap_applied": composite.get("state_cap_applied", False),
         "cap_reason": composite.get("cap_reason"),
+        "sector_etf": composite.get("sector_etf"),
+        "sector_rs": composite.get("sector_rs"),
+        "sector_leadership": composite.get("sector_leadership"),
         "sma200_distance_pct": round(sma200_distance_pct, 1)
         if sma200_distance_pct is not None
         else None,
@@ -652,6 +667,13 @@ def main():
     print("-" * 70)
 
     results = []
+    # Sector relative strength (SPDR ETF vs SPY) for candidate sectors — a long
+    # fighting a lagging sector is capped to Developing (see calculate_composite_score).
+    from sector_strength import compute_sector_rs
+
+    cand_sectors = {sector_map.get(sym, "Unknown") for sym, _ in trend_passed}
+    sector_rs_map = compute_sector_rs(client, cand_sectors, lookback=63, spy_history=sp500_history)
+
     for sym, quote in trend_passed:
         hist = candidate_histories.get(sym, [])
         sector = sector_map.get(sym, "Unknown")
@@ -686,6 +708,7 @@ def main():
             breakout_volume_ratio=args.breakout_volume_ratio,
             max_sma200_extension=args.max_sma200_extension,
             wide_and_loose_threshold=args.wide_and_loose_threshold,
+            sector_info=sector_rs_map.get(sector),
         )
 
         if analysis:
@@ -715,6 +738,9 @@ def main():
                 pattern_type=r.get("pattern_type"),
                 wide_and_loose=r.get("wide_and_loose", False),
                 sma200_extension_pct=r.get("sma200_distance_pct"),
+                sector_etf=r.get("sector_etf"),
+                sector_rs=r.get("sector_rs"),
+                sector_leadership=r.get("sector_leadership"),
             )
             r["composite_score"] = composite["composite_score"]
             r["quality_rating"] = composite.get("quality_rating", composite["rating"])
@@ -743,9 +769,7 @@ def main():
     # would otherwise displace a buyable 72-score name out of the --top slice
     # the breakout planner consumes.
     _buyable = {"Textbook VCP", "Strong VCP", "Good VCP"}
-    results.sort(
-        key=lambda x: (x.get("rating") in _buyable, x["composite_score"]), reverse=True
-    )
+    results.sort(key=lambda x: (x.get("rating") in _buyable, x["composite_score"]), reverse=True)
 
     # Apply prebreakout filter if requested
     if args.mode == "prebreakout":

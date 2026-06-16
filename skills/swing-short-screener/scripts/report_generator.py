@@ -33,6 +33,10 @@ def build_result_record(symbol: str, name: str, sector: str, metrics: dict, scor
         "oversold_extended": score["oversold_extended"],
         "squeeze_risk": score.get("squeeze_risk", False),
         "squeeze_reason": score.get("squeeze_reason"),
+        "sector_fight": score.get("sector_fight", False),
+        "sector_etf": score.get("sector_etf"),
+        "sector_rs": score.get("sector_rs"),
+        "sector_leadership": score.get("sector_leadership"),
         "components": score["components"],
         "strongest_signal": score["strongest_signal"],
         "trade_levels": score["trade_levels"],
@@ -105,7 +109,9 @@ def generate_markdown_report(
             f"{COMPONENT_LABELS.get(r['strongest_signal'], r['strongest_signal'])} |"
         )
     lines.append("")
-    lines.append("★ = grade capped at C (oversold/extended or squeeze — bounce risk).")
+    lines.append(
+        "★ = grade capped at C (oversold/extended, squeeze, or counter-sector — bounce risk)."
+    )
     lines.append("")
 
     lines.append("## Component Breakdown")
@@ -133,6 +139,12 @@ def generate_markdown_report(
             lines.append(
                 f"- ⚠️ Squeeze risk — {r.get('squeeze_reason') or 'recent counter-trend pop'}; "
                 "the short is being run in. Wait for a fresh lower high."
+            )
+        if r.get("sector_fight"):
+            lines.append(
+                f"- ⚠️ Counter-sector — {r.get('sector_etf')} leading SPY "
+                f"({(r.get('sector_rs') or 0):+.0f}%); shorting into a strong group. "
+                "Prefer shorts in lagging sectors."
             )
         lines.append("")
 
