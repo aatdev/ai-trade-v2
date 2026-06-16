@@ -256,9 +256,10 @@ ALERTS_STATE_FILE = TRADING_DATA_DIR / "logs" / "watchlist_alerts_state.json"
 # Deterministic skill scripts orchestrated by the auto mode (hybrid pipeline).
 SKILLS_DIR = PROJECT_ROOT / "skills"
 VCP_SCREEN_SCRIPT = SKILLS_DIR / "vcp-screener" / "scripts" / "screen_vcp.py"
-# Optional expanded VCP universe (liquid NASDAQ+NYSE). Built by
-# scripts/build_vcp_universe.py; when present the evening-prep VCP screen runs
-# against it instead of the bundled S&P 500. Delete the file to revert.
+# Optional expanded universe (liquid NASDAQ+NYSE). Built by
+# scripts/build_vcp_universe.py; when present BOTH evening-prep branches screen
+# it instead of the bundled S&P 500 — the long VCP screen and the short
+# swing-short screen. Delete the file to revert both to the S&P 500.
 VCP_UNIVERSE_FILE = PROJECT_ROOT / "scripts" / "lib" / "data" / "vcp_universe.txt"
 SHORT_SCREEN_SCRIPT = SKILLS_DIR / "swing-short-screener" / "scripts" / "screen_short.py"
 PLANNER_SCRIPT = SKILLS_DIR / "breakout-trade-planner" / "scripts" / "plan_breakout_trades.py"
@@ -2845,11 +2846,23 @@ def _evening_short_branch(
         output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
     )
 
+    short_cmd = [SHORT_SCREEN_SCRIPT, "--min-grade", "B", "--top", "10"]
+    universe = _read_vcp_universe()
+    short_label = "swing-short-screener (grade B+)"
+    if universe:
+        # Same expanded liquid NASDAQ+NYSE universe the long VCP branch screens
+        # (scripts/lib/data/vcp_universe.txt). --universe overrides the S&P 500
+        # AND bypasses the screener's --max-candidates cap (that cap only applies
+        # to the default S&P 500 path), so every name gets full weakness analysis.
+        short_cmd += ["--universe", *universe]
+        short_label = f"swing-short-screener (grade B+, universe={len(universe)})"
+    else:
+        # Fallback: full S&P 500. Without --full-sp500 the screener caps the
+        # universe at --max-candidates 100, i.e. the first ~100 names alphabetically.
+        short_cmd.append("--full-sp500")
     short_path = run_skill_script(
-        # --full-sp500: without it the screener caps the universe at its default
-        # --max-candidates 100, i.e. the first ~100 constituents alphabetically.
-        [SHORT_SCREEN_SCRIPT, "--full-sp500", "--min-grade", "B", "--top", "10"],
-        label="swing-short-screener (grade B+)",
+        short_cmd,
+        label=short_label,
         dry_run=args.dry_run,
         timeout=args.timeout,
         output_glob=(SCREENERS_DIR, "swing_short_screener_*.json"),

@@ -781,8 +781,14 @@ class TestEveningHybrid:
         tv_up=True,
         quotes_map=None,
         heat_ok=True,
+        universe_tickers=None,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
+        # Control the expanded liquid universe (scripts/lib/data/vcp_universe.txt)
+        # hermetically — both the long VCP screen and the short screen read it.
+        # Default [] keeps the bundled S&P 500 fallback path deterministic
+        # regardless of whether the real data file is present in the checkout.
+        monkeypatch.setattr(ts, "_read_vcp_universe", lambda: list(universe_tickers or []))
         _write_json(tmp_path / "trading_profile.json", {"account_size": 150000})
         plan_path = _plan_fixture(tmp_path)
         short_path = _write_json(
@@ -908,13 +914,18 @@ class TestEveningHybrid:
             decision="restrict",
             market_top=market_top,
             short_candidates=shorts,
+            universe_tickers=["AAPL", "MSFT", "NVDA"],  # expanded liquid universe
         )
         assert rc == 0
         assert any("short" in c for c in calls)
         assert any("heat" in c for c in calls)  # fresh ledger for tomorrow's monitor
         assert any("ingest" in c for c in calls)  # shorts register theses too
         short_cmd = next(v for k, v in self.script_cmds.items() if "swing-short-screener" in k)
-        assert "--full-sp500" in short_cmd  # full universe, not the first 100 names
+        # Expanded universe present → screen it (mirrors the long VCP branch),
+        # NOT the S&P 500: --universe overrides and bypasses --max-candidates.
+        assert "--universe" in short_cmd
+        assert "AAPL" in short_cmd
+        assert "--full-sp500" not in short_cmd
         ingest_cmd = next(v for k, v in self.script_cmds.items() if "ingest" in k)
         assert "swing-short-screener" in ingest_cmd
         wl = json.loads(
@@ -923,6 +934,37 @@ class TestEveningHybrid:
         assert wl["candidates"][0]["side"] == "short"
         assert wl["candidates"][0]["shares"] == 100  # 1% of 150k / 15
         assert sent and "ШОРТ" in sent[0]
+
+    def test_short_branch_without_universe_file_falls_back_to_full_sp500(
+        self, monkeypatch, tmp_path
+    ):
+        """No expanded universe file → screen the full S&P 500. Without
+        --full-sp500 the screener caps at the first ~100 constituents."""
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        shorts = [
+            {
+                "symbol": "NFLX",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": 245.0, "stop": 260.0, "target_2r": 215.0},
+            }
+        ]
+        rc, _, _ = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            short_candidates=shorts,
+            universe_tickers=[],  # no expanded universe → fallback
+        )
+        assert rc == 0
+        short_cmd = next(v for k, v in self.script_cmds.items() if "swing-short-screener" in k)
+        assert "--full-sp500" in short_cmd
+        assert "--universe" not in short_cmd
 
     def test_short_candidates_before_earnings_are_dropped(self, monkeypatch, tmp_path):
         """Plan rule 6.4: a short reporting within the earnings gate must not
