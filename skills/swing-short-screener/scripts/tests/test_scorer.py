@@ -88,13 +88,37 @@ def test_oversold_extended_caps_grade_at_c():
     assert result["raw_grade"] in ("A", "B")
 
 
+def test_squeeze_pop_caps_grade_at_c():
+    # A sharp counter-trend 1-day pop on an otherwise clean Stage 4 short.
+    m = _clean_stage4_metrics(max_up_day_10=14.0)
+    result = score_candidate(m, spy_return=0.0)
+    assert result["squeeze_risk"] is True
+    assert "pop" in (result["squeeze_reason"] or "")
+    assert result["state_cap_applied"] is True
+    assert result["grade"] == "C"
+    assert result["raw_grade"] in ("A", "B")
+
+
+def test_squeeze_bounce_off_low_caps_grade_at_c():
+    # Price has rallied far above its 20-session low — being run in.
+    m = _clean_stage4_metrics(pct_above_low_20=22.0)
+    result = score_candidate(m, spy_return=0.0)
+    assert result["squeeze_risk"] is True
+    assert result["grade"] == "C"
+
+
+def test_no_squeeze_when_price_action_is_quiet():
+    m = _clean_stage4_metrics(max_up_day_10=4.0, pct_above_low_20=6.0)
+    result = score_candidate(m, spy_return=0.0)
+    assert result["squeeze_risk"] is False
+    assert result["grade"] == "A"
+
+
 def test_stop_uses_swing_high_plus_atr_buffer_not_20d_max():
     # ADBE-like post-crash shape: the 20d absolute max (275) is the pre-crash
     # top; the relevant lower high is the recent bounce (222). The stop must
     # sit just above the lower high, not 26% away at the old top.
-    m = _clean_stage4_metrics(
-        price=218.8, recent_high_20=275.44, swing_high_20=222.0, atr14=4.0
-    )
+    m = _clean_stage4_metrics(price=218.8, recent_high_20=275.44, swing_high_20=222.0, atr14=4.0)
     tl = score_candidate(m, spy_return=0.0)["trade_levels"]
     assert tl["stop"] == 224.0  # 222 + 0.5 × ATR(4)
     assert tl["stop_pct"] < 5

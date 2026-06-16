@@ -60,6 +60,18 @@ Such names have their grade capped at **C** and are flagged ★. The better entr
 is a *lower-high retest* (a bounce into the falling MA50 that fails), not chasing
 the breakdown.
 
+## The Squeeze Cap
+
+The opposite extreme is just as dangerous: a structurally weak name that is
+**being run in right now**. With no free short-interest feed, the screener
+approximates squeeze pressure from price action — a single-day close-to-close
+pop of ≥ 10% in the last 10 sessions, or price ≥ 15% above its 20-session low (a
+large bounce off the lows). Either condition caps the grade at **C** (flagged ★)
+and records `squeeze_risk` + `squeeze_reason`. Heavily-shorted, low-float names
+squeeze hardest; absent an interest feed the price-action proxy is the no-API
+guard. The better entry, again, is a failed lower-high retest once the pop fades
+— not adding short risk into an active bounce.
+
 ## How This Differs From parabolic-short-trade-planner
 
 | | swing-short-screener | parabolic-short-trade-planner |

@@ -31,6 +31,8 @@ def build_result_record(symbol: str, name: str, sector: str, metrics: dict, scor
         "raw_grade": score["raw_grade"],
         "state_cap_applied": score["state_cap_applied"],
         "oversold_extended": score["oversold_extended"],
+        "squeeze_risk": score.get("squeeze_risk", False),
+        "squeeze_reason": score.get("squeeze_reason"),
         "components": score["components"],
         "strongest_signal": score["strongest_signal"],
         "trade_levels": score["trade_levels"],
@@ -46,6 +48,8 @@ def build_result_record(symbol: str, name: str, sector: str, metrics: dict, scor
             "avg_dollar_vol": metrics["avg_dollar_vol"],
             "broke_support": metrics["broke_support"],
             "stock_return": metrics["stock_return"],
+            "max_up_day_10": metrics.get("max_up_day_10"),
+            "pct_above_low_20": metrics.get("pct_above_low_20"),
         },
     }
 
@@ -101,7 +105,7 @@ def generate_markdown_report(
             f"{COMPONENT_LABELS.get(r['strongest_signal'], r['strongest_signal'])} |"
         )
     lines.append("")
-    lines.append("★ = grade capped at C (oversold/extended — bounce risk).")
+    lines.append("★ = grade capped at C (oversold/extended or squeeze — bounce risk).")
     lines.append("")
 
     lines.append("## Component Breakdown")
@@ -124,6 +128,11 @@ def generate_markdown_report(
             lines.append(
                 "- ⚠️ Oversold/extended — high mean-reversion bounce risk; prefer a "
                 "lower-high retest entry over chasing the breakdown."
+            )
+        if r.get("squeeze_risk"):
+            lines.append(
+                f"- ⚠️ Squeeze risk — {r.get('squeeze_reason') or 'recent counter-trend pop'}; "
+                "the short is being run in. Wait for a fresh lower high."
             )
         lines.append("")
 

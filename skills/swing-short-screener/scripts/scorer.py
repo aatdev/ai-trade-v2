@@ -41,6 +41,11 @@ COMPONENT_WEIGHTS = {
 # one-bar noise without ballooning the risk distance.
 STOP_ATR_BUFFER = 0.5
 
+# Squeeze proxy thresholds (no short-interest feed — price action only): a short
+# being run in invites a mean-reversion bounce, so cap it like a falling knife.
+SQUEEZE_MAX_UP_DAY_PCT = 10.0  # any single-day close-to-close pop in last 10 sessions
+SQUEEZE_ABOVE_LOW_PCT = 15.0  # rally extent above the 20-session low
+
 COMPONENT_LABELS = {
     "trend_structure": "Trend Structure (Stage 4)",
     "relative_strength": "Relative Strength (underperformance)",
@@ -138,6 +143,20 @@ def _cap_grade_at_c(grade: str) -> str:
     return "C" if grade in ("A", "B") else grade
 
 
+def _detect_squeeze(m: dict) -> tuple[bool, Optional[str]]:
+    """Price-action squeeze proxy (no short-interest feed). A sharp counter-trend
+    pop or a large bounce off the recent low means the short is being run in —
+    a poor spot to add short risk. Returns (is_squeeze, human reason)."""
+    reasons = []
+    max_up = m.get("max_up_day_10")
+    above_low = m.get("pct_above_low_20")
+    if max_up is not None and max_up >= SQUEEZE_MAX_UP_DAY_PCT:
+        reasons.append(f"1-day pop +{max_up:.0f}% in last 10 sessions")
+    if above_low is not None and above_low >= SQUEEZE_ABOVE_LOW_PCT:
+        reasons.append(f"+{above_low:.0f}% above the 20-session low")
+    return (bool(reasons), "; ".join(reasons) if reasons else None)
+
+
 def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
     """Full weakness score for one symbol's metrics dict.
 
@@ -159,11 +178,13 @@ def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
 
     raw_grade = _grade(composite)
 
-    # State cap: too extended to chase down (falling-knife / bounce risk).
+    # State cap: too extended to chase down (falling-knife) OR being squeezed up
+    # (sharp counter-trend pop / big bounce off lows) — both invite a bounce.
     rsi14 = m.get("rsi14")
     pct_below_ma50 = m.get("pct_below_ma50", 0.0) or 0.0
     oversold_extended = (rsi14 is not None and rsi14 < 25) or pct_below_ma50 > 20
-    grade = _cap_grade_at_c(raw_grade) if oversold_extended else raw_grade
+    squeeze_risk, squeeze_reason = _detect_squeeze(m)
+    grade = _cap_grade_at_c(raw_grade) if (oversold_extended or squeeze_risk) else raw_grade
     cap_applied = grade != raw_grade
 
     # Short trade levels: enter near current price, stop above the most recent
@@ -188,6 +209,8 @@ def score_candidate(m: dict, spy_return: Optional[float]) -> dict:
         "raw_grade": raw_grade,
         "state_cap_applied": cap_applied,
         "oversold_extended": oversold_extended,
+        "squeeze_risk": squeeze_risk,
+        "squeeze_reason": squeeze_reason,
         "components": components,
         "strongest_signal": weakest,
         "weakest_signal": laggard,

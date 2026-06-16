@@ -152,6 +152,18 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
     atr14 = atr(bars, 14)
     swing_high = last_swing_high(highs, k=2, lookback=20)
 
+    # Squeeze proxy (no short-interest feed): the sharpest single-day pop over the
+    # last 10 sessions, and how far price has rallied off its 20-session low. Both
+    # signal a short being run in — the scorer caps such names.
+    ups = [
+        (closes[i] - closes[i + 1]) / closes[i + 1] * 100
+        for i in range(min(10, len(closes) - 1))
+        if closes[i + 1] > 0
+    ]
+    max_up_day_10 = max(ups) if ups else None
+    low_20 = min(lows[0:20]) if len(lows) >= 20 else min(lows)
+    pct_above_low_20 = ((price - low_20) / low_20 * 100) if low_20 > 0 else 0.0
+
     return {
         "price": round(price, 2),
         "ma50": round(ma50, 2),
@@ -171,6 +183,8 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
         "prior_high_20_40": round(prior_high, 2),
         "lower_high_pct": round(lower_high_pct, 4),
         "pct_below_ma50": round(pct_below_ma50, 2),
+        "max_up_day_10": round(max_up_day_10, 2) if max_up_day_10 is not None else None,
+        "pct_above_low_20": round(pct_above_low_20, 2),
         "atr14": round(atr14, 2) if atr14 is not None else None,
         "swing_high_20": round(swing_high, 2) if swing_high is not None else None,
         "bars_available": len(bars),
