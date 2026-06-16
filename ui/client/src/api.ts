@@ -22,6 +22,7 @@ import type {
   SaveWatchlistRequest,
   ScreenerPlanRequest,
   ScreenerRunRequest,
+  SaveProfileResponse,
   ScreenersResponse,
   ShortScreenerRunRequest,
   SignalsResponse,
@@ -73,6 +74,16 @@ async function getJSON<T>(url: string): Promise<T> {
 async function postJSON<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  if (res.status === 401) onUnauthorized();
+  return (await res.json()) as T;
+}
+
+async function putJSON<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
   });
@@ -303,6 +314,14 @@ export const useSignals = (refetchInterval: Refetch = false) =>
 
 export const useProfile = () =>
   useQuery({ queryKey: ['profile'], queryFn: () => getJSON<TradingProfile | null>('/api/profile') });
+
+/** Write the trading profile (partial patch merged server-side). */
+export const saveProfile = (patch: Partial<TradingProfile>) =>
+  putJSON<SaveProfileResponse>('/api/profile', patch);
+
+/** Re-plan latest screener + rebuild watchlist + refresh non-active theses. */
+export const recalcProfile = (date?: string | null) =>
+  postJSON<StartJobResponse>('/api/actions/recalc-profile', date ? { date } : {});
 
 export const useDocsIndex = () =>
   useQuery({

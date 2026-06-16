@@ -8,6 +8,7 @@ import AutopilotCard from '../components/AutopilotCard';
 import ExposureBanner from '../components/ExposureBanner';
 import IbTab from '../components/IbTab';
 import PositionsCard from '../components/PositionsCard';
+import ProfileTab from '../components/ProfileTab';
 import RegimeCard from '../components/RegimeCard';
 import ScreenersCard from '../components/ScreenersCard';
 import ScreenerTab from '../components/ScreenerTab';
@@ -17,7 +18,7 @@ import DocsModal from '../components/DocsModal';
 import TraderMemoryCard from '../components/TraderMemoryCard';
 import WatchlistCard from '../components/WatchlistCard';
 
-type Tab = 'overview' | 'screener' | 'signals' | 'analyses' | 'memory' | 'ib';
+type Tab = 'overview' | 'screener' | 'signals' | 'analyses' | 'memory' | 'ib' | 'profile';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Обзор' },
@@ -26,6 +27,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'analyses', label: 'Анализы' },
   { key: 'memory', label: 'Память' },
   { key: 'ib', label: 'Счёт IB' },
+  { key: 'profile', label: 'Профиль' },
 ];
 
 export default function Dashboard() {
@@ -144,6 +146,8 @@ export default function Dashboard() {
           <IbTab refetch={refetch} />
         </div>
       ) : null}
+
+      {tab === 'profile' ? <ProfileTab /> : null}
 
       {docsOpen ? <DocsModal onClose={() => setDocsOpen(false)} /> : null}
       {actionsOpen ? <ActionsPanel onClose={() => setActionsOpen(false)} /> : null}

@@ -15,6 +15,14 @@ describe('POST /api/actions/run-slot', () => {
   });
 });
 
+describe('POST /api/actions/recalc-profile', () => {
+  it('rejects a malformed date before spawning', async () => {
+    const res = await request(app).post('/api/actions/recalc-profile').send({ date: '06/16/2026' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
 describe('POST /api/actions/delete-alerts', () => {
   it('rejects an empty/invalid ticker list', async () => {
     const res = await request(app).post('/api/actions/delete-alerts').send({ tickers: [] });

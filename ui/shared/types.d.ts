@@ -772,7 +772,32 @@ export interface TradingProfile {
   earnings_gate_days: number;
   time_stop_trading_days: number;
   atr_multiplier: number;
+  /** 1 = enforce the soft fundamental quality-floor gate on longs, 0 = off. */
+  fundamental_gate: number;
+  /** 1 = cap candidates whose sector is weak vs the index, 0 = off (screen-time). */
+  sector_rs_gate: number;
+  /** Sector relative-strength cap threshold in RS points (screen-time). */
+  sector_rs_threshold: number;
   [key: string]: number;
+}
+
+/** PUT /api/profile — write the trading profile and report what changed. */
+export interface SaveProfileResponse {
+  ok: boolean;
+  error?: string;
+  profile?: TradingProfile;
+  /** Keys whose value changed vs the previous on-disk profile. */
+  changed?: string[];
+  /**
+   * Subset of `changed` whose change alters watchlist sizing/levels or
+   * non-active (IDEA/ENTRY_READY) thesis levels → a recalc is warranted.
+   */
+  recalcAffected?: string[];
+  /**
+   * Subset of `recalcAffected` applied at SCREEN time (sector-RS gate/threshold):
+   * a re-plan cannot reflect these — they need a full evening-prep re-screen.
+   */
+  screenOnlyAffected?: string[];
 }
 
 /* ---------------- Ticker analysis ---------------- */

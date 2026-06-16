@@ -1,6 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app';
 import { clearListCache } from '../lib/files';
 
@@ -191,5 +193,50 @@ describe('GET /api/profile & /api/signals', () => {
     const signals = await request(app).get('/api/signals');
     expect(signals.body.present).toBe(true);
     expect(signals.body.content).toContain('ALB');
+  });
+});
+
+describe('PUT /api/profile', () => {
+  // The fixture profile is read-only/shared, so PUT runs against a throwaway
+  // data dir seeded with a copy of it.
+  let tmp: string;
+  let tApp: ReturnType<typeof createApp>;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'state-profile-'));
+    fs.copyFileSync(path.join(FIXTURE, 'trading_profile.json'), path.join(tmp, 'trading_profile.json'));
+    tApp = createApp({ dataDir: tmp, projectRoot: path.resolve(process.cwd()) });
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('writes a partial patch, reports recalc impact, and persists to disk', async () => {
+    const res = await request(tApp).put('/api/profile').send({ risk_pct: 2, atr_multiplier: 2.5 });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.profile.risk_pct).toBe(2);
+    expect(res.body.profile.account_size).toBe(150000); // merged/preserved
+    expect(res.body.changed.sort()).toEqual(['atr_multiplier', 'risk_pct']);
+    expect(res.body.recalcAffected.sort()).toEqual(['atr_multiplier', 'risk_pct']);
+    expect(res.body.screenOnlyAffected).toEqual([]);
+
+    // Re-read through the API and straight off disk.
+    const back = await request(tApp).get('/api/profile');
+    expect(back.body.risk_pct).toBe(2);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmp, 'trading_profile.json'), 'utf8'));
+    expect(onDisk.risk_pct).toBe(2);
+    expect(onDisk.atr_multiplier).toBe(2.5);
+  });
+
+  it('flags a sector-RS change as screen-only (needs re-screen, not re-plan)', async () => {
+    const res = await request(tApp).put('/api/profile').send({ sector_rs_threshold: 8 });
+    expect(res.body.recalcAffected).toEqual(['sector_rs_threshold']);
+    expect(res.body.screenOnlyAffected).toEqual(['sector_rs_threshold']);
+  });
+
+  it('400s an out-of-range value without touching the file', async () => {
+    const res = await request(tApp).put('/api/profile').send({ risk_pct: 999 });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmp, 'trading_profile.json'), 'utf8'));
+    expect(onDisk.risk_pct).toBe(1); // unchanged
   });
 });

@@ -10,7 +10,9 @@ import type { SchedulerSlot, StartJobResponse } from '@shared/types';
 
 const SLOTS = new Set<SchedulerSlot>(['premarket', 'evening-prep', 'intraday', 'weekly', 'monthly']);
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TRADER_MEMORY_CLI = 'skills/trader-memory-core/scripts/trader_memory_cli.py';
+const RECALC_SCRIPT = 'scripts/recalc_watchlist_from_profile.py';
 
 function resolveClaudeBin(): string {
   // claude-p: a drop-in `claude -p` emulator that takes the prompt as a
@@ -47,6 +49,31 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cmd: 'bash',
       args,
       cwd: projectRoot,
+    });
+  });
+
+  r.post('/actions/recalc-profile', (req, res) => {
+    // Re-plan the latest canonical VCP screener with the (just-saved) profile,
+    // rebuild the watchlist, and re-ingest theses. The ingest refreshes only
+    // IDEA/ENTRY_READY theses — ACTIVE ones (live broker brackets) are untouched.
+    // This is a REAL write (the whole point of the button), gated behind the
+    // single-run mutex like every other slot/job.
+    const date = req.body?.date;
+    const args = [RECALC_SCRIPT];
+    if (date !== undefined && date !== null && date !== '') {
+      if (typeof date !== 'string' || !DATE_RE.test(date)) {
+        const body: StartJobResponse = { ok: false, error: `invalid date: ${String(date)}` };
+        return res.status(400).json(body);
+      }
+      args.push('--date', date);
+    }
+    return startAndRespond(res, {
+      label: 'recalc watchlist + non-active theses (profile change)',
+      cmd: resolvePythonBin(),
+      args,
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot, TV_NO_CACHE: '1' },
+      meta: { kind: 'recalc-profile' },
     });
   });
 

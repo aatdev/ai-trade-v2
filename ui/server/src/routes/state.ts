@@ -13,6 +13,12 @@ import {
 } from '../lib/files';
 import { deleteSignal, parseSignalBlocks, signalsFile } from '../lib/signals';
 import {
+  buildSaveResponse,
+  readProfileFile,
+  validateProfilePatch,
+  writeProfileFile,
+} from '../lib/profile';
+import {
   RE,
   getExposureGate,
   getMemory,
@@ -30,10 +36,10 @@ import type {
   DatesResponse,
   ExposureResponse,
   MarketResponse,
+  SaveProfileResponse,
   ScreenersResponse,
   Sourced,
   ThesesResponse,
-  TradingProfile,
   VersionsResponse,
 } from '@shared/types';
 
@@ -184,9 +190,33 @@ export function stateRouter(dataDir: string): Router {
   });
 
   r.get('/profile', (_req, res) => {
-    const profile = readJson<TradingProfile>(path.join(dataDir, '..', 'trading_profile.json'));
-    // trading_profile.json lives at the repo root, i.e. one level above trading-data/
-    res.json(profile ?? readJson<TradingProfile>(path.join(dataDir, 'trading_profile.json')) ?? null);
+    // Read the data-dir copy first — that is the file the skill scripts use
+    // ($TRADING_DATE_DIR/trading_profile.json), keeping the UI in lock-step
+    // with what a recalc/scheduler run actually consumes.
+    res.json(readProfileFile(dataDir));
+  });
+
+  // Edit the trading profile. Validates against PROFILE_SPEC (ranges mirror the
+  // consuming scripts), merges over the on-disk profile (partial submit / legacy
+  // keys survive), atomically writes the canonical file, and reports which keys
+  // changed and which warrant a watchlist/non-active-thesis recalc.
+  r.put('/profile', (req, res) => {
+    const existing = readProfileFile(dataDir);
+    const built = validateProfilePatch(req.body, existing);
+    if ('error' in built) {
+      const body: SaveProfileResponse = { ok: false, error: built.error };
+      return res.status(400).json(body);
+    }
+    try {
+      writeProfileFile(dataDir, built.profile);
+    } catch (e) {
+      const body: SaveProfileResponse = {
+        ok: false,
+        error: e instanceof Error ? e.message : 'failed to write trading_profile.json',
+      };
+      return res.status(500).json(body);
+    }
+    return res.json(buildSaveResponse(existing, built.profile));
   });
 
   r.get('/autopilot', (req, res) => {

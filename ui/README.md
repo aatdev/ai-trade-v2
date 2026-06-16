@@ -141,7 +141,8 @@ confirmation).
 Actions (whitelisted, single-job mutex, SSE log stream):
 `POST /api/actions/run-slot`, `/sync-alerts`, `/delete-alerts`,
 `/analyze-ticker` (runs the `ticker-analysis` skill via headless
-`claude -p … --output-format stream-json`);
+`claude -p … --output-format stream-json`), `/recalc-profile` (re-plan latest
+screener → watchlist → non-active theses, see the **Профиль** tab);
 `GET /api/actions/jobs[/:id[/stream]]`, `POST /api/actions/jobs/:id/cancel`.
 
 ### Скринер tab (VCP longs + swing-short)
@@ -164,6 +165,31 @@ but share the staging dir (`<dataDir>/ui-staging/`); results live there and are
   **Detection-only** — there is no short-side plan/save step (the long-only
   breakout planner / watchlist builder cannot consume the swing-short shape;
   confirm borrow/locate and SSR at the broker before any entry).
+
+### Профиль tab (edit trading_profile + recalc)
+
+The **Профиль** tab edits `trading-data/trading_profile.json` — the same file the
+scheduler/planner scripts read (`$TRADING_DATE_DIR/trading_profile.json`). Fields
+are grouped (capital & risk, levels & stops, gates & filters) with per-field
+ranges that mirror the consuming scripts' argparse bounds; gates (0/1) render as
+toggles. `GET /api/profile` reads the data-dir copy first (legacy repo-root copy
+honored only as a read fallback); `PUT /api/profile` validates against
+`PROFILE_SPEC`, **merges** over the on-disk profile (partial submit / unknown
+legacy keys survive), atomically writes, and returns `{ changed, recalcAffected,
+screenOnlyAffected }`.
+
+Save first, then recalc on demand (the button appears after a save with affected
+fields). **Recalc** = `POST /api/actions/recalc-profile` →
+`scripts/recalc_watchlist_from_profile.py`: re-runs `plan_breakout_trades.py` on
+the **latest canonical VCP screener** with the new profile (no re-screen — fast,
+deterministic), then `build_watchlist_from_plan.py --promote --ingest-theses`
+rewrites the watchlist and **refreshes only IDEA/ENTRY_READY theses** —
+`thesis_ingest` never touches an ACTIVE thesis (its stop is the live broker
+bracket). Fields flagged ↻ (`affectsRecalc`) drive the re-plan; `sector_rs_gate`
+/ `sector_rs_threshold` are applied at SCREEN time, so the UI flags them as
+needing a full evening-prep re-screen (a re-plan cannot reflect them). The job
+streams its log over SSE and invalidates the watchlist/screeners/theses/memory
+queries on completion.
 
 ### Run ticker analysis from the Watchlist
 
