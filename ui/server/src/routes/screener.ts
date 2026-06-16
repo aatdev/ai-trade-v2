@@ -4,13 +4,14 @@ import { Router } from 'express';
 import { basename, findLatest, readJson } from '../lib/files';
 import { resolvePythonBin, startAndRespond } from '../lib/jobActions';
 import type { JobManager } from '../lib/jobs';
-import { RE, getExposureGate, getPortfolio, readProfile } from '../lib/mappers';
+import { RE, getExposureGate, getPortfolio, mapScreenerResult, readProfile } from '../lib/mappers';
 import { mapStagedPlan, mapStagedScreener } from '../lib/screenerMappers';
-import type { StagedScreenerResponse } from '@shared/types';
+import type { StagedScreenerResponse, StagedShortScreenerResponse } from '@shared/types';
 
 const SCREEN_SCRIPT = 'skills/vcp-screener/scripts/screen_vcp.py';
 const PLAN_SCRIPT = 'skills/breakout-trade-planner/scripts/plan_breakout_trades.py';
 const SAVE_SCRIPT = 'scripts/build_watchlist_from_plan.py';
+const SHORT_SCREEN_SCRIPT = 'skills/swing-short-screener/scripts/screen_short.py';
 const VCP_UNIVERSE_FILE = path.join('scripts', 'lib', 'data', 'vcp_universe.txt');
 const STAGING_SUBDIR = 'ui-staging';
 
@@ -99,6 +100,87 @@ export function buildScreenArgs(
   // wide / custom pass an explicit --universe; default --max-candidates to the
   // universe size so every chosen name gets full analysis (mirrors the
   // scheduler), but honour an explicit lower cap when the user sets one.
+  let symbols: string[];
+  if (universe === 'wide') {
+    if (!wideSymbols || wideSymbols.length === 0) {
+      return { error: `wide universe file (${VCP_UNIVERSE_FILE}) is missing or empty` };
+    }
+    symbols = wideSymbols;
+  } else {
+    const raw = Array.isArray(body.symbols) ? body.symbols : [];
+    symbols = [
+      ...new Set(raw.map((s) => String(s).toUpperCase().trim()).filter((s) => TICKER_RE.test(s))),
+    ];
+    if (symbols.length === 0) return { error: 'custom universe requires at least one valid ticker' };
+    if (symbols.length > 1000) return { error: 'custom universe is capped at 1000 tickers' };
+  }
+  args.push('--universe', ...symbols, '--max-candidates', String(maxCandidates ?? symbols.length));
+  return { args };
+}
+
+/**
+ * Validate the shorts-run body and build the screen_short.py CLI args. Ranges
+ * mirror screen_short.py's argparse so a server 400 equals what the script would
+ * reject. `--output-dir` is always server-controlled. Unlike the VCP run, an
+ * S&P 500 short scan defaults to the FULL index (`--full-sp500`) when no cap is
+ * given — alphabetically truncating to the first 100 names would miss most
+ * Stage 4 weakness. Pure + exported for unit tests.
+ */
+export function buildShortScreenArgs(
+  body: Record<string, unknown>,
+  stagingDir: string,
+  wideSymbols: string[] | null,
+): { args: string[] } | { error: string } {
+  const args: string[] = ['--output-dir', stagingDir];
+
+  const universe = body.universe;
+  if (universe !== 'sp500' && universe !== 'wide' && universe !== 'custom') {
+    return { error: 'universe must be one of sp500 | wide | custom' };
+  }
+
+  const minGrade = body.minGrade;
+  if (minGrade !== undefined && minGrade !== null && minGrade !== '') {
+    if (minGrade !== 'A' && minGrade !== 'B' && minGrade !== 'C' && minGrade !== 'D') {
+      return { error: 'minGrade must be one of A | B | C | D' };
+    }
+    args.push('--min-grade', minGrade);
+  }
+
+  // [bodyKey, cliFlag, lo, hi, integer]. `top` allows 0 (= all rows).
+  const nums: [string, string, number, number, boolean][] = [
+    ['top', '--top', 0, 500, true],
+    ['rsLookback', '--rs-lookback', 5, 252, true],
+    ['minPrice', '--min-price', 0, 100_000, false],
+    ['minDollarVol', '--min-dollar-vol', 0, 100_000_000_000, false],
+    ['minStopPct', '--min-stop-pct', 0, 50, false],
+    ['maxStopPct', '--max-stop-pct', 0, 100, false],
+  ];
+  for (const [key, flag, lo, hi, integer] of nums) {
+    const v = body[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) {
+      return { error: `${key} must be a number in [${lo}, ${hi}]` };
+    }
+    if (integer && !Number.isInteger(v)) return { error: `${key} must be an integer` };
+    args.push(flag, String(v));
+  }
+
+  let maxCandidates: number | null = null;
+  const mc = body.maxCandidates;
+  if (mc !== undefined && mc !== null && mc !== '') {
+    if (typeof mc !== 'number' || !Number.isInteger(mc) || mc < 1 || mc > 2000) {
+      return { error: 'maxCandidates must be an integer in [1, 2000]' };
+    }
+    maxCandidates = mc;
+  }
+
+  if (universe === 'sp500') {
+    // No cap → full S&P 500; an explicit cap analyzes the first N names.
+    if (maxCandidates != null) args.push('--max-candidates', String(maxCandidates));
+    else args.push('--full-sp500');
+    return { args };
+  }
+
   let symbols: string[];
   if (universe === 'wide') {
     if (!wideSymbols || wideSymbols.length === 0) {
@@ -257,6 +339,42 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'screener-save', mode },
     });
+  });
+
+  // --- Swing-short screener (shorts sub-tab) ------------------------------
+  // Detection-only run into staging. There is no short-side plan/save step:
+  // swing-short-screener already carries grade + trade_levels, and the
+  // long-only breakout planner / build_watchlist_from_plan cannot consume it.
+
+  r.post('/screener/shorts/run', (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const wide = body.universe === 'wide' ? readWideUniverse(projectRoot) : null;
+    const built = buildShortScreenArgs(body, stagingDir, wide);
+    if ('error' in built) return res.status(400).json({ ok: false, error: built.error });
+    return startAndRespond(res, jobs, {
+      label: `short screener run (${String(body.universe)})`,
+      cmd: resolvePythonBin(),
+      args: [SHORT_SCREEN_SCRIPT, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, TV_NO_CACHE: '1' },
+      meta: { kind: 'short-screener-run' },
+    });
+  });
+
+  // The staged shorts view the UI polls after a run ends. Read-only; no registration.
+  r.get('/screener/shorts/staged', (req, res) => {
+    const file = resolveStaged(stagingDir, RE.swingShort, req.query.swingSource);
+    const gate = getExposureGate(dataDir, null);
+    const screener = file ? mapScreenerResult(readJson(file), 'swing-short') : null;
+    const wideCount = readWideUniverse(projectRoot).length;
+    const body: StagedShortScreenerResponse = {
+      screener,
+      source: basename(file),
+      gate,
+      wideUniverse: { available: wideCount > 0, count: wideCount },
+      notes: [],
+    };
+    res.json(body);
   });
 
   return r;

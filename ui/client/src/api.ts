@@ -23,8 +23,10 @@ import type {
   ScreenerPlanRequest,
   ScreenerRunRequest,
   ScreenersResponse,
+  ShortScreenerRunRequest,
   SignalsResponse,
   StagedScreenerResponse,
+  StagedShortScreenerResponse,
   SkillDocResponse,
   Sourced,
   StartJobResponse,
@@ -245,6 +247,27 @@ export const runScreenerPlan = (body: ScreenerPlanRequest = {}) =>
 
 export const saveWatchlist = (body: SaveWatchlistRequest) =>
   postJSON<StartJobResponse>('/api/screener/save-watchlist', body);
+
+export interface StagedShortSources {
+  swing?: string | null;
+}
+
+/** Latest (or pinned) staged swing-short run + gate context (shorts sub-tab). */
+export const useStagedShortScreener = (
+  sources: StagedShortSources = {},
+  refetchInterval: Refetch = false,
+) =>
+  useQuery({
+    queryKey: ['stagedShortScreener', sources.swing],
+    queryFn: () =>
+      getJSON<StagedShortScreenerResponse>(
+        `/api/screener/shorts/staged${qs({ swingSource: sources.swing })}`,
+      ),
+    refetchInterval,
+  });
+
+export const runShortScreener = (body: ShortScreenerRunRequest) =>
+  postJSON<StartJobResponse>('/api/screener/shorts/run', body);
 
 export const useTheses = (refetchInterval: Refetch = false) =>
   useQuery({ queryKey: ['theses'], queryFn: () => getJSON<ThesesResponse>('/api/theses'), refetchInterval });

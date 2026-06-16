@@ -593,6 +593,40 @@ export interface SaveWatchlistRequest {
   date?: string; // YYYY-MM-DD; defaults to server today
 }
 
+/* ---------------- Swing-short staging (interactive "Скринер" tab, shorts sub-tab) ----------------
+ * The short-side mirror of the VCP staging flow. swing-short-screener emits a
+ * flat `{meta, candidates[]}` file already carrying grade + trade_levels, so the
+ * staged view reuses the normalized ScreenerResult shape (same as the read-only
+ * Screeners card) rather than a bespoke rich type. Detection-only — there is no
+ * short-side planner/save step (see route comments).
+ */
+
+export type ShortMinGrade = 'A' | 'B' | 'C' | 'D';
+
+/** POST /api/screener/shorts/run body (server validates ranges; all optional but universe). */
+export interface ShortScreenerRunRequest {
+  universe: ScreenerUniverse;
+  symbols?: string[]; // required when universe === 'custom'
+  maxCandidates?: number; // caps the analyzed universe (live mode)
+  minGrade?: ShortMinGrade; // minimum grade to keep
+  top?: number; // max rows in the report (0 = all)
+  rsLookback?: number; // RS lookback in sessions
+  minPrice?: number; // reject sub-price names
+  minDollarVol?: number; // min avg daily dollar volume (raw dollars)
+  minStopPct?: number; // reject stops below this % of entry (noise)
+  maxStopPct?: number; // reject stops above this % of entry (post-crash)
+}
+
+/** GET /api/screener/shorts/staged — the latest staged swing-short run + gate context. */
+export interface StagedShortScreenerResponse {
+  screener: ScreenerResult | null;
+  source: string | null; // staged filename
+  gate: Sourced<ExposureGate>;
+  /** Whether the wide universe file exists — the form defaults to it like the VCP panel. */
+  wideUniverse: WideUniverseInfo;
+  notes: string[];
+}
+
 /* ---------------- Theses ---------------- */
 
 export interface ThesisIndexEntry {

@@ -289,7 +289,7 @@ export function getRegime(
 
 /* ---------------- screeners ---------------- */
 
-function mapScreenerCandidate(cIn: Record<string, unknown>): ScreenerCandidate {
+export function mapScreenerCandidate(cIn: Record<string, unknown>): ScreenerCandidate {
   const c = asRecord(cIn);
   const tp = asRecord(c.trade_plan);
   const tl = asRecord(c.trade_levels);
@@ -317,6 +317,16 @@ function mapScreenerCandidate(cIn: Record<string, unknown>): ScreenerCandidate {
   };
 }
 
+/** Normalize a native screener file (`{meta, candidates[]}`) into a ScreenerResult. */
+export function mapScreenerResult(rawIn: unknown, kind: 'vcp' | 'swing-short'): ScreenerResult {
+  const raw = asRecord(rawIn);
+  return {
+    kind,
+    meta: asRecord(raw.meta),
+    candidates: asArray<Record<string, unknown>>(raw.candidates).map(mapScreenerCandidate),
+  };
+}
+
 export function getScreener(
   dataDir: string,
   kind: 'vcp' | 'swing-short',
@@ -326,13 +336,7 @@ export function getScreener(
   const pattern = kind === 'vcp' ? RE.vcp : RE.swingShort;
   const file = resolveFile(sub(dataDir, 'screeners'), pattern, date, source);
   if (!file) return sourced<ScreenerResult>(null, null, date);
-  const raw = asRecord(readJson(file));
-  const result: ScreenerResult = {
-    kind,
-    meta: asRecord(raw.meta),
-    candidates: asArray<Record<string, unknown>>(raw.candidates).map(mapScreenerCandidate),
-  };
-  return sourced(file, result, date);
+  return sourced(file, mapScreenerResult(readJson(file), kind), date);
 }
 
 /* ---------------- theses ---------------- */

@@ -14,6 +14,8 @@
 - [.claude/skills symlink footgun](claude-skills-symlink-footgun.md) — .claude/skills → ../skills; rm/cp на .claude/skills/<x> бьёт по реальному источнику, синхронизация не нужна
 - [Trading system profile](trading-system-profile.md) — $150k, риск 1.5–2%/сделка, heat ≤6%, ≤6 позиций, горизонт 2 нед–3 мес, лонг + шорт в слабом рынке; профиль/каталоги скрипты находят сами
 - [Trading data layout](trading-data-layout.md) — все торговые артефакты в $TRADING_DATE_DIR (trading-data/): schedule/market/screeners/plans/journal/analysis/logs
+- [Breakout-planner auto-loads profile](breakout-planner-autoloads-profile.md) — планировщик/sizer/heat читают trading_profile.json через --profile; argparse-дефолты (0.5%/gate 0/10%) мертвы в проде — проверять по plans/*.json
 - [Autopilot cron env gotchas](autopilot-cron-env-gotchas.md) — cron-запуск autopilot: PATH чинит ensure_runtime_path(), Claude login требует CLAUDE_CODE_OAUTH_TOKEN в .env (keychain недоступен)
 - [claude-pee breaks nested in a Claude session](claude-pee-nested-session-breaks.md) — слэш-команды слотов (/weekly и т.д.) запускаются вложенно → claude-шаг молча no-op (rc=0, пусто), слот рапортует успех
 - [claude-p wrapper semantics](claude-p-wrapper-semantics.md) — headless claude -p эмулятор: промпт позиционно, отвергает -p, дефолтный --timeout 300с; конвенция CLAUDE_BIN > claude-p
+- [IB Gateway probe gotchas](ib-gateway-probe-gotchas.md) — session-файл в vendor/interactive-brokers-mcp/.../.runtime; Node-пробинг без User-Agent → 403, host=localhost

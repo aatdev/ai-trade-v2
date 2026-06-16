@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app';
 import { clearListCache } from '../lib/files';
-import { buildScreenArgs } from './screener';
+import { buildScreenArgs, buildShortScreenArgs } from './screener';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
 const ROOT = path.resolve(process.cwd());
@@ -75,6 +75,60 @@ describe('buildScreenArgs', () => {
   });
 });
 
+/* ---------------- buildShortScreenArgs (pure) ---------------- */
+
+describe('buildShortScreenArgs', () => {
+  it('sp500 with no cap scans the full index (--full-sp500)', () => {
+    const out = buildShortScreenArgs({ universe: 'sp500' }, STAGING, null);
+    expect(out).toEqual({ args: ['--output-dir', STAGING, '--full-sp500'] });
+  });
+
+  it('sp500 with an explicit cap uses --max-candidates (not --full-sp500)', () => {
+    const out = buildShortScreenArgs({ universe: 'sp500', maxCandidates: 120 }, STAGING, null);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toContain('--max-candidates');
+    expect(out.args).toContain('120');
+    expect(out.args).not.toContain('--full-sp500');
+  });
+
+  it('rejects an unknown universe and a bad grade', () => {
+    expect('error' in buildShortScreenArgs({ universe: 'nope' }, STAGING, null)).toBe(true);
+    expect('error' in buildShortScreenArgs({ universe: 'sp500', minGrade: 'Z' }, STAGING, null)).toBe(true);
+  });
+
+  it('validates numeric ranges (top, rsLookback, stop pct)', () => {
+    expect('error' in buildShortScreenArgs({ universe: 'sp500', top: 2.5 }, STAGING, null)).toBe(true);
+    expect('error' in buildShortScreenArgs({ universe: 'sp500', rsLookback: 1 }, STAGING, null)).toBe(true);
+    expect('error' in buildShortScreenArgs({ universe: 'sp500', maxStopPct: 200 }, STAGING, null)).toBe(true);
+  });
+
+  it('passes valid grade + tuning flags', () => {
+    const out = buildShortScreenArgs(
+      { universe: 'sp500', minGrade: 'B', top: 0, rsLookback: 63, minStopPct: 2, maxStopPct: 10 },
+      STAGING,
+      null,
+    );
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(
+      expect.arrayContaining(['--min-grade', 'B', '--top', '0', '--rs-lookback', '63', '--min-stop-pct', '2', '--max-stop-pct', '10']),
+    );
+  });
+
+  it('custom: dedupes + uppercases tickers and sizes --max-candidates', () => {
+    expect('error' in buildShortScreenArgs({ universe: 'custom', symbols: ['$$$'] }, STAGING, null)).toBe(true);
+    const out = buildShortScreenArgs({ universe: 'custom', symbols: ['tsla', 'TSLA', 'nflx'] }, STAGING, null);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(expect.arrayContaining(['--universe', 'TSLA', 'NFLX', '--max-candidates', '2']));
+  });
+
+  it('wide: errors when the universe file is empty, includes symbols when present', () => {
+    expect('error' in buildShortScreenArgs({ universe: 'wide' }, STAGING, [])).toBe(true);
+    const out = buildShortScreenArgs({ universe: 'wide' }, STAGING, ['AAA', 'BBB']);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(expect.arrayContaining(['--universe', 'AAA', 'BBB', '--max-candidates', '2']));
+  });
+});
+
 /* ---------------- route guards (no spawn) ---------------- */
 
 async function jobsList() {
@@ -130,6 +184,35 @@ describe('POST /api/screener/save-watchlist', () => {
   });
 });
 
+describe('POST /api/screener/shorts/run', () => {
+  it('rejects a missing/invalid universe before spawning', async () => {
+    const res = await request(app).post('/api/screener/shorts/run').send({});
+    expect(res.status).toBe(400);
+    expect((await jobsList()).active).toBeNull();
+  });
+
+  it('rejects an invalid grade before spawning', async () => {
+    const res = await request(app).post('/api/screener/shorts/run').send({ universe: 'sp500', minGrade: 'Z' });
+    expect(res.status).toBe(400);
+    expect((await jobsList()).active).toBeNull();
+  });
+
+  it('rejects wide when the universe file is absent (cwd has none)', async () => {
+    const res = await request(app).post('/api/screener/shorts/run').send({ universe: 'wide' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/screener/shorts/staged (no staging)', () => {
+  it('returns a null screener with gate + wideUniverse context', async () => {
+    const res = await request(app).get('/api/screener/shorts/staged');
+    expect(res.status).toBe(200);
+    expect(res.body.screener).toBeNull();
+    expect(res.body).toHaveProperty('gate');
+    expect(res.body.wideUniverse).toEqual({ available: false, count: 0 });
+  });
+});
+
 describe('GET /api/screener/staged (no staging)', () => {
   it('returns null screener/plan with gate + heat context', async () => {
     const res = await request(app).get('/api/screener/staged');
@@ -168,6 +251,23 @@ describe('ui-staging isolation', () => {
       path.join(staging, 'breakout_trade_plan_2099-01-02_120000.json'),
       JSON.stringify({ schema_version: '1.0', summary: {}, actionable_orders: [] }),
     );
+    fs.writeFileSync(
+      path.join(staging, 'swing_short_screener_2099-01-02_120000.json'),
+      JSON.stringify({
+        meta: { universe_size: 1, source: 'fixture' },
+        candidates: [
+          {
+            symbol: 'CHTR',
+            grade: 'A',
+            composite_score: 81,
+            sector: 'Communication Services',
+            components: { trend_structure: 100 },
+            trade_levels: { entry: 145.8, stop: 153.6, target_2r: 130.2 },
+            metrics: { price: 145.8, rsi14: 50.8 },
+          },
+        ],
+      }),
+    );
     stagedApp = createApp({ dataDir: dir, projectRoot: ROOT });
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -178,6 +278,7 @@ describe('ui-staging isolation', () => {
 
     const screeners = await request(stagedApp).get('/api/screeners');
     expect(screeners.body.vcp.data).toBeNull();
+    expect(screeners.body.swingShort.data).toBeNull();
   });
 
   it('but IS visible to /api/screener/staged with the top-100 view', async () => {
@@ -185,5 +286,16 @@ describe('ui-staging isolation', () => {
     expect(staged.body.screener).not.toBeNull();
     expect(staged.body.screener.candidates).toHaveLength(1);
     expect(staged.body.screener.candidates[0].symbol).toBe('NVDA');
+  });
+
+  it('and the staged shorts run IS visible to /api/screener/shorts/staged', async () => {
+    const staged = await request(stagedApp).get('/api/screener/shorts/staged');
+    expect(staged.body.screener).not.toBeNull();
+    expect(staged.body.screener.kind).toBe('swing-short');
+    expect(staged.body.screener.candidates).toHaveLength(1);
+    expect(staged.body.screener.candidates[0].symbol).toBe('CHTR');
+    // trade_levels normalized into entry/stop/target.
+    expect(staged.body.screener.candidates[0].entry).toBe(145.8);
+    expect(staged.body.screener.candidates[0].target).toBe(130.2);
   });
 });

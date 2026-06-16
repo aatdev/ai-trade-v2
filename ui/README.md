@@ -144,6 +144,27 @@ Actions (whitelisted, single-job mutex, SSE log stream):
 `claude -p … --output-format stream-json`);
 `GET /api/actions/jobs[/:id[/stream]]`, `POST /api/actions/jobs/:id/cancel`.
 
+### Скринер tab (VCP longs + swing-short)
+
+The **Скринер** tab is split into two sub-tabs that drive independent screeners
+but share the staging dir (`<dataDir>/ui-staging/`); results live there and are
+**not registered** until an explicit save (so a run is invisible to `/api/dates`,
+`/api/screeners`, and the watchlist).
+
+- **VCP — лонги:** `POST /api/screener/run` (`screen_vcp.py`) →
+  `POST /api/screener/plan` (`plan_breakout_trades.py`) →
+  `POST /api/screener/save-watchlist` (`build_watchlist_from_plan.py`, the only
+  endpoint that writes under canonical dirs + promotes). `GET /api/screener/staged`
+  is the read-only view (top-100 by score, joined breakout-plan order, 7-point
+  take/no-take checklist, gate + heat context).
+- **Swing-шорты:** `POST /api/screener/shorts/run` (`screen_short.py`; S&P 500
+  with no cap ⇒ `--full-sp500`) and the read-only `GET /api/screener/shorts/staged`
+  (normalized `ScreenerResult`, graded candidates with `trade_levels` →
+  entry/stop/target, 5-factor weakness drill-down, gate context).
+  **Detection-only** — there is no short-side plan/save step (the long-only
+  breakout planner / watchlist builder cannot consume the swing-short shape;
+  confirm borrow/locate and SSR at the broker before any entry).
+
 ### Run ticker analysis from the Watchlist
 
 Each watchlist row shows a 📄 flag next to tickers that already have saved
