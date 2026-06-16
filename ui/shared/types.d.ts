@@ -354,6 +354,10 @@ export interface ScreenerCandidate {
   stop: number | null;
   target: number | null;
   metrics: Record<string, number | boolean | null>;
+  sector_etf: string | null;
+  sector_rs: number | null; // sector ETF return minus SPY return (pp)
+  sector_leadership: string | null; // leading | inline | lagging
+  sector_fight: boolean | null; // long in a lagging / short in a leading sector
 }
 
 export interface ScreenerResult {
@@ -526,6 +530,9 @@ export interface StagedScreenerCandidate {
   entry_ready: boolean | null;
   state_cap_applied: boolean | null;
   cap_reason: string | null;
+  sector_etf: string | null;
+  sector_rs: number | null; // sector ETF return minus SPY return (pp)
+  sector_leadership: string | null; // leading | inline | lagging
   weakest_component: string | null;
   strongest_component: string | null;
   components: VcpComponents;

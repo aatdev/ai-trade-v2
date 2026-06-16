@@ -92,7 +92,7 @@ For each top candidate, present:
 - Trade setup: pivot price, stop-loss, risk percentage
 - Volume dry-up ratio and breakout_volume_score
 - Relative strength rank
-- **Sector leadership** (`sector_leadership` / `sector_rs` / `sector_etf`): a long whose sector ETF lags SPY by ≥ 5% over ~3 months is capped to Developing VCP (don't buy into a weak group). Sector ETF vs SPY, no API key.
+- **Sector leadership** (`sector_leadership` / `sector_rs` / `sector_etf`): a long whose sector ETF lags SPY by ≥ 5% over ~3 months is capped to Developing VCP (don't buy into a weak group). Sector ETF vs SPY, no API key. Toggle via `sector_rs_gate` (1/0) and tune via `sector_rs_threshold` (default 5pp) in the trading profile; `--sector-rs-gate` / `--sector-rs-threshold` override per run.
 
 ### Step 4: Provide Actionable Guidance
 

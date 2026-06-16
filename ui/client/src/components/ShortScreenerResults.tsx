@@ -39,6 +39,13 @@ function oversoldNote(c: ScreenerCandidate): string | null {
   return null;
 }
 
+/** Sector-RS warning: shorting into a leading sector caps the grade at C. */
+function sectorNote(c: ScreenerCandidate): string | null {
+  if (!c.sector_fight) return null;
+  const rs = c.sector_rs != null ? `${c.sector_rs >= 0 ? '+' : ''}${c.sector_rs.toFixed(0)}%` : '';
+  return `Сектор ${c.sector_etf ?? ''} ${rs} лидирует над SPY — шорт против сильной группы; грейд снижен до C. Лучше шортить в отстающих секторах.`;
+}
+
 function MetricRow({ c }: { c: ScreenerCandidate }) {
   const m = c.metrics;
   const r = num(m, 'stock_return');
@@ -75,6 +82,7 @@ function MetricRow({ c }: { c: ScreenerCandidate }) {
 
 function Drilldown({ c }: { c: ScreenerCandidate }) {
   const note = oversoldNote(c);
+  const sNote = sectorNote(c);
   return (
     <div style={{ padding: '4px 2px 8px' }}>
       <div
@@ -96,6 +104,11 @@ function Drilldown({ c }: { c: ScreenerCandidate }) {
       {note ? (
         <div className="hint" style={{ marginTop: 8 }}>
           ⚠️ {note}
+        </div>
+      ) : null}
+      {sNote ? (
+        <div className="hint" style={{ marginTop: 8 }}>
+          ⚠️ {sNote}
         </div>
       ) : null}
     </div>
@@ -156,6 +169,15 @@ export default function ShortScreenerResults({ screener }: { screener: ScreenerR
                     <td>{fmtNum(num(c.metrics, 'rsi14'), 1)}</td>
                     <td style={{ textAlign: 'left' }} className="muted">
                       {c.sector ?? '—'}
+                      {c.sector_leadership ? (
+                        <span style={{ color: c.sector_fight ? 'var(--red)' : undefined }}>
+                          {' · '}
+                          {c.sector_etf}
+                          {c.sector_rs != null
+                            ? ` ${c.sector_rs >= 0 ? '+' : ''}${c.sector_rs.toFixed(0)}%`
+                            : ''}
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                   {isOpen ? (

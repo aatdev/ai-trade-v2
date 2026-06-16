@@ -21,6 +21,7 @@ Output:
 """
 
 import argparse
+import json
 import os
 import sys
 from datetime import datetime
@@ -78,6 +79,25 @@ def _default_output_dir(bucket, fallback="reports/"):
     """Default dir: $TRADING_DATE_DIR/<bucket> when configured, else fallback."""
     base = _trading_data_dir()
     return str(base / bucket) if base else fallback
+
+
+def _load_profile() -> dict:
+    """Trading profile dict ($TRADING_PROFILE, else $TRADING_DATE_DIR/trading_profile.json).
+
+    Used only for the optional sector-RS gate settings; returns {} when absent.
+    """
+    path = os.environ.get("TRADING_PROFILE")
+    if not path:
+        base = _trading_data_dir()
+        if base is not None and (base / "trading_profile.json").is_file():
+            path = str(base / "trading_profile.json")
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 def parse_arguments():
@@ -208,6 +228,25 @@ def parse_arguments():
         help=(
             "Minervini strict mode: only include stocks with valid_vcp=True AND "
             "execution_state in ('Pre-breakout', 'Breakout')"
+        ),
+    )
+    parser.add_argument(
+        "--sector-rs-gate",
+        type=int,
+        default=None,
+        help=(
+            "Sector relative-strength cap: cap a long to Developing VCP when its "
+            "sector ETF lags SPY. 1 = on, 0 = off. Default: trading profile "
+            "(sector_rs_gate), else on."
+        ),
+    )
+    parser.add_argument(
+        "--sector-rs-threshold",
+        type=float,
+        default=None,
+        help=(
+            "Lagging threshold in percentage points (sector ETF vs SPY). Default: "
+            "trading profile (sector_rs_threshold), else 5.0."
         ),
     )
 
@@ -669,10 +708,24 @@ def main():
     results = []
     # Sector relative strength (SPDR ETF vs SPY) for candidate sectors — a long
     # fighting a lagging sector is capped to Developing (see calculate_composite_score).
-    from sector_strength import compute_sector_rs
+    from sector_strength import compute_sector_rs, gate_settings
 
-    cand_sectors = {sector_map.get(sym, "Unknown") for sym, _ in trend_passed}
-    sector_rs_map = compute_sector_rs(client, cand_sectors, lookback=63, spy_history=sp500_history)
+    sector_gate, sector_threshold = gate_settings(
+        _load_profile(),
+        getattr(args, "sector_rs_gate", None),
+        getattr(args, "sector_rs_threshold", None),
+    )
+    if sector_gate:
+        cand_sectors = {sector_map.get(sym, "Unknown") for sym, _ in trend_passed}
+        sector_rs_map = compute_sector_rs(
+            client,
+            cand_sectors,
+            lookback=63,
+            spy_history=sp500_history,
+            threshold=sector_threshold,
+        )
+    else:
+        sector_rs_map = {}
 
     for sym, quote in trend_passed:
         hist = candidate_histories.get(sym, [])

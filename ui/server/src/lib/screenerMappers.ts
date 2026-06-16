@@ -359,6 +359,28 @@ export function computeChecklist(
     points.push(pt('fundamental', fLabel, 'unknown', 'фундаментал недоступен'));
   }
 
+  // 9. sector not lagging SPY (a long shouldn't fight a weak group)
+  const slLabel = 'Сектор не отстаёт от SPY';
+  const slPct =
+    cand.sector_rs == null ? 'n/a' : `${cand.sector_rs >= 0 ? '+' : ''}${cand.sector_rs.toFixed(0)}%`;
+  const slDetail = cand.sector_etf ? `${cand.sector_etf} ${slPct} vs SPY` : 'сектор неизвестен';
+  if (cand.sector_leadership == null) {
+    points.push(
+      pt('sector', slLabel, 'unknown', cand.sector_etf ? slDetail : 'нет данных по сектору'),
+    );
+  } else if (cand.sector_leadership === 'lagging') {
+    points.push(pt('sector', slLabel, 'fail', `${slDetail} — отстаёт → лонг капается до Developing`));
+  } else {
+    points.push(
+      pt(
+        'sector',
+        slLabel,
+        'pass',
+        `${slDetail}${cand.sector_leadership === 'leading' ? ' — лидирует' : ''}`,
+      ),
+    );
+  }
+
   const knownPass = points.filter((p) => p.state === 'pass').length;
   return { points, allPass: points.every((p) => p.state === 'pass'), knownPass, total: points.length };
 }
@@ -386,6 +408,9 @@ function mapCandidate(
     entry_ready: boolOrNull(raw.entry_ready),
     state_cap_applied: boolOrNull(raw.state_cap_applied),
     cap_reason: strOrNull(raw.cap_reason),
+    sector_etf: strOrNull(raw.sector_etf),
+    sector_rs: numOrNull(raw.sector_rs),
+    sector_leadership: strOrNull(raw.sector_leadership),
     weakest_component: strOrNull(raw.weakest_component),
     strongest_component: strOrNull(raw.strongest_component),
     components: mapComponents(raw),

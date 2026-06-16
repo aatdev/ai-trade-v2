@@ -83,6 +83,24 @@ def _default_output_dir(bucket, fallback="reports/"):
     return str(base / bucket) if base else fallback
 
 
+def _load_profile() -> dict:
+    """Trading profile dict for the optional sector-RS gate; {} when absent."""
+    import os
+
+    path = os.environ.get("TRADING_PROFILE")
+    if not path:
+        base = _trading_data_dir()
+        if base is not None and (base / "trading_profile.json").is_file():
+            path = str(base / "trading_profile.json")
+    if not path:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def passes_short_filter(
     metrics: dict,
     min_price: float = DEFAULT_MIN_PRICE,
@@ -229,14 +247,23 @@ def run_live(args) -> tuple[list[dict], dict]:
 
     # Sector relative strength (SPDR ETF vs SPY): a short into a leading sector
     # is fighting the group — score_candidate caps it at C.
-    from sector_strength import compute_sector_rs
+    from sector_strength import compute_sector_rs, gate_settings
 
-    sector_rs_map = compute_sector_rs(
-        client,
-        {e.get("sector") for e in universe if e.get("sector")},
-        lookback=args.rs_lookback,
-        spy_history=(spy_hist or {}).get("historical"),
+    sector_gate, sector_threshold = gate_settings(
+        _load_profile(),
+        getattr(args, "sector_rs_gate", None),
+        getattr(args, "sector_rs_threshold", None),
     )
+    if sector_gate:
+        sector_rs_map = compute_sector_rs(
+            client,
+            {e.get("sector") for e in universe if e.get("sector")},
+            lookback=args.rs_lookback,
+            spy_history=(spy_hist or {}).get("historical"),
+            threshold=sector_threshold,
+        )
+    else:
+        sector_rs_map = {}
 
     results = []
     for entry in universe:
@@ -313,6 +340,20 @@ def parse_arguments(argv=None) -> argparse.Namespace:
         type=float,
         default=DEFAULT_MAX_STOP_PCT,
         help="Reject candidates whose stop distance exceeds this %% of entry (post-crash)",
+    )
+    p.add_argument(
+        "--sector-rs-gate",
+        type=int,
+        default=None,
+        help="Sector-RS cap (short into a leading sector -> grade C). 1=on, 0=off. "
+        "Default: trading profile (sector_rs_gate), else on.",
+    )
+    p.add_argument(
+        "--sector-rs-threshold",
+        type=float,
+        default=None,
+        help="Leading threshold in pp (sector ETF vs SPY). Default: profile "
+        "(sector_rs_threshold), else 5.0.",
     )
     p.add_argument("--as-of", help="Date label for the report (YYYY-MM-DD); else today")
     p.add_argument(

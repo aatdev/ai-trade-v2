@@ -37,12 +37,32 @@ SECTOR_ETF = {
     "Communications": "XLC",
 }
 
-# A sector ETF outperforming / underperforming SPY by this many percentage points
-# over the lookback counts as leading / lagging.
-SECTOR_RS_LEADING = 5.0
-SECTOR_RS_LAGGING = -5.0
+# A sector ETF out/under-performing SPY by >= this many percentage points over
+# the lookback counts as leading / lagging. Tunable via the trading profile
+# (`sector_rs_threshold`); the gate itself toggles via `sector_rs_gate`.
+SECTOR_RS_THRESHOLD_DEFAULT = 5.0
+SECTOR_RS_GATE_DEFAULT = 1
 
 _LOOKBACK_FETCH_DAYS = 260  # enough history for the lookback plus a margin
+
+
+def gate_settings(profile, cli_gate=None, cli_threshold=None):
+    """Resolve (enabled, threshold) from CLI override → trading profile → default.
+
+    ``profile`` is the parsed trading_profile.json dict (or None). An explicit
+    CLI value wins; otherwise the profile's ``sector_rs_gate`` / ``sector_rs_threshold``;
+    otherwise the built-in defaults (gate on, 5pp).
+    """
+    p = profile or {}
+    if cli_gate is not None:
+        enabled = bool(cli_gate)
+    else:
+        enabled = bool(int(p.get("sector_rs_gate", SECTOR_RS_GATE_DEFAULT) or 0))
+    if cli_threshold is not None:
+        threshold = float(cli_threshold)
+    else:
+        threshold = float(p.get("sector_rs_threshold", SECTOR_RS_THRESHOLD_DEFAULT))
+    return enabled, threshold
 
 
 def _closes(history: list[dict] | None) -> list[float]:
@@ -65,13 +85,15 @@ def _return_pct(closes: list[float], lookback: int) -> float | None:
     return (latest - past) / past * 100.0
 
 
-def classify_leadership(sector_rs: float | None) -> str | None:
+def classify_leadership(
+    sector_rs: float | None, threshold: float = SECTOR_RS_THRESHOLD_DEFAULT
+) -> str | None:
     """leading / lagging / inline, or None when sector_rs is unavailable."""
     if sector_rs is None:
         return None
-    if sector_rs >= SECTOR_RS_LEADING:
+    if sector_rs >= threshold:
         return "leading"
-    if sector_rs <= SECTOR_RS_LAGGING:
+    if sector_rs <= -threshold:
         return "lagging"
     return "inline"
 
@@ -81,6 +103,7 @@ def compute_sector_rs(
     sectors,
     lookback: int = 63,
     spy_history: list[dict] | None = None,
+    threshold: float = SECTOR_RS_THRESHOLD_DEFAULT,
 ) -> dict[str, dict]:
     """Map each sector name to its leadership vs SPY over `lookback` sessions.
 
@@ -112,5 +135,9 @@ def compute_sector_rs(
             out[sector] = {"etf": etf, "sector_rs": None, "leadership": None}
             continue
         rs = round(sector_ret - spy_ret, 2)
-        out[sector] = {"etf": etf, "sector_rs": rs, "leadership": classify_leadership(rs)}
+        out[sector] = {
+            "etf": etf,
+            "sector_rs": rs,
+            "leadership": classify_leadership(rs, threshold),
+        }
     return out

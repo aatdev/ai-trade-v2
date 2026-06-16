@@ -85,7 +85,10 @@ single-day pop ≥ 10% in the last 10 sessions, or price ≥ 15% above its 20-se
 low), **or** shorting into a leading sector (its SPDR ETF outperforming SPY by
 ≥ 5% over ~3 months — don't fight a strong group). All three are price-action
 only (no short-interest feed); flags carried: `squeeze_risk` / `squeeze_reason`
-and `sector_fight` / `sector_etf` / `sector_rs` / `sector_leadership`.
+and `sector_fight` / `sector_etf` / `sector_rs` / `sector_leadership`. The sector
+cap is toggled by `sector_rs_gate` (1/0) and tuned by `sector_rs_threshold`
+(default 5pp) in the trading profile; `--sector-rs-gate` / `--sector-rs-threshold`
+override per run.
 
 ### Step 3: Present the Watchlist
 

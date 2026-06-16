@@ -91,3 +91,34 @@ def test_etf_fetched_once_per_sector_set():
         client, ["Information Technology", "Technology"], lookback=63
     )  # both → XLK
     assert client.calls.count("XLK") == 1  # cached across duplicate ETF
+
+
+def test_gate_settings_default_on():
+    enabled, threshold = ss.gate_settings(None)
+    assert enabled is True
+    assert threshold == 5.0
+
+
+def test_gate_settings_profile_off():
+    enabled, _ = ss.gate_settings({"sector_rs_gate": 0})
+    assert enabled is False
+
+
+def test_gate_settings_profile_threshold():
+    enabled, threshold = ss.gate_settings({"sector_rs_gate": 1, "sector_rs_threshold": 8.0})
+    assert enabled is True
+    assert threshold == 8.0
+
+
+def test_gate_settings_cli_overrides_profile():
+    enabled, threshold = ss.gate_settings(
+        {"sector_rs_gate": 1, "sector_rs_threshold": 5.0}, cli_gate=0, cli_threshold=10.0
+    )
+    assert enabled is False
+    assert threshold == 10.0
+
+
+def test_threshold_changes_classification():
+    # rs = +6pp: leading at a 5pp threshold, only inline at an 8pp threshold.
+    assert ss.classify_leadership(6.0, threshold=5.0) == "leading"
+    assert ss.classify_leadership(6.0, threshold=8.0) == "inline"

@@ -314,6 +314,10 @@ export function mapScreenerCandidate(cIn: Record<string, unknown>): ScreenerCand
     stop: numOrNull(tp.stop_loss_price ?? tl.stop),
     target: numOrNull(tp.target_price ?? tl.target_2r ?? tl.target),
     metrics,
+    sector_etf: strOrNull(c.sector_etf),
+    sector_rs: numOrNull(c.sector_rs),
+    sector_leadership: strOrNull(c.sector_leadership),
+    sector_fight: typeof c.sector_fight === 'boolean' ? c.sector_fight : null,
   };
 }
 

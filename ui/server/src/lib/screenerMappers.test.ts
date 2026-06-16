@@ -31,6 +31,9 @@ function makeResult(overrides: Record<string, unknown> = {}): Record<string, unk
     relative_strength: { score: 90, rs_percentile: 92, weighted_rs: 50, period_details: [
       { period_days: 63, weight: 0.4, relative_pct: 30 },
     ] },
+    sector_etf: 'XLK',
+    sector_rs: 2.0,
+    sector_leadership: 'inline',
     ...overrides,
   };
 }
@@ -142,11 +145,19 @@ describe('mapStagedScreener', () => {
 /* ---------------- computeChecklist ---------------- */
 
 describe('computeChecklist', () => {
-  it('all 8 points pass for a clean candidate with a passing plan', () => {
+  it('all 9 points pass for a clean candidate with a passing plan', () => {
     const cl = checklistFor(makeResult(), planWith(order()));
     expect(cl.allPass).toBe(true);
-    expect(cl.knownPass).toBe(8);
-    expect(cl.total).toBe(8);
+    expect(cl.knownPass).toBe(9);
+    expect(cl.total).toBe(9);
+  });
+
+  it('sector fails when the candidate is in a lagging sector', () => {
+    const cl = checklistFor(
+      makeResult({ sector_etf: 'XLV', sector_rs: -9, sector_leadership: 'lagging' }),
+      null,
+    );
+    expect(cl.points.find((p) => p.key === 'sector')?.state).toBe('fail');
   });
 
   it('marks earnings + heat unknown when no plan is built', () => {
@@ -155,6 +166,7 @@ describe('computeChecklist', () => {
     expect(by.earnings).toBe('unknown');
     expect(by.fundamental).toBe('unknown');
     expect(by.heat).toBe('unknown');
+    expect(by.sector).toBe('pass'); // sector RS resolves from the screener row alone
     expect(by.gate).toBe('pass'); // gate/ma/rs/liquidity/base still resolve from screener alone
     expect(by.ma_chain).toBe('pass');
     expect(cl.allPass).toBe(false);

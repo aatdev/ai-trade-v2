@@ -9,5 +9,7 @@
   "earnings_gate_days": 10,
   "time_stop_trading_days": 15,
   "atr_multiplier": 2.0,
-  "fundamental_gate": 1
+  "fundamental_gate": 1,
+  "sector_rs_gate": 1,
+  "sector_rs_threshold": 5.0
 }

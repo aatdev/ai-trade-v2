@@ -79,6 +79,8 @@ KNOWN_PROFILE_KEYS = {
     "time_stop_trading_days",
     "atr_multiplier",
     "fundamental_gate",
+    "sector_rs_gate",
+    "sector_rs_threshold",
 }
 
 PLANNER_PROFILE_KEYS = {
