@@ -699,7 +699,7 @@ def _extract_records(data: dict | list, source: str) -> list[dict]:
 
 # -- CLI entry point ----------------------------------------------------------
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -727,7 +727,7 @@ if __name__ == "__main__":
         default=None,
         help="Path to write {TICKER: thesis_id} JSON mapping after registration",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     ids = ingest(
         args.source,
@@ -739,6 +739,25 @@ if __name__ == "__main__":
     )
     if ids:
         print(f"Registered {len(ids)} thesis(es): {', '.join(ids)}")
-    else:
-        print("No theses registered.")
-        sys.exit(1)
+        return 0
+
+    # 0 theses registered. An empty watchlist filter is a legitimate no-op —
+    # no candidates passed screening that day, so there is simply nothing to
+    # ingest. That is success, not failure. Reserve a non-zero exit for the
+    # genuine mismatch: the watchlist DID carry candidates but none of them
+    # matched a registerable record in the input.
+    expected: set[str] | None = None
+    if args.watchlist_filter:
+        try:
+            expected = _watchlist_tickers(args.watchlist_filter)
+        except (OSError, ValueError):
+            expected = None
+    if expected:
+        print("No theses registered: watchlist had candidates but none matched the input.")
+        return 1
+    print("No theses registered (no candidates to ingest).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

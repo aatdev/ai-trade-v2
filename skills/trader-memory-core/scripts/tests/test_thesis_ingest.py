@@ -867,3 +867,45 @@ def test_repeat_ticker_creates_new_thesis_after_closed(tmp_path: Path):
     assert len(ids2) == 1
     # New thesis created because the previous cycle is CLOSED
     assert ids1[0] != ids2[0]
+
+
+# -- Tests: main() CLI exit codes ----------------------------------------------
+
+
+def _main_args(input_file: str, state_dir: Path, wl: str) -> list[str]:
+    return [
+        "--source", "vcp-screener",
+        "--input", input_file,
+        "--state-dir", str(state_dir),
+        "--watchlist-filter", wl,
+    ]
+
+
+def test_main_empty_watchlist_exits_zero(tmp_path: Path):
+    """An empty watchlist (no candidates passed screening that day) is a
+    legitimate no-op, not an error — main() must return 0, not 1."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _vcp_record("PLTR", "2026-06-15"), "vcp.json")
+    wl = _write_json(tmp_path, {"candidates": []}, "wl.json")
+
+    assert thesis_ingest.main(_main_args(input_file, state_dir, wl)) == 0
+
+
+def test_main_watchlist_mismatch_exits_one(tmp_path: Path):
+    """Watchlist HAS candidates but none match a registerable input record →
+    genuine mismatch; main() must return 1 so it is not masked as a no-op."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _vcp_record("PLTR", "2026-06-15"), "vcp.json")
+    wl = _write_json(tmp_path, {"candidates": [{"ticker": "AAPL"}]}, "wl.json")
+
+    assert thesis_ingest.main(_main_args(input_file, state_dir, wl)) == 1
+
+
+def test_main_registers_candidate_exits_zero(tmp_path: Path):
+    """Watchlist candidate matches the input → thesis registered, rc 0."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _vcp_record("PLTR", "2026-06-15"), "vcp.json")
+    wl = _write_json(tmp_path, {"candidates": [{"ticker": "PLTR"}]}, "wl.json")
+
+    assert thesis_ingest.main(_main_args(input_file, state_dir, wl)) == 0
+    assert len(thesis_store.query(state_dir, ticker="PLTR")) == 1
