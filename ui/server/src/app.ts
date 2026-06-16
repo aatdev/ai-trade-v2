@@ -7,6 +7,7 @@ import { actionsRouter } from './routes/actions';
 import { docsRouter } from './routes/docs';
 import { ibRouter } from './routes/ib';
 import { ohlcvRouter } from './routes/ohlcv';
+import { screenerRouter } from './routes/screener';
 import { stateRouter } from './routes/state';
 import { tickerRouter } from './routes/ticker';
 import { watchlistRouter } from './routes/watchlist';
@@ -40,6 +41,7 @@ export function createApp(opts: AppOptions): Express {
   app.use('/api', ibRouter(opts.projectRoot));
   app.use('/api', ohlcvRouter());
   app.use('/api', actionsRouter(opts.projectRoot, opts.dataDir, jobs));
+  app.use('/api', screenerRouter(opts.projectRoot, opts.dataDir, jobs));
 
   // Production: serve the built SPA and fall back to index.html for routes.
   const dist = opts.clientDist ?? path.resolve(__dirname, '..', '..', 'client', 'dist');

@@ -18,8 +18,12 @@ import type {
   MemoryResponse,
   OhlcvResponse,
   PortfolioHeat,
+  SaveWatchlistRequest,
+  ScreenerPlanRequest,
+  ScreenerRunRequest,
   ScreenersResponse,
   SignalsResponse,
+  StagedScreenerResponse,
   SkillDocResponse,
   Sourced,
   StartJobResponse,
@@ -198,6 +202,33 @@ export const useScreeners = (
       ),
     refetchInterval,
   });
+
+/* ---------------- interactive screener ("Скринер" tab) ---------------- */
+
+export interface StagedSources {
+  vcp?: string | null;
+  plan?: string | null;
+}
+
+/** Latest (or pinned) staged VCP run + plan + gate/heat context, with the 5.3 checklist. */
+export const useStagedScreener = (sources: StagedSources = {}, refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['stagedScreener', sources.vcp, sources.plan],
+    queryFn: () =>
+      getJSON<StagedScreenerResponse>(
+        `/api/screener/staged${qs({ vcpSource: sources.vcp, planSource: sources.plan })}`,
+      ),
+    refetchInterval,
+  });
+
+export const runScreener = (body: ScreenerRunRequest) =>
+  postJSON<StartJobResponse>('/api/screener/run', body);
+
+export const runScreenerPlan = (body: ScreenerPlanRequest = {}) =>
+  postJSON<StartJobResponse>('/api/screener/plan', body);
+
+export const saveWatchlist = (body: SaveWatchlistRequest) =>
+  postJSON<StartJobResponse>('/api/screener/save-watchlist', body);
 
 export const useTheses = (refetchInterval: Refetch = false) =>
   useQuery({ queryKey: ['theses'], queryFn: () => getJSON<ThesesResponse>('/api/theses'), refetchInterval });

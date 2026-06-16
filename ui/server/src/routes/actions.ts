@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { ANALYZE_MODEL, ANALYZE_TIMEOUT_SEC, resolveMcpConfigPath } from '../config';
 import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
 import { buildAnalyzeTickerArgs } from '../lib/analyzeTicker';
+import { resolvePythonBin, startAndRespond as startJob } from '../lib/jobActions';
 import { getTheses } from '../lib/mappers';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
@@ -19,36 +20,15 @@ function resolveClaudeBin(): string {
   return process.env.CLAUDE_BIN || 'claude-p';
 }
 
-function resolvePythonBin(): string {
-  return process.env.PYTHON_BIN || 'python3';
-}
-
 export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobManager): Router {
   const r = Router();
 
-  function startAndRespond(
+  // Local alias so the route bodies keep calling startAndRespond(res, opts);
+  // the shared helper takes the JobManager explicitly (see lib/jobActions.ts).
+  const startAndRespond = (
     res: import('express').Response,
     opts: Parameters<JobManager['start']>[0],
-  ): void {
-    const result = jobs.start(opts);
-    if (result.busy) {
-      const body: StartJobResponse = { ok: false, busy: true, activeJobId: result.activeJobId };
-      res.status(409).json(body);
-      return;
-    }
-    const body: StartJobResponse = {
-      ok: true,
-      job: {
-        id: result.job.id,
-        label: result.job.label,
-        status: result.job.status,
-        startedAt: result.job.startedAt,
-        endedAt: result.job.endedAt,
-        exitCode: result.job.exitCode,
-      },
-    };
-    res.json(body);
-  }
+  ) => startJob(res, jobs, opts);
 
   r.post('/actions/run-slot', (req, res) => {
     const slot = req.body?.slot as SchedulerSlot;

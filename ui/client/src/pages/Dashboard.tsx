@@ -10,16 +10,18 @@ import IbTab from '../components/IbTab';
 import PositionsCard from '../components/PositionsCard';
 import RegimeCard from '../components/RegimeCard';
 import ScreenersCard from '../components/ScreenersCard';
+import ScreenerTab from '../components/ScreenerTab';
 import SignalsFeed from '../components/SignalsFeed';
 import ThemeToggle from '../components/ThemeToggle';
 import DocsModal from '../components/DocsModal';
 import TraderMemoryCard from '../components/TraderMemoryCard';
 import WatchlistCard from '../components/WatchlistCard';
 
-type Tab = 'overview' | 'signals' | 'analyses' | 'memory' | 'ib';
+type Tab = 'overview' | 'screener' | 'signals' | 'analyses' | 'memory' | 'ib';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Обзор' },
+  { key: 'screener', label: 'Скринер' },
   { key: 'signals', label: 'Сигналы' },
   { key: 'analyses', label: 'Анализы' },
   { key: 'memory', label: 'Память' },
@@ -106,6 +108,8 @@ export default function Dashboard() {
           </div>
         </>
       ) : null}
+
+      {tab === 'screener' ? <ScreenerTab date={date} refetch={refetch} /> : null}
 
       {tab === 'signals' ? (
         <div className="grid">

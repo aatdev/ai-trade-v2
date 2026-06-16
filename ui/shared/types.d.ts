@@ -352,6 +352,232 @@ export interface ScreenersResponse {
   swingShort: Sourced<ScreenerResult>;
 }
 
+/* ---------------- Screener staging (interactive "Скринер" tab) ----------------
+ * Rich, un-normalized view of a STAGED VCP run (not yet registered). These read
+ * the VCP screener's native `results[]` shape directly (see scorer.py /
+ * calculators/) so the UI can show how each composite score was computed and run
+ * the 7-point "take / no-take" checklist before the user commits to a watchlist.
+ */
+
+export interface VcpTrendCriterion {
+  passed: boolean;
+  detail: string | null;
+}
+export interface VcpTrendTemplate {
+  score: number | null;
+  raw_score: number | null;
+  passed: boolean | null;
+  sma50: number | null;
+  sma150: number | null;
+  sma200: number | null;
+  sma50_distance_pct: number | null;
+  criteria_passed: number | null;
+  criteria_total: number | null;
+  criteria: Record<string, VcpTrendCriterion>;
+}
+export interface VcpContraction {
+  label: string | null;
+  depth_pct: number | null;
+  duration_days: number | null;
+  low_price: number | null;
+  high_price: number | null;
+}
+export interface VcpPattern {
+  score: number | null;
+  valid_vcp: boolean | null;
+  num_contractions: number | null;
+  pivot_price: number | null;
+  pattern_duration_days: number | null;
+  contractions: VcpContraction[];
+  contraction_ratios: number[];
+}
+export interface VcpVolumePattern {
+  score: number | null;
+  dry_up_ratio: number | null;
+  avg_volume_50d: number | null;
+  breakout_volume_detected: boolean | null;
+}
+export interface VcpPivotProximity {
+  score: number | null;
+  distance_from_pivot_pct: number | null;
+  pivot_price: number | null;
+  stop_loss_price: number | null;
+  risk_pct: number | null;
+  trade_status: string | null;
+}
+export interface VcpRsPeriod {
+  period_days: number | null;
+  weight: number | null;
+  relative_pct: number | null;
+}
+export interface VcpRelativeStrength {
+  score: number | null;
+  rs_rank_estimate: number | null;
+  rs_percentile: number | null;
+  weighted_rs: number | null;
+  period_details: VcpRsPeriod[];
+}
+
+/** The five weighted composite components (weights sum to 1.0). */
+export interface VcpComponents {
+  trend_template: VcpTrendTemplate;
+  vcp_pattern: VcpPattern;
+  volume_pattern: VcpVolumePattern;
+  pivot_proximity: VcpPivotProximity;
+  relative_strength: VcpRelativeStrength;
+}
+
+/** Fixed composite weights (mirror scorer.COMPONENT_WEIGHTS). */
+export type VcpComponentKey = keyof VcpComponents;
+
+/** A single 5.3-checklist line. `unknown` ⇒ not yet determinable (e.g. needs a plan). */
+export type CheckState = 'pass' | 'fail' | 'unknown';
+export interface ChecklistPoint {
+  key: string;
+  label: string;
+  state: CheckState;
+  detail: string | null;
+}
+export interface ChecklistResult {
+  points: ChecklistPoint[];
+  allPass: boolean; // every point === 'pass'
+  knownPass: number; // count of state === 'pass'
+  total: number; // points.length (7)
+}
+
+/** A breakout-plan order flattened (trade_plan + earnings) for one symbol. */
+export interface StagedPlanOrder {
+  symbol: string;
+  plan_type: string | null;
+  decision_code: string | null;
+  decision_reason: string | null;
+  signal_entry: number | null;
+  worst_entry: number | null;
+  stop_loss_price: number | null;
+  target_price: number | null;
+  shares: number | null;
+  risk_dollars: number | null;
+  risk_pct_worst: number | null;
+  cumulative_risk_pct: number | null;
+  reward_risk_ratio: number | null;
+  earnings_date: string | null;
+  days_to_earnings: number | null;
+  earnings_gate: string | null; // pass | blocked | unknown
+}
+
+/** A rejected/deferred/constrained/blocked candidate (symbol + human reason). */
+export interface StagedPlanReject {
+  symbol: string;
+  reason: string | null;
+}
+
+export interface StagedPlanSummary {
+  actionable_count: number | null;
+  revalidation_count: number | null;
+  watchlist_count: number | null;
+  rejected_count: number | null;
+  deferred_count: number | null;
+  constrained_count: number | null;
+  blocked_earnings_count: number | null;
+  total_risk_pct: number | null;
+}
+
+export interface StagedPlan {
+  generated_at: string | null;
+  summary: StagedPlanSummary;
+  actionable: StagedPlanOrder[];
+  revalidation: StagedPlanOrder[];
+  rejected: StagedPlanReject[];
+  blocked_earnings: StagedPlanReject[];
+  deferred: StagedPlanReject[];
+  constrained: StagedPlanReject[];
+}
+
+export interface StagedScreenerCandidate {
+  symbol: string;
+  sector: string | null;
+  price: number | null;
+  composite_score: number | null;
+  rating: string | null; // post-cap rating (e.g. "Strong VCP")
+  quality_rating: string | null; // pre-cap structural rating
+  execution_state: string | null;
+  execution_state_reasons: string[];
+  valid_vcp: boolean | null;
+  entry_ready: boolean | null;
+  state_cap_applied: boolean | null;
+  cap_reason: string | null;
+  weakest_component: string | null;
+  strongest_component: string | null;
+  components: VcpComponents;
+  /** Joined breakout-plan order for this symbol (null until a plan is built). */
+  plan: StagedPlanOrder | null;
+  checklist: ChecklistResult;
+}
+
+export interface StagedScreenerMeta {
+  generated_at: string | null;
+  universe_description: string | null;
+  funnel: Record<string, number>;
+  total: number | null; // summary.total (all passing candidates)
+}
+
+export interface StagedScreener {
+  source: string | null; // staged filename
+  meta: StagedScreenerMeta;
+  candidates: StagedScreenerCandidate[]; // top 100 by composite_score
+}
+
+/** Availability of the optional NASDAQ+NYSE universe (scripts/lib/data/vcp_universe.txt). */
+export interface WideUniverseInfo {
+  available: boolean;
+  count: number;
+}
+
+/** GET /api/screener/staged — the latest staged VCP run + plan + gate/heat context. */
+export interface StagedScreenerResponse {
+  screener: StagedScreener | null;
+  planSource: string | null; // staged plan filename
+  plan: StagedPlan | null;
+  gate: Sourced<ExposureGate>;
+  heat: Sourced<PortfolioHeat>;
+  /** Whether the wide universe file exists — the form defaults to it like evening-prep. */
+  wideUniverse: WideUniverseInfo;
+  notes: string[];
+}
+
+export type ScreenerUniverse = 'sp500' | 'wide' | 'custom';
+export type ScreenerMode = 'all' | 'prebreakout';
+
+/** POST /api/screener/run body (server validates ranges; all fields optional). */
+export interface ScreenerRunRequest {
+  universe: ScreenerUniverse;
+  symbols?: string[]; // required when universe === 'custom'
+  maxCandidates?: number;
+  minAtrPct?: number;
+  trendMinScore?: number;
+  breakoutVolumeRatio?: number;
+  minContractions?: number;
+  extThreshold?: number;
+  mode?: ScreenerMode;
+  strict?: boolean;
+}
+
+/** POST /api/screener/plan body. */
+export interface ScreenerPlanRequest {
+  vcpFile?: string; // pin a specific staged screener (basename); else newest
+  earningsGateDays?: number;
+}
+
+export type SaveWatchlistMode = 'plain' | 'full';
+
+/** POST /api/screener/save-watchlist body. */
+export interface SaveWatchlistRequest {
+  mode: SaveWatchlistMode;
+  vcpFile?: string;
+  planFile?: string;
+  date?: string; // YYYY-MM-DD; defaults to server today
+}
+
 /* ---------------- Theses ---------------- */
 
 export interface ThesisIndexEntry {

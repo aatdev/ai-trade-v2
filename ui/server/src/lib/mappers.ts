@@ -21,16 +21,16 @@ import type {
 
 /* ---------------- small coercion helpers ---------------- */
 
-function numOrNull(v: unknown): number | null {
+export function numOrNull(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
-function strOrNull(v: unknown): string | null {
+export function strOrNull(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
-function asArray<T = unknown>(v: unknown): T[] {
+export function asArray<T = unknown>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
 }
-function asRecord(v: unknown): Record<string, unknown> {
+export function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
@@ -53,6 +53,7 @@ export const RE = {
   top: /^market_top_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   macro: /^macro_regime_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   vcp: /^vcp_screener_\d{4}-\d{2}-\d{2}_\d+\.json$/,
+  plan: /^breakout_trade_plan_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   swingShort: /^swing_short_screener_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   weeklyReview: /^weekly_review_\d{4}-\d{2}-\d{2}\.json$/,
   monthlyReview: /^monthly_review_\d{4}-\d{2}-\d{2}\.json$/,

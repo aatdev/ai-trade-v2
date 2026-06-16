@@ -299,6 +299,28 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .field-inline > span { font-size: 11px; letter-spacing: 0.02em; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+/* ---------- screener param form ---------- */
+.screener-form { display: flex; flex-direction: column; gap: 16px; margin-bottom: 14px; }
+.screener-form-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+.screener-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(146px, 1fr)); gap: 10px 14px; }
+.screener-section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--src); margin-bottom: 8px; }
+.ff { display: flex; flex-direction: column; gap: 4px; min-width: 130px; }
+.ff > .ff-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+/* Lift form controls onto a lighter surface so they don't blend into the card. */
+.ff > input, .ff > select { width: 100%; background: var(--bg-elev2); }
+.ff > textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-elev2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  resize: vertical;
+}
+.ff > textarea:focus, .ff > input:focus, .ff > select:focus { outline: none; border-color: var(--accent); }
+.ff > .ff-range { color: var(--src); font-size: 10px; font-family: var(--mono); }
+
 /* ---------- misc ---------- */
 .muted { color: var(--muted); }
 .empty { color: var(--muted); padding: 16px 0; text-align: center; }
