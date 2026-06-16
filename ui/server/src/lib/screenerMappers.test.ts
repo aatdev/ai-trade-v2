@@ -79,6 +79,11 @@ const order = (over: Partial<StagedPlanOrder> = {}): StagedPlanOrder => ({
   earnings_date: '2026-08-01',
   days_to_earnings: 33,
   earnings_gate: 'pass',
+  fundamental_gate: 'pass',
+  eps_growth_yoy: 22,
+  revenue_growth_yoy: 16,
+  c_score: 60,
+  a_score: 70,
   ...over,
 });
 
@@ -137,17 +142,18 @@ describe('mapStagedScreener', () => {
 /* ---------------- computeChecklist ---------------- */
 
 describe('computeChecklist', () => {
-  it('all 7 points pass for a clean candidate with a passing plan', () => {
+  it('all 8 points pass for a clean candidate with a passing plan', () => {
     const cl = checklistFor(makeResult(), planWith(order()));
     expect(cl.allPass).toBe(true);
-    expect(cl.knownPass).toBe(7);
-    expect(cl.total).toBe(7);
+    expect(cl.knownPass).toBe(8);
+    expect(cl.total).toBe(8);
   });
 
   it('marks earnings + heat unknown when no plan is built', () => {
     const cl = checklistFor(makeResult(), null);
     const by = Object.fromEntries(cl.points.map((p) => [p.key, p.state]));
     expect(by.earnings).toBe('unknown');
+    expect(by.fundamental).toBe('unknown');
     expect(by.heat).toBe('unknown');
     expect(by.gate).toBe('pass'); // gate/ma/rs/liquidity/base still resolve from screener alone
     expect(by.ma_chain).toBe('pass');
@@ -205,6 +211,14 @@ describe('computeChecklist', () => {
   it('earnings fails when the plan gate is blocked', () => {
     const cl = checklistFor(makeResult(), planWith(order({ earnings_gate: 'blocked', days_to_earnings: 3 })));
     expect(cl.points.find((p) => p.key === 'earnings')?.state).toBe('fail');
+  });
+
+  it('fundamental fails when the plan gate is blocked', () => {
+    const cl = checklistFor(
+      makeResult(),
+      planWith(order({ fundamental_gate: 'blocked', eps_growth_yoy: -16, revenue_growth_yoy: -5 })),
+    );
+    expect(cl.points.find((p) => p.key === 'fundamental')?.state).toBe('fail');
   });
 
   it('heat fails when cumulative risk exceeds the ceiling', () => {

@@ -113,7 +113,7 @@ steps:
     decision_gate: false
 
   - step: 6
-    name: Build entry plan
+    name: Build entry plan (with soft fundamental quality-floor)
     skill: breakout-trade-planner
     optional: true
     consumes:

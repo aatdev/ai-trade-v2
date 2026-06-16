@@ -33,7 +33,7 @@ keeps these anchored to the US open/close through the DST transition weeks):
                             autopilot; each signal is sent to Telegram once a day.
   evening-prep  ~22:15      AUTO MODE (hybrid). Full regime via claude, then the
                             deterministic pipeline: vcp-screener -> portfolio
-                            heat -> breakout-trade-planner -> claude chart
+                            heat -> breakout-trade-planner (+ fundamental floor) -> claude chart
                             validation of the top candidates -> watchlist with
                             exact entry/stop/target/shares + thesis ingest.
                             Under restrict/cash-priority the short branch runs

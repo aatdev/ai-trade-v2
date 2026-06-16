@@ -159,6 +159,11 @@ function mapActionableOrder(raw: Record<string, unknown>): StagedPlanOrder {
     earnings_date: strOrNull(raw.earnings_date),
     days_to_earnings: numOrNull(raw.days_to_earnings),
     earnings_gate: strOrNull(raw.earnings_gate),
+    fundamental_gate: strOrNull(raw.fundamental_gate),
+    eps_growth_yoy: numOrNull(raw.eps_growth_yoy),
+    revenue_growth_yoy: numOrNull(raw.revenue_growth_yoy),
+    c_score: numOrNull(raw.c_score),
+    a_score: numOrNull(raw.a_score),
   };
 }
 
@@ -181,6 +186,11 @@ function mapRevalidationOrder(raw: Record<string, unknown>): StagedPlanOrder {
     earnings_date: strOrNull(raw.earnings_date),
     days_to_earnings: numOrNull(raw.days_to_earnings),
     earnings_gate: strOrNull(raw.earnings_gate),
+    fundamental_gate: strOrNull(raw.fundamental_gate),
+    eps_growth_yoy: numOrNull(raw.eps_growth_yoy),
+    revenue_growth_yoy: numOrNull(raw.revenue_growth_yoy),
+    c_score: numOrNull(raw.c_score),
+    a_score: numOrNull(raw.a_score),
   };
 }
 
@@ -234,7 +244,7 @@ const pt = (key: string, label: string, state: ChecklistPoint['state'], detail: 
 });
 
 /**
- * The 7-point "take / no-take" checklist (trading-plan.md §5.3). Tri-state:
+ * The 8-point "take / no-take" checklist (trading-plan.md §5.3). Tri-state:
  * `unknown` means not yet determinable (missing data, or a point that only a
  * built plan can answer) — never silently rendered as a pass.
  */
@@ -330,6 +340,23 @@ export function computeChecklist(
       pt('heat', 'После сделки: heat ≤ 6%, позиций ≤ 6', ok ? 'pass' : 'fail',
         `heat ~${newRisk.toFixed(1)}% / ${ceil}%, позиций ${newPos}/${maxPos}`),
     );
+  }
+
+  // 8. fundamental quality-floor (needs a plan run with the fundamental gate)
+  const fLabel = 'Фунд. флор: EPS ≥ 0, EPS+выручка не падают вместе';
+  const fgPct = (x: number | null) => (x == null ? 'n/a' : `${x >= 0 ? '+' : ''}${x.toFixed(0)}%`);
+  const fgDetail =
+    plan && plan.eps_growth_yoy != null
+      ? `EPS ${fgPct(plan.eps_growth_yoy)} / выручка ${fgPct(plan.revenue_growth_yoy)} YoY (C${plan.c_score ?? '–'}/A${plan.a_score ?? '–'})`
+      : 'фундаментал учтён';
+  if (!plan || plan.fundamental_gate == null) {
+    points.push(pt('fundamental', fLabel, 'unknown', 'построй план (fundamental-гейт)'));
+  } else if (plan.fundamental_gate === 'pass') {
+    points.push(pt('fundamental', fLabel, 'pass', fgDetail));
+  } else if (plan.fundamental_gate === 'blocked') {
+    points.push(pt('fundamental', fLabel, 'fail', fgDetail));
+  } else {
+    points.push(pt('fundamental', fLabel, 'unknown', 'фундаментал недоступен'));
   }
 
   const knownPass = points.filter((p) => p.state === 'pass').length;

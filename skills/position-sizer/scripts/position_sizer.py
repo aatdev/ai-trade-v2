@@ -32,6 +32,7 @@ KNOWN_PROFILE_KEYS = {
     "earnings_gate_days",
     "time_stop_trading_days",
     "atr_multiplier",
+    "fundamental_gate",
 }
 
 SIZER_PROFILE_KEYS = {

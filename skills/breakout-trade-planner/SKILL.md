@@ -56,7 +56,8 @@ Read the generated JSON and Markdown reports. Present:
 2. **Revalidation** — Breakout-state candidates needing live confirmation
 3. **Watchlist** — Developing VCP candidates to monitor
 4. **Blocked (earnings gate)** — Plans suppressed because earnings are within the gate window
-5. **Rejected/Deferred/Constrained** — Candidates filtered by Gate or portfolio limits
+5. **Blocked (fundamental floor)** — Plans suppressed: latest quarter unprofitable, or EPS and revenue both shrinking YoY
+6. **Rejected/Deferred/Constrained** — Candidates filtered by Gate or portfolio limits
 ### Step 3: Explain Trade Plans
 
 For each actionable order, explain:
@@ -94,6 +95,7 @@ Candidates must pass ALL conditions:
 | --max-chase-pct | 2.0 | Max chase above pivot |
 | --pivot-buffer-pct | 0.1 | Pivot buffer for buy-stop trigger |
 | --earnings-gate-days | 0 (off) | Block plans with earnings within N trading days (public TradingView scanner; no key) |
+| --fundamental-gate | 0 (off) | Soft quality-floor on longs: drop negative latest-quarter EPS or both EPS & revenue shrinking YoY; annotate the rest with CANSLIM C/A (TradingView fundamentals; no key) |
 | --time-stop-trading-days | 0 (off) | Annotate plans: exit if < +1R after N trading days from entry |
 | --current-exposure-json | None | Existing portfolio exposure (e.g. trader-memory-core `heat` output) |
 
@@ -110,6 +112,23 @@ section and never consume portfolio heat. If the scanner is unreachable, plans
 stay live with `earnings_gate: "unknown"` and an `EARNINGS_GATE_DEGRADED`
 warning — verify dates manually before entry.
 
+## Fundamental Gate
+
+With `--fundamental-gate 1`, the planner pulls quarterly and annual income
+statements from the shared TradingView data layer (no API key) and computes the
+CANSLIM C (quarterly EPS/revenue growth) and A (annual EPS CAGR) components. A
+**soft quality-floor** drops a long only on clear deterioration — the latest
+quarter EPS is negative, or BOTH EPS and revenue are shrinking year-over-year;
+everything else is kept and annotated with `fundamental_gate`
+(`pass`/`blocked`/`unknown`), `c_score`, `a_score`, `eps_growth_yoy`, and
+`revenue_growth_yoy`. Ranking and sizing stay driven by the VCP composite score
+— the floor never reshapes them. Blocked actionable / revalidation plans move to
+the `blocked_fundamental` section and never consume heat. Missing data fails
+open (`unknown`); a total fetch failure emits a `FUNDAMENTAL_GATE_DEGRADED`
+warning. The floor is intentionally lighter than the full canslim-screener,
+which a wide S&P 500 universe of quality leaders would fail on O'Neil's 18%/25%
+momentum thresholds.
+
 ## Parameter Profile
 
 `--profile` (or `$TRADING_PROFILE`) points at a JSON file of personal defaults
@@ -118,7 +137,7 @@ root; copy to a gitignored `trading_profile.json`). Recognized keys here:
 `account_size`, `risk_pct`, `max_position_pct`, `max_sector_pct`,
 `max_portfolio_heat_pct`, `target_r_multiple`, `stop_buffer_pct`,
 `max_chase_pct`, `pivot_buffer_pct`, `earnings_gate_days`,
-`time_stop_trading_days`. Keys used by sibling scripts (e.g. `atr_multiplier`,
+`time_stop_trading_days`, `fundamental_gate`. Keys used by sibling scripts (e.g. `atr_multiplier`,
 `max_positions`) are skipped silently; unknown keys warn to stderr.
 
 ## Output

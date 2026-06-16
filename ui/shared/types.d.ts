@@ -371,7 +371,7 @@ export interface ScreenersResponse {
  * Rich, un-normalized view of a STAGED VCP run (not yet registered). These read
  * the VCP screener's native `results[]` shape directly (see scorer.py /
  * calculators/) so the UI can show how each composite score was computed and run
- * the 7-point "take / no-take" checklist before the user commits to a watchlist.
+ * the 8-point "take / no-take" checklist before the user commits to a watchlist.
  */
 
 export interface VcpTrendCriterion {
@@ -457,7 +457,7 @@ export interface ChecklistResult {
   points: ChecklistPoint[];
   allPass: boolean; // every point === 'pass'
   knownPass: number; // count of state === 'pass'
-  total: number; // points.length (7)
+  total: number; // points.length (8)
 }
 
 /** A breakout-plan order flattened (trade_plan + earnings) for one symbol. */
@@ -478,6 +478,11 @@ export interface StagedPlanOrder {
   earnings_date: string | null;
   days_to_earnings: number | null;
   earnings_gate: string | null; // pass | blocked | unknown
+  fundamental_gate: string | null; // pass | blocked | unknown
+  eps_growth_yoy: number | null;
+  revenue_growth_yoy: number | null;
+  c_score: number | null; // CANSLIM C component (quarterly EPS/revenue growth)
+  a_score: number | null; // CANSLIM A component (annual EPS CAGR)
 }
 
 /** A rejected/deferred/constrained/blocked candidate (symbol + human reason). */

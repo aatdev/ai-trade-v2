@@ -472,7 +472,7 @@ Operational workflow manifests for the solo-trader OS. Each workflow names the e
 - consumes: `validated_setups`
 - produces: `position_sizing`
 
-**Step 6: Build entry plan** (optional) → `breakout-trade-planner`
+**Step 6: Build entry plan (with soft fundamental quality-floor)** (optional) → `breakout-trade-planner`
 
 - consumes: `validated_setups`, `position_sizing`
 - produces: `trade_plans`

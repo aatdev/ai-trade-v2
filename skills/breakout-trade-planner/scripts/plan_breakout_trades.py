@@ -28,6 +28,14 @@ from earnings_gate import (
     build_gate_fields,
     fetch_earnings_map,
 )
+from fundamental_gate import (
+    GATE_BLOCKED as FUND_BLOCKED,
+)
+from fundamental_gate import (
+    FundamentalFetchError,
+    build_fundamental_fields,
+    fetch_fundamentals_map,
+)
 from order_builder import (
     build_entry_condition,
     build_ib_post_confirm_template,
@@ -70,6 +78,7 @@ KNOWN_PROFILE_KEYS = {
     "earnings_gate_days",
     "time_stop_trading_days",
     "atr_multiplier",
+    "fundamental_gate",
 }
 
 PLANNER_PROFILE_KEYS = {
@@ -84,6 +93,7 @@ PLANNER_PROFILE_KEYS = {
     "pivot_buffer_pct",
     "earnings_gate_days",
     "time_stop_trading_days",
+    "fundamental_gate",
 }
 
 
@@ -346,8 +356,12 @@ def process_candidate(
 
         if plan_eligible:
             advisory = build_revalidation_advisory(
-                symbol, pivot, current_price, worst_entry,
-                stop_loss=stop_loss, target_price=tp_worst,
+                symbol,
+                pivot,
+                current_price,
+                worst_entry,
+                stop_loss=stop_loss,
+                target_price=tp_worst,
             )
             advisory.update(base_output)
             advisory["decision_code"] = "REVALIDATION_BREAKOUT"
@@ -551,6 +565,8 @@ def generate_plans(
     args: argparse.Namespace,
     earnings_map: dict[str, str] | None = None,
     earnings_fetch_failed: bool = False,
+    fundamentals_map: dict[str, dict] | None = None,
+    fundamentals_fetch_failed: bool = False,
 ) -> dict:
     """Main pipeline: filter, score, size, classify all candidates.
 
@@ -564,6 +580,7 @@ def generate_plans(
 
     gate_days = int(getattr(args, "earnings_gate_days", 0) or 0)
     gate_enabled = gate_days > 0
+    fund_enabled = int(getattr(args, "fundamental_gate", 0) or 0) > 0
     today = datetime.now().date()
 
     # Sort by composite_score descending (highest priority first)
@@ -576,7 +593,20 @@ def generate_plans(
     deferred = []
     constrained = []
     blocked_earnings = []
+    blocked_fundamental = []
     warnings = []
+
+    if fund_enabled and fundamentals_fetch_failed:
+        warnings.append(
+            {
+                "symbol": "*",
+                "code": "FUNDAMENTAL_GATE_DEGRADED",
+                "message": (
+                    "fundamentals fetch failed; fundamental_gate='unknown' for all "
+                    "plans — quality floor not applied this run"
+                ),
+            }
+        )
 
     if gate_enabled and earnings_fetch_failed:
         warnings.append(
@@ -629,6 +659,25 @@ def generate_plans(
                 )
                 continue
 
+        if fund_enabled and cls in ("actionable", "revalidation", "watchlist"):
+            fund_fields = build_fundamental_fields(
+                classified["data"]["symbol"],
+                fundamentals_map or {},
+                fetch_failed=fundamentals_fetch_failed,
+            )
+            classified["data"].update(fund_fields)
+            if (
+                cls in ("actionable", "revalidation")
+                and fund_fields["fundamental_gate"] == FUND_BLOCKED
+            ):
+                blocked_fundamental.append(
+                    {
+                        **classified["data"],
+                        "blocked_reason": fund_fields["fundamental_reason"],
+                    }
+                )
+                continue
+
         if cls == "actionable":
             actionable.append(classified["data"])
             cumulative_risk_pct += classified["risk_pct"]
@@ -664,6 +713,7 @@ def generate_plans(
             "max_chase_pct": args.max_chase_pct,
             "pivot_buffer_pct": args.pivot_buffer_pct,
             "earnings_gate_days": gate_days,
+            "fundamental_gate": 1 if fund_enabled else 0,
             "time_stop_trading_days": int(getattr(args, "time_stop_trading_days", 0) or 0),
             "broker": getattr(args, "broker", "both"),
             "current_exposure": exposure,
@@ -683,6 +733,7 @@ def generate_plans(
             "deferred_count": len(deferred),
             "constrained_count": len(constrained),
             "blocked_earnings_count": len(blocked_earnings),
+            "blocked_fundamental_count": len(blocked_fundamental),
             "total_risk_dollars": round(total_risk_dollars, 2),
             "total_risk_pct": round(total_risk_pct, 2),
             "total_position_value": round(total_position, 2),
@@ -694,6 +745,7 @@ def generate_plans(
         "deferred": deferred,
         "constrained": constrained,
         "blocked_earnings": blocked_earnings,
+        "blocked_fundamental": blocked_fundamental,
         "warnings": warnings,
     }
 
@@ -712,6 +764,7 @@ def generate_markdown(plans: dict) -> str:
         f"- Watchlist: {plans['summary']['watchlist_count']}",
         f"- Rejected: {plans['summary']['rejected_count']}",
         f"- Blocked (earnings gate): {plans['summary'].get('blocked_earnings_count', 0)}",
+        f"- Blocked (fundamental floor): {plans['summary'].get('blocked_fundamental_count', 0)}",
         f"- Total Risk: ${plans['summary']['total_risk_dollars']:,.2f} "
         f"({plans['summary']['total_risk_pct']:.2f}%)",
         "",
@@ -751,6 +804,18 @@ def generate_markdown(plans: dict) -> str:
                 else:
                     earnings_note = f"none within window ({order['earnings_gate']})"
                 lines.append(f"| Next Earnings | {earnings_note} |")
+            if order.get("fundamental_gate"):
+                fg = order["fundamental_gate"]
+                if order.get("eps_growth_yoy") is not None:
+                    rev = order.get("revenue_growth_yoy")
+                    rev_str = f"{rev:+.1f}%" if rev is not None else "n/a"
+                    fund_note = (
+                        f"C={order.get('c_score')}/A={order.get('a_score')} "
+                        f"(EPS {order['eps_growth_yoy']:+.1f}%, Rev {rev_str} YoY) [{fg}]"
+                    )
+                else:
+                    fund_note = f"unavailable ({fg})"
+                lines.append(f"| Fundamentals | {fund_note} |")
             lines.append("")
 
     if plans["revalidation"]:
@@ -785,6 +850,21 @@ def generate_markdown(plans: dict) -> str:
         lines.append(
             "*Re-screen these names after their reports — a post-earnings base "
             "is a fresh setup, not a missed one.*"
+        )
+        lines.append("")
+
+    if plans.get("blocked_fundamental"):
+        lines.append("## Blocked by Fundamental Floor\n")
+        lines.append("| Symbol | Plan Type | Reason |")
+        lines.append("|--------|-----------|--------|")
+        for b in plans["blocked_fundamental"]:
+            lines.append(
+                f"| {b['symbol']} | {b.get('plan_type', '')} | {b.get('blocked_reason', '')} |"
+            )
+        lines.append("")
+        lines.append(
+            "*Unprofitable or contracting on both lines — re-check after the next "
+            "report; the VCP base may still be intact.*"
         )
         lines.append("")
 
@@ -827,6 +907,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Block actionable/revalidation plans whose next earnings report is "
             "within N trading days (inclusive). 0 = disabled. Earnings dates "
             "come from the public TradingView scanner — no API key required."
+        ),
+    )
+    parser.add_argument(
+        "--fundamental-gate",
+        type=int,
+        default=0,
+        help=(
+            "Apply a soft fundamental quality-floor to long candidates: drop "
+            "names with a negative latest-quarter EPS or both EPS and revenue "
+            "shrinking YoY; annotate the rest with CANSLIM C/A growth. 1 = on, "
+            "0 = off. Income statements come from the shared TradingView data "
+            "layer — no API key required. Usually set via --profile."
         ),
     )
     parser.add_argument(
@@ -887,8 +979,28 @@ def main(argv: list[str] | None = None):
                 file=sys.stderr,
             )
 
+    fundamentals_map: dict[str, dict] = {}
+    fundamentals_fetch_failed = False
+    if int(getattr(args, "fundamental_gate", 0) or 0) > 0:
+        symbols = [
+            r.get("symbol") for r in data["results"] if isinstance(r, dict) and r.get("symbol")
+        ]
+        try:
+            fundamentals_map = fetch_fundamentals_map(symbols)
+        except FundamentalFetchError as exc:
+            fundamentals_fetch_failed = True
+            print(
+                f"Warning: fundamental gate degraded to 'unknown': {exc}",
+                file=sys.stderr,
+            )
+
     plans = generate_plans(
-        data, args, earnings_map=earnings_map, earnings_fetch_failed=earnings_fetch_failed
+        data,
+        args,
+        earnings_map=earnings_map,
+        earnings_fetch_failed=earnings_fetch_failed,
+        fundamentals_map=fundamentals_map,
+        fundamentals_fetch_failed=fundamentals_fetch_failed,
     )
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -908,7 +1020,8 @@ def main(argv: list[str] | None = None):
         f"\nActionable: {plans['summary']['actionable_count']} | "
         f"Revalidation: {plans['summary']['revalidation_count']} | "
         f"Watchlist: {plans['summary']['watchlist_count']} | "
-        f"Blocked (earnings): {plans['summary']['blocked_earnings_count']}"
+        f"Blocked (earnings): {plans['summary']['blocked_earnings_count']} | "
+        f"Blocked (fundamental): {plans['summary']['blocked_fundamental_count']}"
     )
 
 

@@ -401,13 +401,17 @@ class TestGeneratePlans:
         assert entry["orderType"] == "STP" and entry["stopPrice"] == tmpl["pre_place"]["stop_price"]
 
     def test_broker_ib_only_omits_alpaca_templates(self):
-        plans = generate_plans(_make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="ib"))
+        plans = generate_plans(
+            _make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="ib")
+        )
         tmpl = plans["actionable_orders"][0]["order_templates"]
         assert "pre_place_ib" in tmpl and "post_confirm_ib" in tmpl
         assert "pre_place" not in tmpl and "post_confirm" not in tmpl
 
     def test_broker_alpaca_only_omits_ib_templates(self):
-        plans = generate_plans(_make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="alpaca"))
+        plans = generate_plans(
+            _make_input_data([_make_vcp_result(score=85.0)]), _make_args(broker="alpaca")
+        )
         tmpl = plans["actionable_orders"][0]["order_templates"]
         assert "pre_place" in tmpl and "post_confirm" in tmpl
         assert "pre_place_ib" not in tmpl and "post_confirm_ib" not in tmpl
@@ -537,6 +541,109 @@ class TestTimeStop:
         tp = plans["actionable_orders"][0]["trade_plan"]
         assert "time_stop_trading_days" not in tp
         assert "time_stop_rule" not in tp
+
+
+def _fq(eps_yoy, rev_yoy, latest_eps, score=80):
+    """A calculate_quarterly_growth-shaped result for fundamentals_map."""
+    return {
+        "score": score,
+        "latest_qtr_eps_growth": eps_yoy,
+        "latest_qtr_revenue_growth": rev_yoy,
+        "latest_eps": latest_eps,
+        "error": None,
+    }
+
+
+def _fa(score=70):
+    """A calculate_annual_growth-shaped result for fundamentals_map."""
+    return {"score": score, "eps_cagr_3yr": 30.0, "error": None}
+
+
+class TestFundamentalGate:
+    """--fundamental-gate: soft quality-floor on long candidates (fundamentals injected)."""
+
+    def test_disabled_by_default_no_fields(self):
+        data = _make_input_data([_make_vcp_result(symbol="AAA")])
+        plans = generate_plans(data, _make_args())
+        order = plans["actionable_orders"][0]
+        assert "fundamental_gate" not in order
+        assert plans["summary"]["blocked_fundamental_count"] == 0
+
+    def test_negative_eps_moves_to_blocked(self):
+        data = _make_input_data([_make_vcp_result(symbol="LOSS")])
+        args = _make_args(fundamental_gate=1)
+        fmap = {"LOSS": {"quarterly": _fq(5.0, 8.0, -0.40), "annual": _fa()}}
+        plans = generate_plans(data, args, fundamentals_map=fmap)
+        assert plans["summary"]["actionable_count"] == 0
+        assert plans["summary"]["blocked_fundamental_count"] == 1
+        blocked = plans["blocked_fundamental"][0]
+        assert blocked["symbol"] == "LOSS"
+        assert blocked["fundamental_gate"] == "blocked"
+        assert "blocked_reason" in blocked
+        # Blocked plans must not consume portfolio heat.
+        assert plans["summary"]["total_risk_dollars"] == 0
+
+    def test_both_lines_shrinking_blocked(self):
+        data = _make_input_data([_make_vcp_result(symbol="DECAY")])
+        args = _make_args(fundamental_gate=1)
+        fmap = {"DECAY": {"quarterly": _fq(-15.0, -6.0, 0.80), "annual": _fa()}}
+        plans = generate_plans(data, args, fundamentals_map=fmap)
+        assert plans["summary"]["blocked_fundamental_count"] == 1
+
+    def test_healthy_passes_and_annotates(self):
+        data = _make_input_data([_make_vcp_result(symbol="GROW")])
+        args = _make_args(fundamental_gate=1)
+        fmap = {"GROW": {"quarterly": _fq(28.0, 14.0, 1.50, score=60), "annual": _fa(75)}}
+        plans = generate_plans(data, args, fundamentals_map=fmap)
+        assert plans["summary"]["actionable_count"] == 1
+        order = plans["actionable_orders"][0]
+        assert order["fundamental_gate"] == "pass"
+        assert order["c_score"] == 60
+        assert order["a_score"] == 75
+        assert order["eps_growth_yoy"] == 28.0
+
+    def test_eps_dip_with_revenue_growth_passes(self):
+        data = _make_input_data([_make_vcp_result(symbol="MIXED")])
+        args = _make_args(fundamental_gate=1)
+        fmap = {"MIXED": {"quarterly": _fq(-9.0, 7.0, 0.90), "annual": _fa()}}
+        plans = generate_plans(data, args, fundamentals_map=fmap)
+        assert plans["summary"]["actionable_count"] == 1
+        assert plans["actionable_orders"][0]["fundamental_gate"] == "pass"
+
+    def test_absent_symbol_is_unknown_and_kept(self):
+        data = _make_input_data([_make_vcp_result(symbol="NODATA")])
+        args = _make_args(fundamental_gate=1)
+        plans = generate_plans(data, args, fundamentals_map={})
+        assert plans["summary"]["actionable_count"] == 1
+        assert plans["actionable_orders"][0]["fundamental_gate"] == "unknown"
+
+    def test_fetch_failure_marks_unknown_and_warns(self):
+        data = _make_input_data([_make_vcp_result(symbol="MYST")])
+        args = _make_args(fundamental_gate=1)
+        plans = generate_plans(data, args, fundamentals_map={}, fundamentals_fetch_failed=True)
+        assert plans["summary"]["actionable_count"] == 1
+        assert plans["actionable_orders"][0]["fundamental_gate"] == "unknown"
+        assert any(w["code"] == "FUNDAMENTAL_GATE_DEGRADED" for w in plans["warnings"])
+
+    def test_blocked_frees_slot_for_next_candidate(self):
+        loss = _make_vcp_result(symbol="LOSS", score=90.0)
+        grow = _make_vcp_result(symbol="GROW", score=85.0)
+        data = _make_input_data([loss, grow])
+        args = _make_args(fundamental_gate=1)
+        fmap = {
+            "LOSS": {"quarterly": _fq(5.0, 5.0, -0.10), "annual": _fa()},
+            "GROW": {"quarterly": _fq(30.0, 15.0, 1.20), "annual": _fa()},
+        }
+        plans = generate_plans(data, args, fundamentals_map=fmap)
+        assert [o["symbol"] for o in plans["actionable_orders"]] == ["GROW"]
+        assert [b["symbol"] for b in plans["blocked_fundamental"]] == ["LOSS"]
+
+    def test_parameters_record_gate_flag(self):
+        data = _make_input_data([_make_vcp_result()])
+        plans = generate_plans(data, _make_args(fundamental_gate=1), fundamentals_map={})
+        assert plans["parameters"]["fundamental_gate"] == 1
+        plans_off = generate_plans(data, _make_args())
+        assert plans_off["parameters"]["fundamental_gate"] == 0
 
 
 class TestLoadProfile:

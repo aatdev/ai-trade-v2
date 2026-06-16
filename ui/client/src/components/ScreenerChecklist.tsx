@@ -7,7 +7,7 @@ const COLOR: Record<CheckState, string> = {
   unknown: 'var(--muted)',
 };
 
-/** The 7-point 5.3 "беру / не беру" checklist. `?` = not yet determinable. */
+/** The 8-point 5.3 "беру / не беру" checklist. `?` = not yet determinable. */
 export default function ScreenerChecklist({ checklist }: { checklist: ChecklistResult }) {
   return (
     <div className="field" style={{ marginBottom: 8 }}>

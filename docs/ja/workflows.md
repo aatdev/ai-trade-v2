@@ -474,7 +474,7 @@ permalink: /ja/workflows/
 - consumes: `validated_setups`
 - produces: `position_sizing`
 
-**ステップ 6: Build entry plan** （任意） → `breakout-trade-planner`
+**ステップ 6: Build entry plan (with soft fundamental quality-floor)** （任意） → `breakout-trade-planner`
 
 - consumes: `validated_setups`, `position_sizing`
 - produces: `trade_plans`

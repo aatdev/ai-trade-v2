@@ -57,6 +57,7 @@ KNOWN_PROFILE_KEYS = {
     "earnings_gate_days",
     "time_stop_trading_days",
     "atr_multiplier",
+    "fundamental_gate",
 }
 
 HEAT_PROFILE_KEYS = {"account_size", "max_portfolio_heat_pct", "max_positions"}
