@@ -62,6 +62,9 @@ SHORT_MAX_POSITION_PCT = 25.0
 SHORT_EARNINGS_GATE_WEEKDAYS = 10
 # Early warning for ANY open position approaching its report.
 POSITION_EARNINGS_WARN_WEEKDAYS = 3
+# Premarket gap-gate: a long whose report is this close should not be entered
+# the morning of (the intraday OPEN_LONG path has no earnings guard of its own).
+GAP_GATE_EARNINGS_WEEKDAYS = 1
 
 # Signal types
 OPEN_LONG = "OPEN_LONG"
@@ -73,6 +76,18 @@ EARNINGS_SOON = "EARNINGS_SOON"
 STOP_HIT = "STOP_HIT"
 NEAR_STOP = "NEAR_STOP"
 TWO_R = "TWO_R"
+
+# Premarket gap-gate verdicts (slot_premarket). A watchlist candidate is
+# classified against its pre-open price so a name that gapped out of its plan is
+# not armed at the bell:
+#   EXTENDED      gapped past the chase band -> opens beyond a sane entry (the
+#                 intraday monitor would later call this MISSED anyway)
+#   INVALIDATED   gapped through the protective stop -> the base is broken
+#   EARNINGS_TODAY reports today / next session -> do not enter ahead of the print
+# Candidates with no premarket print, or trading inside the entry band, stay armed.
+GAP_EXTENDED = "EXTENDED"
+GAP_INVALIDATED = "INVALIDATED"
+GAP_EARNINGS = "EARNINGS_TODAY"
 
 
 class QuotesError(Exception):
@@ -111,22 +126,33 @@ def fetch_quotes(
     timeout: int = 30,
     max_retries: int = 3,
     retry_base_delay: float = 1.5,
+    premarket: bool = False,
 ) -> dict[str, dict]:
     """Last prices for ``tickers`` -> {ticker: {price, volume, symbol_full}}.
 
     Missing/unknown tickers are silently absent from the result; callers must
     treat a missing quote as "no signal this round". Raises QuotesError when
     the scanner is unreachable after retries.
+
+    With ``premarket=True`` the quote also carries ``premarket_price`` (the last
+    extended-hours print) and ``premarket_change_pct`` (% vs the prior close).
+    Illiquid names with no pre-open trade come back with ``premarket_price``
+    None -> the gap-gate treats that as "nothing to gate, arm as usual".
     """
     wanted = sorted({t.strip().upper() for t in tickers if t and t.strip()})
     if not wanted:
         return {}
+    # Premarket columns are appended last so the fixed value indices below
+    # (0=name, 1=close, 2=volume, 3=earnings) stay stable.
+    columns = ["name", "close", "volume", "earnings_release_next_date"]
+    if premarket:
+        columns += ["premarket_close", "premarket_change"]
     payload = {
         "filter": [
             {"left": "name", "operation": "in_range", "right": wanted},
             {"left": "exchange", "operation": "in_range", "right": US_EXCHANGES},
         ],
-        "columns": ["name", "close", "volume", "earnings_release_next_date"],
+        "columns": columns,
         "range": [0, max(50, 4 * len(wanted))],
     }
 
@@ -150,12 +176,17 @@ def fetch_quotes(
         name, close = values[0], values[1]
         if name not in set(wanted) or name in quotes or close is None:
             continue
-        quotes[name] = {
+        quote = {
             "price": float(close),
             "volume": values[2] if len(values) > 2 else None,
             "earnings_date": _earnings_date_from_ts(values[3]) if len(values) > 3 else None,
             "symbol_full": row.get("s"),
         }
+        if premarket:
+            pm = values[4] if len(values) > 4 else None
+            quote["premarket_price"] = float(pm) if pm is not None else None
+            quote["premarket_change_pct"] = values[5] if len(values) > 5 else None
+        quotes[name] = quote
     return quotes
 
 
@@ -577,6 +608,93 @@ def evaluate_signals(
         signals.append(signal)
 
     return signals
+
+
+def premarket_gap_gate(
+    watchlist: dict | None,
+    quotes: dict[str, dict],
+    gate_decision: str,
+    *,
+    today: dt.date | None = None,
+) -> list[dict]:
+    """Classify fresh-watchlist candidates against their pre-open price.
+
+    Returns one verdict dict per candidate that should NOT be armed at the open
+    -- ``{ticker, side, verdict, premarket_price, gap_pct, reason}`` (earnings
+    verdicts also carry ``earnings_date`` / ``days_to_earnings``). Candidates
+    with no premarket print, or trading inside the normal entry band, are armed
+    as usual and omitted.
+
+    Side gating mirrors ``evaluate_signals`` (longs only on ``allow``; shorts
+    only on ``restrict`` / ``cash-priority``) so a candidate the monitor would
+    not arm anyway is never flagged. Pure / read-only -- the caller decides what
+    to drop from the watchlist.
+    """
+    today = today or dt.date.today()
+    out: list[dict] = []
+    for candidate in (watchlist or {}).get("candidates") or []:
+        ticker = str(candidate.get("ticker", "")).upper()
+        side = candidate.get("side", "long")
+        pivot = candidate.get("pivot")
+        if not ticker or pivot in (None, 0):
+            continue
+        if side == "long" and gate_decision != "allow":
+            continue
+        if side == "short" and gate_decision not in ("restrict", "cash-priority"):
+            continue
+        quote = quotes.get(ticker)
+        if not quote:
+            continue
+        pm = quote.get("premarket_price")
+        if pm in (None, 0):
+            continue  # no premarket print -> nothing to gate, arm as usual
+
+        gap_pct = round((pm / pivot - 1) * 100, 2)
+        stop = candidate.get("stop")
+        verdict = reason = None
+        if side == "long":
+            worst = candidate.get("worst_entry") or round(pivot * (1 + DEFAULT_CHASE_PCT / 100), 2)
+            if stop not in (None, 0) and pm <= stop:
+                verdict, reason = GAP_INVALIDATED, f"гэп ниже стопа ${stop:g} — база сломана"
+            elif pm > worst:
+                verdict, reason = GAP_EXTENDED, f"гэп выше входа +{gap_pct:g}% — не гнаться"
+        else:  # short
+            worst = candidate.get("worst_entry") or round(pivot * (1 - DEFAULT_CHASE_PCT / 100), 2)
+            if stop not in (None, 0) and pm >= stop:
+                verdict, reason = GAP_INVALIDATED, f"гэп выше стопа ${stop:g} — сетап сломан"
+            elif pm < worst:
+                verdict, reason = GAP_EXTENDED, f"гэп ниже входа {gap_pct:g}% — не гнаться"
+
+        if verdict is None:
+            # Price still in the entry band -> only an imminent report blocks it.
+            window = GAP_GATE_EARNINGS_WEEKDAYS if side == "long" else SHORT_EARNINGS_GATE_WEEKDAYS
+            earnings = _days_to_earnings(quote, today)
+            if earnings and earnings[1] <= window:
+                out.append(
+                    {
+                        "ticker": ticker,
+                        "side": side,
+                        "verdict": GAP_EARNINGS,
+                        "premarket_price": pm,
+                        "gap_pct": gap_pct,
+                        "earnings_date": earnings[0],
+                        "days_to_earnings": earnings[1],
+                        "reason": f"отчёт {earnings[0]} (через {earnings[1]} т.д.) — не входить до отчёта",
+                    }
+                )
+            continue
+
+        out.append(
+            {
+                "ticker": ticker,
+                "side": side,
+                "verdict": verdict,
+                "premarket_price": pm,
+                "gap_pct": gap_pct,
+                "reason": reason,
+            }
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #

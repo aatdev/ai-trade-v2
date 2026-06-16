@@ -483,6 +483,101 @@ class TestEarningsRules:
 
 
 # --------------------------------------------------------------------------- #
+# premarket_gap_gate
+# --------------------------------------------------------------------------- #
+def _verdicts(flagged):
+    return [(f["ticker"], f["verdict"]) for f in flagged]
+
+
+class TestPremarketGapGate:
+    # long_candidate: pivot 155.20, worst_entry 157.50, stop 151.30
+    def test_long_extended_above_chase_band(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 155.0, "premarket_price": 160.0}}
+        flagged = sig.premarket_gap_gate(wl, quotes, "allow", today=_THU)
+        assert _verdicts(flagged) == [("NVDA", sig.GAP_EXTENDED)]
+        assert flagged[0]["gap_pct"] > 0
+
+    def test_long_invalidated_below_stop(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 150.0, "premarket_price": 150.0}}  # < stop 151.30
+        assert _verdicts(sig.premarket_gap_gate(wl, quotes, "allow", today=_THU)) == [
+            ("NVDA", sig.GAP_INVALIDATED)
+        ]
+
+    def test_long_armed_within_band_is_omitted(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 156.0, "premarket_price": 156.0}}  # in [pivot, worst]
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_mild_gap_down_above_stop_stays_armed(self):
+        # Below pivot but not through the stop -> breakout still pending, not flagged.
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 153.0, "premarket_price": 153.0}}
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_no_premarket_print_is_omitted(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 160.0, "premarket_price": None}}
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_missing_premarket_field_is_omitted(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 160.0}}  # premarket not requested
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_earnings_today_blocks_armed_long(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {
+            "NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-06-12"}
+        }
+        flagged = sig.premarket_gap_gate(wl, quotes, "allow", today=_THU)  # Fri = 1 weekday
+        assert _verdicts(flagged) == [("NVDA", sig.GAP_EARNINGS)]
+        assert flagged[0]["days_to_earnings"] == 1
+
+    def test_earnings_far_does_not_block_armed_long(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {
+            "NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-07-30"}
+        }
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_long_not_flagged_when_gate_not_allow(self):
+        wl = make_watchlist([long_candidate()])
+        quotes = {"NVDA": {"price": 160.0, "premarket_price": 160.0}}
+        assert sig.premarket_gap_gate(wl, quotes, "restrict", today=_THU) == []
+
+    # short_candidate: pivot 245.0, worst_entry 240.1, stop 260.0
+    def test_short_extended_below_chase_band(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 235.0, "premarket_price": 235.0}}  # < worst 240.1
+        assert _verdicts(sig.premarket_gap_gate(wl, quotes, "restrict", today=_THU)) == [
+            ("NFLX", sig.GAP_EXTENDED)
+        ]
+
+    def test_short_invalidated_above_stop(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 262.0, "premarket_price": 262.0}}  # >= stop 260
+        assert _verdicts(sig.premarket_gap_gate(wl, quotes, "cash-priority", today=_THU)) == [
+            ("NFLX", sig.GAP_INVALIDATED)
+        ]
+
+    def test_short_armed_within_band_is_omitted(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 242.0, "premarket_price": 242.0}}  # in [worst, pivot]
+        assert sig.premarket_gap_gate(wl, quotes, "restrict", today=_THU) == []
+
+    def test_short_not_flagged_when_gate_allow(self):
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 235.0, "premarket_price": 235.0}}
+        assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_empty_watchlist_returns_empty(self):
+        assert sig.premarket_gap_gate(None, {}, "allow", today=_THU) == []
+        assert sig.premarket_gap_gate(make_watchlist([]), {}, "allow", today=_THU) == []
+
+
+# --------------------------------------------------------------------------- #
 # evaluate_signals — dedup
 # --------------------------------------------------------------------------- #
 class TestDedup:
@@ -600,6 +695,38 @@ class TestFetchQuotes:
         else:
             raise AssertionError("expected QuotesError")
         assert len(calls) == 3
+
+    def test_premarket_columns_requested_and_parsed(self, monkeypatch):
+        captured = {}
+
+        def fake_post(url, payload, timeout=30):
+            captured["payload"] = payload
+            return {"data": [{"s": "NASDAQ:NVDA", "d": ["NVDA", 156.0, 1000000, None, 159.0, 1.9]}]}
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        q = sig.fetch_quotes(["NVDA"], premarket=True)
+        assert captured["payload"]["columns"][-2:] == ["premarket_close", "premarket_change"]
+        assert q["NVDA"]["premarket_price"] == 159.0
+        assert q["NVDA"]["premarket_change_pct"] == 1.9
+
+    def test_premarket_null_print_is_none(self, monkeypatch):
+        def fake_post(url, payload, timeout=30):
+            return {"data": [{"s": "NASDAQ:XYZ", "d": ["XYZ", 50.0, 100, None, None, None]}]}
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        assert sig.fetch_quotes(["XYZ"], premarket=True)["XYZ"]["premarket_price"] is None
+
+    def test_non_premarket_fetch_omits_premarket_keys(self, monkeypatch):
+        captured = {}
+
+        def fake_post(url, payload, timeout=30):
+            captured["payload"] = payload
+            return {"data": [{"s": "NASDAQ:NVDA", "d": ["NVDA", 156.0, 1000000]}]}
+
+        monkeypatch.setattr(sig, "_http_post_json", fake_post)
+        q = sig.fetch_quotes(["NVDA"])
+        assert "premarket_close" not in captured["payload"]["columns"]
+        assert "premarket_price" not in q["NVDA"]
 
 
 # --------------------------------------------------------------------------- #

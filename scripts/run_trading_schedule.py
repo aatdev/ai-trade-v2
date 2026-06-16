@@ -1391,6 +1391,56 @@ def armed_order_tickers(date_str: str) -> set[str]:
     return out
 
 
+def _gap_line(flag: dict) -> str:
+    pm = flag.get("premarket_price")
+    pm_s = f"${pm:g}" if isinstance(pm, (int, float)) else "?"
+    return f"• {flag['ticker']} [{flag['verdict']}] премаркет {pm_s} — {flag.get('reason', '')}"
+
+
+def _premarket_gap_block(date_str: str, wl_file, wl_data: dict, dec: dict, args) -> str:
+    """Pre-open gap triage on the fresh watchlist.
+
+    Fetches the pre-open price for each candidate, flags names that gapped out of
+    their plan (EXTENDED past the chase band / INVALIDATED through the stop /
+    earnings the morning of), and DROPS them from the watchlist file -- both the
+    order-card producer and the intraday monitor read that file, so neither arms
+    a gapped-out name. Returns a Telegram block (empty string when nothing is
+    flagged or quotes are unavailable). Network-free on dry-run."""
+    candidates = (wl_data or {}).get("candidates") or []
+    tickers = sorted({str(c.get("ticker", "")).upper() for c in candidates} - {""})
+    if not tickers:
+        return ""
+    if args.dry_run:
+        log(f"(dry-run) premarket gap-gate: запросил бы премаркет-котировки для {', '.join(tickers)}")
+        return ""
+    try:
+        quotes = tsig.fetch_quotes(tickers, premarket=True)
+    except tsig.QuotesError as exc:
+        log(f"premarket gap-gate: премаркет-котировки недоступны: {exc}", logging.WARNING)
+        return ""
+    try:
+        today = dt.date.fromisoformat(date_str)
+    except ValueError:
+        today = dt.date.today()
+    flagged = tsig.premarket_gap_gate(wl_data, quotes, dec["decision"], today=today)
+    if not flagged:
+        log(f"premarket gap-gate: {len(tickers)} тикеров проверено — гэпов вне плана нет")
+        return ""
+
+    blocked = {f["ticker"] for f in flagged}
+    kept = [c for c in candidates if str(c.get("ticker", "")).upper() not in blocked]
+    gapped_out = [c for c in candidates if str(c.get("ticker", "")).upper() in blocked]
+    if wl_file and gapped_out:
+        wl_data["candidates"] = kept
+        wl_data["gapped_out"] = (wl_data.get("gapped_out") or []) + gapped_out
+        wl_data["gap_gated_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        _atomic_write_json(Path(wl_file), wl_data)
+        log(f"premarket gap-gate: снято с арминга {', '.join(sorted(blocked))}")
+    return "⚠️ ПРЕМАРКЕТ-ГЭПЫ (сняты с входа на сегодня)\n" + "\n".join(
+        _gap_line(f) for f in flagged
+    )
+
+
 def _send_watchlist_cards(date_str: str, dec: dict, args) -> None:
     """Producer hook: send Telegram order cards for ENTRY_READY candidates.
 
@@ -1496,6 +1546,12 @@ def slot_premarket(date_str: str, args) -> int:
             + "\n\n"
             + msg
         )
+    # Pre-open gap triage: drop candidates that gapped out of their plan overnight
+    # so the order cards / intraday monitor below never arm them.
+    if wl_data is not None and _watchlist_is_fresh(wl_data, _today):
+        gap_block = _premarket_gap_block(date_str, wl_file, wl_data, dec, args)
+        if gap_block:
+            msg += f"\n\n{gap_block}"
     notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
     # Шаг 2: if the gate is open and the watchlist is fresh, ring the trader with
     # per-candidate order cards (the listen daemon places them on confirmation).
