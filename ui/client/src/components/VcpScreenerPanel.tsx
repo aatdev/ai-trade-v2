@@ -79,7 +79,13 @@ function PlanSummary({ plan }: { plan: StagedPlan }) {
   );
 }
 
-export default function VcpScreenerPanel({ refetch }: { date: string | null; refetch: Refetch }) {
+export default function VcpScreenerPanel({
+  date,
+  refetch,
+}: {
+  date: string | null;
+  refetch: Refetch;
+}) {
   const qc = useQueryClient();
   const [form, setForm] = useState<ScreenerFormState>(DEFAULT_FORM);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -242,7 +248,7 @@ export default function VcpScreenerPanel({ refetch }: { date: string | null; ref
         ) : error ? (
           <ErrorNote error={error} />
         ) : screener ? (
-          <ScreenerResults screener={screener} />
+          <ScreenerResults screener={screener} date={date} />
         ) : (
           <Empty>Запусти скрин — результаты появятся здесь и не регистрируются до сохранения.</Empty>
         )}

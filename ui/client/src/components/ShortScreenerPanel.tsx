@@ -23,7 +23,13 @@ const parseSymbols = (s: string): string[] =>
     .map((x) => x.trim().toUpperCase())
     .filter(Boolean);
 
-export default function ShortScreenerPanel({ refetch }: { date: string | null; refetch: Refetch }) {
+export default function ShortScreenerPanel({
+  date,
+  refetch,
+}: {
+  date: string | null;
+  refetch: Refetch;
+}) {
   const qc = useQueryClient();
   const [form, setForm] = useState<ShortFormState>(SHORT_DEFAULT_FORM);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -145,7 +151,7 @@ export default function ShortScreenerPanel({ refetch }: { date: string | null; r
         ) : error ? (
           <ErrorNote error={error} />
         ) : screener ? (
-          <ShortScreenerResults screener={screener} />
+          <ShortScreenerResults screener={screener} date={date} />
         ) : (
           <Empty>
             Запусти скрин — кандидаты появятся здесь. Detection-only, ничего не регистрируется.

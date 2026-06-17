@@ -1,7 +1,10 @@
 import { Fragment, Suspense, lazy, useState } from 'react';
 import type { StagedScreener, StagedScreenerCandidate } from '@shared/types';
+import { useAnalysisIndex } from '../api';
 import { fmtNum, fmtScore } from '../lib/format';
 import { scoreColor } from '../lib/zones';
+import AnalysisModal from './AnalysisModal';
+import AnalyzeCell from './AnalyzeCell';
 import type { ChartLevels } from './CandleChart';
 import { Empty } from './ui';
 import ScreenerChecklist from './ScreenerChecklist';
@@ -33,9 +36,18 @@ function checklistColor(c: StagedScreenerCandidate): string {
   return 'var(--muted)';
 }
 
-export default function ScreenerResults({ screener }: { screener: StagedScreener }) {
+export default function ScreenerResults({
+  screener,
+  date,
+}: {
+  screener: StagedScreener;
+  date: string | null;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const [chartFor, setChartFor] = useState<StagedScreenerCandidate | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
+  const { data: analysisIndex } = useAnalysisIndex();
+  const index = analysisIndex?.tickers ?? {};
   if (!screener.candidates.length) return <Empty>Нет кандидатов в этом прогоне.</Empty>;
 
   return (
@@ -54,6 +66,7 @@ export default function ScreenerResults({ screener }: { screener: StagedScreener
             <th style={{ textAlign: 'left' }}>Состояние</th>
             <th title="Пройдено пунктов чек-листа 5.3">5.3</th>
             <th style={{ textAlign: 'left' }}>Сектор</th>
+            <th style={{ textAlign: 'left' }}>Анализ</th>
           </tr>
         </thead>
         <tbody>
@@ -93,10 +106,16 @@ export default function ScreenerResults({ screener }: { screener: StagedScreener
                   <td style={{ textAlign: 'left' }} className="muted">
                     {c.sector ?? '—'}
                   </td>
+                  <AnalyzeCell
+                    ticker={c.symbol}
+                    date={date}
+                    entry={index[c.symbol.toUpperCase()]}
+                    onOpen={setAnalysisFor}
+                  />
                 </tr>
                 {isOpen ? (
                   <tr>
-                    <td colSpan={10} style={{ background: 'rgba(127,127,127,0.06)' }}>
+                    <td colSpan={11} style={{ background: 'rgba(127,127,127,0.06)' }}>
                       <ScreenerChecklist checklist={c.checklist} />
                       <ScreenerScoreBreakdown c={c} />
                     </td>
@@ -114,10 +133,19 @@ export default function ScreenerResults({ screener }: { screener: StagedScreener
           <TickerChartModal
             ticker={chartFor.symbol.toUpperCase()}
             levels={chartLevels(chartFor)}
-            hasAnalysis={false}
+            hasAnalysis={!!index[chartFor.symbol.toUpperCase()]}
             onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.symbol.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
           />
         </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </>
   );

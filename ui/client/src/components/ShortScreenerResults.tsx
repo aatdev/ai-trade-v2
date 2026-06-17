@@ -1,7 +1,10 @@
 import { Fragment, Suspense, lazy, useState } from 'react';
 import type { ScreenerCandidate, ScreenerResult } from '@shared/types';
+import { useAnalysisIndex } from '../api';
 import { fmtNum, fmtScore } from '../lib/format';
 import { scoreColor } from '../lib/zones';
+import AnalysisModal from './AnalysisModal';
+import AnalyzeCell from './AnalyzeCell';
 import type { ChartLevels } from './CandleChart';
 import { Empty, Gauge, GradeBadge } from './ui';
 
@@ -115,9 +118,18 @@ function Drilldown({ c }: { c: ScreenerCandidate }) {
   );
 }
 
-export default function ShortScreenerResults({ screener }: { screener: ScreenerResult }) {
+export default function ShortScreenerResults({
+  screener,
+  date,
+}: {
+  screener: ScreenerResult;
+  date: string | null;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const [chartFor, setChartFor] = useState<ScreenerCandidate | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
+  const { data: analysisIndex } = useAnalysisIndex();
+  const index = analysisIndex?.tickers ?? {};
   if (!screener.candidates.length) return <Empty>Нет кандидатов в этом прогоне.</Empty>;
 
   return (
@@ -135,6 +147,7 @@ export default function ShortScreenerResults({ screener }: { screener: ScreenerR
               <th>Target 2R</th>
               <th>RSI14</th>
               <th style={{ textAlign: 'left' }}>Сектор</th>
+              <th style={{ textAlign: 'left' }}>Анализ</th>
             </tr>
           </thead>
           <tbody>
@@ -179,10 +192,16 @@ export default function ShortScreenerResults({ screener }: { screener: ScreenerR
                         </span>
                       ) : null}
                     </td>
+                    <AnalyzeCell
+                      ticker={c.symbol}
+                      date={date}
+                      entry={index[c.symbol.toUpperCase()]}
+                      onOpen={setAnalysisFor}
+                    />
                   </tr>
                   {isOpen ? (
                     <tr>
-                      <td colSpan={9} style={{ background: 'rgba(127,127,127,0.06)' }}>
+                      <td colSpan={10} style={{ background: 'rgba(127,127,127,0.06)' }}>
                         <Drilldown c={c} />
                       </td>
                     </tr>
@@ -199,10 +218,19 @@ export default function ShortScreenerResults({ screener }: { screener: ScreenerR
           <TickerChartModal
             ticker={chartFor.symbol.toUpperCase()}
             levels={chartLevels(chartFor)}
-            hasAnalysis={false}
+            hasAnalysis={!!index[chartFor.symbol.toUpperCase()]}
             onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.symbol.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
           />
         </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </>
   );

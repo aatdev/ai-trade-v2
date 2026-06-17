@@ -145,9 +145,9 @@ Actions (whitelisted, single-job mutex, SSE log stream):
 screener → watchlist → non-active theses, see the **Профиль** tab);
 `GET /api/actions/jobs[/:id[/stream]]`, `POST /api/actions/jobs/:id/cancel`.
 
-### Скринер tab (VCP longs + swing-short)
+### Скринер tab (VCP longs + swing-short + bottom-flow)
 
-The **Скринер** tab is split into two sub-tabs that drive independent screeners
+The **Скринер** tab is split into sub-tabs that drive independent screeners
 but share the staging dir (`<dataDir>/ui-staging/`); results live there and are
 **not registered** until an explicit save (so a run is invisible to `/api/dates`,
 `/api/screeners`, and the watchlist).
@@ -165,6 +165,14 @@ but share the staging dir (`<dataDir>/ui-staging/`); results live there and are
   **Detection-only** — there is no short-side plan/save step (the long-only
   breakout planner / watchlist builder cannot consume the swing-short shape;
   confirm borrow/locate and SSR at the broker before any entry).
+- **Дно — дивергенция:** `POST /api/screener/bottom-flow/run` and the read-only
+  `GET /api/screener/bottom-flow/staged` (`BottomFlowResult`, A / B-accum / B-fund
+  groups). **Detection-only.**
+
+Every result table (VCP, swing-short, bottom-flow) carries a last **Анализ**
+column — the same per-row **🔍 Analyze** launcher + 📄 saved-analysis link as the
+watchlist (see below). Clicking 📄 (or "open analysis" inside the chart modal)
+opens the saved report in an in-place `AnalysisModal` without leaving the tab.
 
 ### Профиль tab (edit trading_profile + recalc)
 

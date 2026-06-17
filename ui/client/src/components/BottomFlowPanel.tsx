@@ -18,7 +18,13 @@ const numOr = (s: string): number | undefined => {
   return Number.isFinite(n) ? n : undefined;
 };
 
-export default function BottomFlowPanel({ refetch }: { date: string | null; refetch: Refetch }) {
+export default function BottomFlowPanel({
+  date,
+  refetch,
+}: {
+  date: string | null;
+  refetch: Refetch;
+}) {
   const qc = useQueryClient();
   const [form, setForm] = useState<BottomFlowFormState>(BOTTOM_FLOW_DEFAULT_FORM);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -133,7 +139,7 @@ export default function BottomFlowPanel({ refetch }: { date: string | null; refe
         ) : error ? (
           <ErrorNote error={error} />
         ) : screener ? (
-          <BottomFlowResults screener={screener} />
+          <BottomFlowResults screener={screener} date={date} />
         ) : (
           <Empty>
             Запусти скрин — кандидаты появятся здесь. Detection-only, ничего не регистрируется.

@@ -1,8 +1,13 @@
 import { Fragment, Suspense, lazy, useState } from 'react';
-import type { BottomFlowCandidate, BottomFlowResult } from '@shared/types';
+import type { AnalysisIndexEntry, BottomFlowCandidate, BottomFlowResult } from '@shared/types';
+import { useAnalysisIndex } from '../api';
 import { fmtNum, fmtPct, fmtScore, fmtSignedPct } from '../lib/format';
 import { scoreColor } from '../lib/zones';
+import AnalysisModal from './AnalysisModal';
+import AnalyzeCell from './AnalyzeCell';
 import { Empty } from './ui';
+
+type Index = Record<string, AnalysisIndexEntry>;
 
 // Code-split the charting lib — loads only once a ticker is clicked.
 const TickerChartModal = lazy(() => import('./TickerChartModal'));
@@ -111,10 +116,16 @@ function Drilldown({ c }: { c: BottomFlowCandidate }) {
 
 function GradeTable({
   candidates,
+  date,
+  index,
   onChart,
+  onOpenAnalysis,
 }: {
   candidates: BottomFlowCandidate[];
+  date: string | null;
+  index: Index;
   onChart: (c: BottomFlowCandidate) => void;
+  onOpenAnalysis: (ticker: string) => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
@@ -135,6 +146,7 @@ function GradeTable({
             <th>CMF</th>
             <th>MFI</th>
             <th style={{ textAlign: 'left' }}>Теги</th>
+            <th style={{ textAlign: 'left' }}>Анализ</th>
           </tr>
         </thead>
         <tbody>
@@ -172,10 +184,16 @@ function GradeTable({
                   <td style={{ textAlign: 'left' }}>
                     <Tags c={c} />
                   </td>
+                  <AnalyzeCell
+                    ticker={c.symbol}
+                    date={date}
+                    entry={index[c.symbol.toUpperCase()]}
+                    onOpen={onOpenAnalysis}
+                  />
                 </tr>
                 {isOpen ? (
                   <tr>
-                    <td colSpan={13} style={{ background: 'rgba(127,127,127,0.06)' }}>
+                    <td colSpan={14} style={{ background: 'rgba(127,127,127,0.06)' }}>
                       <Drilldown c={c} />
                     </td>
                   </tr>
@@ -189,8 +207,17 @@ function GradeTable({
   );
 }
 
-export default function BottomFlowResults({ screener }: { screener: BottomFlowResult }) {
+export default function BottomFlowResults({
+  screener,
+  date,
+}: {
+  screener: BottomFlowResult;
+  date: string | null;
+}) {
   const [chartFor, setChartFor] = useState<BottomFlowCandidate | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
+  const { data: analysisIndex } = useAnalysisIndex();
+  const index = analysisIndex?.tickers ?? {};
   if (!screener.candidates.length) return <Empty>Нет кандидатов в этом прогоне.</Empty>;
 
   const groups = GRADE_ORDER.map((g) => ({
@@ -206,7 +233,13 @@ export default function BottomFlowResults({ screener }: { screener: BottomFlowRe
             <div className="screener-section-label">
               {g.label} · {g.rows.length}
             </div>
-            <GradeTable candidates={g.rows} onChart={setChartFor} />
+            <GradeTable
+              candidates={g.rows}
+              date={date}
+              index={index}
+              onChart={setChartFor}
+              onOpenAnalysis={setAnalysisFor}
+            />
           </div>
         ))}
       </div>
@@ -216,10 +249,19 @@ export default function BottomFlowResults({ screener }: { screener: BottomFlowRe
           <TickerChartModal
             ticker={chartFor.symbol.toUpperCase()}
             levels={{ side: 'long' }}
-            hasAnalysis={false}
+            hasAnalysis={!!index[chartFor.symbol.toUpperCase()]}
             onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.symbol.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
           />
         </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </>
   );
