@@ -3,12 +3,11 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { BottomFlowRunRequest } from '@shared/types';
 import { runBottomFlowScreener, useStagedBottomFlow, type Refetch } from '../api';
 import { useJobStream } from '../lib/useJobStream';
+import { usePersistentForm } from '../lib/usePersistentForm';
 import BottomFlowHelpModal from './BottomFlowHelpModal';
-import BottomFlowParamForm, {
-  BOTTOM_FLOW_DEFAULT_FORM,
-  type BottomFlowFormState,
-} from './BottomFlowParamForm';
+import BottomFlowParamForm, { BOTTOM_FLOW_DEFAULT_FORM } from './BottomFlowParamForm';
 import BottomFlowResults from './BottomFlowResults';
+import ScreenerParamActions from './ScreenerParamActions';
 import { Card, Empty, ErrorNote, Loading } from './ui';
 
 const numOr = (s: string): number | undefined => {
@@ -26,7 +25,10 @@ export default function BottomFlowPanel({
   refetch: Refetch;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<BottomFlowFormState>(BOTTOM_FLOW_DEFAULT_FORM);
+  const { form, setForm, save, reset, saved, dirty } = usePersistentForm(
+    'bottomFlow',
+    BOTTOM_FLOW_DEFAULT_FORM,
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(true);
   const logRef = useRef<HTMLPreElement>(null);
@@ -107,6 +109,13 @@ export default function BottomFlowPanel({
           ) : null}
           {running ? <span className="muted">{stream.elapsed}s</span> : null}
           {noGrade ? <span className="muted">выбери хотя бы один грейд</span> : null}
+          <ScreenerParamActions
+            onSave={save}
+            onReset={reset}
+            saved={saved}
+            dirty={dirty}
+            disabled={running}
+          />
         </div>
 
         {stream.error ? (

@@ -3,11 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { ShortScreenerRunRequest } from '@shared/types';
 import { runShortScreener, useStagedShortScreener, type Refetch } from '../api';
 import { useJobStream } from '../lib/useJobStream';
+import { usePersistentForm } from '../lib/usePersistentForm';
+import ScreenerParamActions from './ScreenerParamActions';
 import ShortScreenerHelpModal from './ShortScreenerHelpModal';
-import ShortScreenerParamForm, {
-  SHORT_DEFAULT_FORM,
-  type ShortFormState,
-} from './ShortScreenerParamForm';
+import ShortScreenerParamForm, { SHORT_DEFAULT_FORM } from './ShortScreenerParamForm';
 import ShortScreenerResults from './ShortScreenerResults';
 import { Card, Empty, ErrorNote, Loading } from './ui';
 
@@ -31,7 +30,10 @@ export default function ShortScreenerPanel({
   refetch: Refetch;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<ShortFormState>(SHORT_DEFAULT_FORM);
+  const { form, setForm, save, reset, rebase, saved, dirty, hadSavedAtMount } = usePersistentForm(
+    'short',
+    SHORT_DEFAULT_FORM,
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(true);
   const didInitUniverse = useRef(false);
@@ -46,11 +48,16 @@ export default function ShortScreenerPanel({
   const { data: staged, isLoading, error } = useStagedShortScreener({}, running ? false : refetch);
 
   // Default the universe to the wide NASDAQ+NYSE file when it exists (one-shot).
+  // Skipped when a saved preset is in effect (the user's stored universe wins);
+  // applied via rebase so the auto-default isn't flagged as an unsaved change.
   useEffect(() => {
     if (didInitUniverse.current || !staged) return;
     didInitUniverse.current = true;
-    if (staged.wideUniverse?.available) setForm((f) => ({ ...f, universe: 'wide' }));
-  }, [staged]);
+    if (!hadSavedAtMount && staged.wideUniverse?.available)
+      rebase({ ...form, universe: 'wide' });
+    // `form` is read once at init; the ref guard makes this effect one-shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staged, hadSavedAtMount]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -114,6 +121,13 @@ export default function ShortScreenerPanel({
             </button>
           ) : null}
           {running ? <span className="muted">{stream.elapsed}s</span> : null}
+          <ScreenerParamActions
+            onSave={save}
+            onReset={reset}
+            saved={saved}
+            dirty={dirty}
+            disabled={running}
+          />
         </div>
 
         {staged?.notes?.map((n, i) => (

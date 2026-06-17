@@ -322,6 +322,14 @@ table.rows-clickable tbody tr { cursor: pointer; }
 }
 .ff > textarea:focus, .ff > input:focus, .ff > select:focus { outline: none; border-color: var(--accent); }
 .ff > .ff-range { color: var(--src); font-size: 10px; font-family: var(--mono); }
+.screener-param-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.screener-param-actions > .screener-param-status { font-size: 11px; }
 
 /* ---------- misc ---------- */
 .muted { color: var(--muted); }

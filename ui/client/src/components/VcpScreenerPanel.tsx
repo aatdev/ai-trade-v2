@@ -9,8 +9,10 @@ import {
   type Refetch,
 } from '../api';
 import { useJobStream } from '../lib/useJobStream';
+import { usePersistentForm } from '../lib/usePersistentForm';
 import ScreenerHelpModal from './ScreenerHelpModal';
-import ScreenerParamForm, { DEFAULT_FORM, type ScreenerFormState } from './ScreenerParamForm';
+import ScreenerParamActions from './ScreenerParamActions';
+import ScreenerParamForm, { DEFAULT_FORM } from './ScreenerParamForm';
 import ScreenerResults from './ScreenerResults';
 import SaveWatchlistBar from './SaveWatchlistBar';
 import { Card, Collapsible, Empty, ErrorNote, Loading, Stat } from './ui';
@@ -87,7 +89,10 @@ export default function VcpScreenerPanel({
   refetch: Refetch;
 }) {
   const qc = useQueryClient();
-  const [form, setForm] = useState<ScreenerFormState>(DEFAULT_FORM);
+  const { form, setForm, save, reset, rebase, saved, dirty, hadSavedAtMount } = usePersistentForm(
+    'vcp',
+    DEFAULT_FORM,
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(true);
   const actionRef = useRef<Action | null>(null);
@@ -111,11 +116,16 @@ export default function VcpScreenerPanel({
 
   // Default the universe to the wide NASDAQ+NYSE file when it exists — that is
   // what evening-prep uses. One-shot, so a later manual choice is never clobbered.
+  // Skipped when a saved preset is in effect (the user's stored universe wins);
+  // applied via rebase so the auto-default isn't flagged as an unsaved change.
   useEffect(() => {
     if (didInitUniverse.current || !staged) return;
     didInitUniverse.current = true;
-    if (staged.wideUniverse?.available) setForm((f) => ({ ...f, universe: 'wide' }));
-  }, [staged]);
+    if (!hadSavedAtMount && staged.wideUniverse?.available)
+      rebase({ ...form, universe: 'wide' });
+    // `form` is read once at init; the ref guard makes this effect one-shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [staged, hadSavedAtMount]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -211,6 +221,13 @@ export default function VcpScreenerPanel({
             </button>
           ) : null}
           {running ? <span className="muted">{stream.elapsed}s</span> : null}
+          <ScreenerParamActions
+            onSave={save}
+            onReset={reset}
+            saved={saved}
+            dirty={dirty}
+            disabled={running}
+          />
         </div>
 
         {staged?.notes?.map((n, i) => (
