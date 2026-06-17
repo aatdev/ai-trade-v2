@@ -196,6 +196,38 @@ describe('GET /api/profile & /api/signals', () => {
   });
 });
 
+describe('GET /api/autopilot', () => {
+  // Logs live under a gitignored logs/ dir, so seed a throwaway data dir
+  // rather than committing .log fixtures.
+  let tmp: string;
+  let tApp: ReturnType<typeof createApp>;
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'state-autopilot-'));
+    fs.mkdirSync(path.join(tmp, 'logs'));
+    fs.writeFileSync(
+      path.join(tmp, 'logs', 'trading_schedule.log'),
+      '[2026-06-11 22:28:05] INFO    ===== RUN END slot=evening-prep rc=0 elapsed=784.8s =====\n',
+    );
+    fs.writeFileSync(
+      path.join(tmp, 'logs', 'autopilot_cron.log'),
+      '[2026-06-12 10:30:00] DECISION: none — no-op run complete\n',
+    );
+    tApp = createApp({ dataDir: tmp, projectRoot: path.resolve(process.cwd()) });
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('returns both the per-slot schedule log and the autopilot loop log', async () => {
+    const res = await request(tApp).get('/api/autopilot');
+    expect(res.status).toBe(200);
+    // Per-slot run log (only written when a slot executes).
+    expect(res.body.logTail).toContain(
+      '[2026-06-11 22:28:05] INFO    ===== RUN END slot=evening-prep rc=0 elapsed=784.8s =====',
+    );
+    // Autopilot cron loop log — the freshest stream between slot runs.
+    expect(res.body.cronLogTail.join('\n')).toContain('no-op run complete');
+  });
+});
+
 describe('PUT /api/profile', () => {
   // The fixture profile is read-only/shared, so PUT runs against a throwaway
   // data dir seeded with a copy of it.

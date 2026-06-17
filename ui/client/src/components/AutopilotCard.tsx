@@ -50,7 +50,15 @@ export default function AutopilotCard({ date, refetch }: { date: string | null; 
         </Collapsible>
       ) : null}
 
-      <Collapsible label="Scheduler log (last 200 lines)" count={data?.logTail.length}>
+      <Collapsible
+        label="Autopilot loop log (last 200 lines)"
+        count={data?.cronLogTail.length}
+        defaultOpen
+      >
+        <pre className="joblog">{(data?.cronLogTail ?? []).join('\n') || '(empty)'}</pre>
+      </Collapsible>
+
+      <Collapsible label="Scheduler run log — slots only (last 200 lines)" count={data?.logTail.length}>
         <pre className="joblog">{(data?.logTail ?? []).join('\n') || '(empty)'}</pre>
       </Collapsible>
     </Card>

@@ -756,7 +756,10 @@ export interface AutopilotResponse {
   state: AutopilotState | null;
   weeklyReview: Sourced<Record<string, unknown>>;
   monthlyReview: Sourced<Record<string, unknown>>;
+  /** Tail of trading_schedule.log — written only when a scheduler slot runs. */
   logTail: string[];
+  /** Tail of autopilot_cron.log — the autopilot loop's decision stream (every ~5 min). */
+  cronLogTail: string[];
 }
 
 /* ---------------- Profile ---------------- */

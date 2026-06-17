@@ -239,6 +239,7 @@ export function stateRouter(dataDir: string): Router {
       weeklyReview,
       monthlyReview,
       logTail: tailLines(path.join(dataDir, 'logs', 'trading_schedule.log'), 200),
+      cronLogTail: tailLines(path.join(dataDir, 'logs', 'autopilot_cron.log'), 200),
     };
     res.json(body);
   });
