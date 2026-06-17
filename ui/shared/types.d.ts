@@ -945,6 +945,52 @@ export interface OhlcvResponse {
   generated_at: string | null;
 }
 
+/* ---------------- Company fundamentals (TradingView scanner) ---------------- */
+
+/**
+ * Snapshot profile + valuation + performance for one ticker, pulled from the
+ * public `scanner.tradingview.com/symbol` endpoint. Raw EN strings (sector /
+ * industry / country) are localized to Russian at render time; numeric fields
+ * are passed through verbatim. Any field may be null when TradingView omits it.
+ */
+export interface CompanyFundamentals {
+  name: string | null; // TradingView "description", e.g. "Apple Inc."
+  sector: string | null; // raw EN sector (e.g. "Electronic Technology")
+  industry: string | null; // raw EN industry
+  country: string | null; // raw EN country
+  employees: number | null;
+  marketCap: number | null; // USD
+  peTtm: number | null;
+  epsTtm: number | null; // diluted, TTM, USD
+  priceToSales: number | null;
+  priceToBook: number | null;
+  dividendYield: number | null; // percent
+  price: number | null; // last close
+  high52w: number | null;
+  low52w: number | null;
+  perfW: number | null; // percent returns
+  perfM: number | null;
+  perf3M: number | null;
+  perfYtd: number | null;
+  perfY: number | null;
+}
+
+/**
+ * GET /api/fundamentals/:symbol — company profile + key metrics from the public
+ * TradingView scanner. The symbol must be exchange-qualified ("NASDAQ:AAPL");
+ * the chart modal passes the symbol TradingView resolved on the OHLCV call.
+ * Mirrors OhlcvResponse: always 200, `ok:false` (+ human `error`) on failure so
+ * the UI degrades gracefully.
+ */
+export interface FundamentalsResponse {
+  ok: boolean;
+  symbol: string; // as requested (exchange-qualified)
+  data: CompanyFundamentals | null;
+  error: string | null;
+  source: string | null; // "live" | "fixture"
+  generated_at: string | null;
+}
+
 /* ---------------- Actions / jobs ---------------- */
 
 export type SchedulerSlot = 'premarket' | 'evening-prep' | 'intraday' | 'weekly' | 'monthly';

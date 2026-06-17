@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useOhlcv } from '../api';
+import { useFundamentals, useOhlcv } from '../api';
 import { fmtNum } from '../lib/format';
 import CandleChart, { type ChartLevels, visibleMas } from './CandleChart';
+import CompanyInfoBar from './CompanyInfoBar';
 import { Empty, ErrorNote, Loading, Modal, SideBadge } from './ui';
 
 const TIMEFRAMES: { key: string; label: string }[] = [
@@ -58,6 +59,10 @@ export default function TickerChartModal({
 
   const bars = data?.ok ? data.bars : [];
 
+  // The fundamentals endpoint resolves the exchange itself (the `tv bars` CLI
+  // only echoes back the bare ticker), so just hand it the symbol.
+  const { data: funda } = useFundamentals(ticker);
+
   const title = (
     <span className="chart-title">
       {ticker} <SideBadge side={levels.side} />
@@ -77,6 +82,8 @@ export default function TickerChartModal({
       fullscreen
       footer={<button onClick={onClose}>Close</button>}
     >
+      <CompanyInfoBar funda={funda} />
+
       <div className="chart-toolbar">
         <div className="tabs" style={{ marginBottom: 0 }}>
           {TIMEFRAMES.map((t) => (

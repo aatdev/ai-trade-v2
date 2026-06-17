@@ -5,6 +5,7 @@ import { type AuthConfig, authRouter, requireAuth, resolveAuthConfig } from './a
 import { JobManager } from './lib/jobs';
 import { actionsRouter } from './routes/actions';
 import { docsRouter } from './routes/docs';
+import { fundamentalsRouter } from './routes/fundamentals';
 import { ibRouter } from './routes/ib';
 import { ohlcvRouter } from './routes/ohlcv';
 import { screenerRouter } from './routes/screener';
@@ -40,6 +41,7 @@ export function createApp(opts: AppOptions): Express {
   app.use('/api', docsRouter(opts.projectRoot));
   app.use('/api', ibRouter(opts.projectRoot));
   app.use('/api', ohlcvRouter());
+  app.use('/api', fundamentalsRouter());
   app.use('/api', actionsRouter(opts.projectRoot, opts.dataDir, jobs));
   app.use('/api', screenerRouter(opts.projectRoot, opts.dataDir, jobs));
 

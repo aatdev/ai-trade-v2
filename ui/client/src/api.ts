@@ -12,6 +12,7 @@ import type {
   DocSectionResponse,
   ReconcileResult,
   ExposureResponse,
+  FundamentalsResponse,
   IbHealth,
   IbSnapshot,
   JobDetail,
@@ -396,6 +397,19 @@ export const useOhlcv = (symbol: string, tf: string, count = 300, enabled = true
       ),
     enabled: enabled && !!symbol,
     staleTime: 60_000,
+  });
+
+/**
+ * Company profile + key metrics for the chart header (TradingView scanner).
+ * `symbol` must be exchange-qualified (e.g. the resolved "NASDAQ:AAPL" from
+ * useOhlcv); the query is disabled until such a symbol is available.
+ */
+export const useFundamentals = (symbol: string | null | undefined, enabled = true) =>
+  useQuery({
+    queryKey: ['fundamentals', symbol],
+    queryFn: () => getJSON<FundamentalsResponse>(`/api/fundamentals/${encodeURIComponent(symbol!)}`),
+    enabled: enabled && !!symbol,
+    staleTime: 5 * 60_000,
   });
 
 export const useAnalysisIndex = (refetchInterval: Refetch = false) =>

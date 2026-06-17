@@ -1,0 +1,21 @@
+{
+  "description": "Apple Inc.",
+  "sector": "Electronic Technology",
+  "industry": "Telecommunications Equipment",
+  "country": "United States",
+  "number_of_employees": 166000,
+  "market_cap_basic": 4365082193093.372,
+  "price_earnings_ttm": 35.95233774874493,
+  "earnings_per_share_diluted_ttm": 8.2665,
+  "price_sales_current": 8.93,
+  "price_book_fq": 58.12,
+  "dividends_yield_current": 0.350888918593771,
+  "close": 297.2,
+  "price_52_week_high": 317.4,
+  "price_52_week_low": 196.855,
+  "Perf.W": 2.2219164889592005,
+  "Perf.1M": -1.0125233146815948,
+  "Perf.3M": 19.165998396150755,
+  "Perf.YTD": 9.162366164074118,
+  "Perf.Y": 50.709939148073026
+}
