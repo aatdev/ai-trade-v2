@@ -17,11 +17,17 @@ scripts (``create_alerts.mjs`` / ``delete_alerts.mjs``):
   * ``purge_watchlist_alerts``  — drop alerts for tickers that became
                                   irrelevant intraday (e.g. MISSED entries).
 
-Every alert message carries the ``[WL]`` tag and all delete operations are
-scoped with ``--message-contains [WL]`` — manually curated alerts from
-``analysis/signals.md`` (no tag) are never touched. The set of tickers we
-created alerts for is tracked in a state file so the next sync can clean up
-dropped candidates.
+Every alert message carries an ownership tag and all delete operations are
+scoped with ``--message-contains <tag>`` — alerts owned by another scope (or
+manually curated, no tag) are never touched. Two scopes share this machinery:
+
+  * ``[WL]`` — auto watchlist alerts (``watchlist_to_alert_plan`` /
+    ``sync_watchlist_alerts``), driven by the evening watchlist.
+  * ``[TH]`` — thesis alerts (``theses_to_alert_plan`` /
+    ``sync_thesis_alerts``), driven by open trader-memory theses.
+
+The set of tickers we created alerts for is tracked per-scope in a state file
+so the next sync can clean up dropped candidates.
 """
 
 from __future__ import annotations
@@ -39,6 +45,13 @@ ALERT_SCRIPTS_DIR = REPO_ROOT / "skills" / "signals-alerts" / "scripts"
 
 # Marks auto-created watchlist alerts; ownership scope for every delete.
 WL_TAG = "[WL]"
+
+# Marks alerts owned by open trader-memory theses; its own ownership scope.
+TH_TAG = "[TH]"
+
+# Thesis statuses that should hold live alerts; anything else (CLOSED /
+# INVALIDATED / unknown) is treated as dropped and its [TH] alerts are purged.
+OPEN_THESIS_STATUSES = frozenset({"IDEA", "ENTRY_READY", "ACTIVE", "PARTIALLY_CLOSED"})
 
 CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
@@ -108,6 +121,64 @@ def watchlist_to_alert_plan(watchlist: dict | None) -> dict:
                     "price": target,
                     "price_condition": up,
                     "message": f"{ticker}: {WL_TAG} цель ({dir_ru}) — T1 ${_fmt(target)}",
+                }
+            )
+        signals.append(
+            {"ticker": ticker, "direction": "LONG" if is_long else "SHORT", "alerts": alerts}
+        )
+    return {"signals": signals, "skipped": skipped}
+
+
+def theses_to_alert_plan(
+    theses: list | None, *, statuses: frozenset = OPEN_THESIS_STATUSES
+) -> dict:
+    """Build the [TH] create/delete plan from full thesis documents.
+
+    Mirrors ``watchlist_to_alert_plan`` but reads the thesis YAML levels:
+    ``Trigger = entry.target_price``, ``Stop = exit.stop_loss``,
+    ``T1 = exit.take_profit``. Direction follows ``side`` (long → Trigger
+    crosses up / Stop crosses down; short — reversed). Closed / invalidated
+    theses are dropped silently (so the sync purges their alerts); open theses
+    missing a target or stop are reported in ``skipped``.
+    """
+    signals, skipped = [], []
+    for t in theses or []:
+        if (t.get("status") or "").upper() not in statuses:
+            continue  # not open → leave out so its [TH] alerts get purged
+        ticker = str(t.get("ticker", "")).upper()
+        entry = t.get("entry") or {}
+        exit_ = t.get("exit") or {}
+        target = entry.get("target_price")
+        stop = exit_.get("stop_loss")
+        take = exit_.get("take_profit")
+        if not ticker or target is None or stop is None:
+            skipped.append({"ticker": ticker or "?", "reason": "нет ticker/target_price/stop_loss"})
+            continue
+        is_long = str(t.get("side") or "long").lower() != "short"
+        dir_ru = "лонг" if is_long else "шорт"
+        up = "Crossing Up" if is_long else "Crossing Down"
+        down = "Crossing Down" if is_long else "Crossing Up"
+        alerts = [
+            {
+                "level": "Trigger",
+                "price": target,
+                "price_condition": up,
+                "message": f"{ticker}: {TH_TAG} вход ({dir_ru}) — Trigger ${_fmt(target)}",
+            },
+            {
+                "level": "Stop",
+                "price": stop,
+                "price_condition": down,
+                "message": f"{ticker}: {TH_TAG} стоп ({dir_ru}) — Stop ${_fmt(stop)}",
+            },
+        ]
+        if take is not None:
+            alerts.append(
+                {
+                    "level": "T1",
+                    "price": take,
+                    "price_condition": up,
+                    "message": f"{ticker}: {TH_TAG} цель ({dir_ru}) — T1 ${_fmt(take)}",
                 }
             )
         signals.append(
@@ -196,21 +267,25 @@ def _new_summary() -> dict:
 # --------------------------------------------------------------------------- #
 # Sync / purge
 # --------------------------------------------------------------------------- #
-def sync_watchlist_alerts(
-    watchlist: dict | None,
+def _sync_tagged_alerts(
+    plan: dict,
+    tag: str,
     state_path: Path | str,
     *,
+    plan_label: str = "alert",
     project_root: Path = REPO_ROOT,
     timeout: int = 900,
 ) -> dict:
-    """Bring TV alerts in line with the watchlist (create new / delete stale).
+    """Bring TV alerts in line with a tagged plan (create new / delete stale).
 
-    1. Purge [WL] alerts of tickers dropped since the previous sync.
-    2. Diff-delete stale [WL] levels for current tickers (--keep-from-plan).
+    1. Purge ``tag`` alerts of tickers dropped since the previous sync.
+    2. Diff-delete stale ``tag`` levels for current tickers (--keep-from-plan).
     3. Create missing alerts (create_alerts.mjs dedupes by message).
-    Requires TradingView Desktop; callers should check tv_available() first.
+
+    Every delete is scoped with ``--message-contains <tag>`` so alerts owned by
+    another scope (or untagged manual alerts) are never touched. Requires
+    TradingView Desktop; callers should check tv_available() first.
     """
-    plan = watchlist_to_alert_plan(watchlist)
     current = sorted({s["ticker"] for s in plan["signals"]})
     state = load_alerts_state(state_path)
     previous = {str(t).upper() for t in state.get("tickers") or []}
@@ -225,7 +300,7 @@ def sync_watchlist_alerts(
             summary,
             _run_node(
                 "delete_alerts.mjs",
-                ["--tickers", ",".join(dropped), "--message-contains", WL_TAG],
+                ["--tickers", ",".join(dropped), "--message-contains", tag],
                 project_root=project_root,
                 timeout=timeout,
             ),
@@ -234,14 +309,14 @@ def sync_watchlist_alerts(
     if current:
         tmp_dir = Path(project_root) / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
-        plan_path = tmp_dir / f"watchlist_alert_plan_{int(time.time())}.json"
+        plan_path = tmp_dir / f"{plan_label}_plan_{int(time.time())}.json"
         plan_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
         try:
             _accumulate(
                 summary,
                 _run_node(
                     "delete_alerts.mjs",
-                    ["--keep-from-plan", "--message-contains", WL_TAG, "--file", str(plan_path)],
+                    ["--keep-from-plan", "--message-contains", tag, "--file", str(plan_path)],
                     project_root=project_root,
                     timeout=timeout,
                 ),
@@ -265,6 +340,50 @@ def sync_watchlist_alerts(
     else:
         save_alerts_state(state_path, {**state, "tickers": current})
     return summary
+
+
+def sync_watchlist_alerts(
+    watchlist: dict | None,
+    state_path: Path | str,
+    *,
+    project_root: Path = REPO_ROOT,
+    timeout: int = 900,
+) -> dict:
+    """Bring TV [WL] alerts in line with the watchlist (create new / delete stale).
+
+    Requires TradingView Desktop; callers should check tv_available() first.
+    """
+    return _sync_tagged_alerts(
+        watchlist_to_alert_plan(watchlist),
+        WL_TAG,
+        state_path,
+        plan_label="watchlist_alert",
+        project_root=project_root,
+        timeout=timeout,
+    )
+
+
+def sync_thesis_alerts(
+    theses: list | None,
+    state_path: Path | str,
+    *,
+    project_root: Path = REPO_ROOT,
+    timeout: int = 900,
+) -> dict:
+    """Bring TV [TH] alerts in line with the open theses (create new / delete stale).
+
+    ``theses`` is a list of full thesis documents (see ``store list --full``).
+    Closed / invalidated theses drop out of the plan and have their [TH] alerts
+    purged. Requires TradingView Desktop; callers should check tv_available().
+    """
+    return _sync_tagged_alerts(
+        theses_to_alert_plan(theses),
+        TH_TAG,
+        state_path,
+        plan_label="thesis_alert",
+        project_root=project_root,
+        timeout=timeout,
+    )
 
 
 def purge_watchlist_alerts(

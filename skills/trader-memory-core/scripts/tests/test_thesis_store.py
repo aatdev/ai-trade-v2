@@ -1117,6 +1117,25 @@ def test_cli_main_lifecycle_full_sequence(tmp_path: Path, capsys):
     assert t["outcome"]["pnl_dollars"] == round((165.0 - 150.0) * 7.86, 2)
 
 
+def test_cli_list_full_returns_entry_exit(tmp_path: Path, capsys):
+    """`list --full` emits full thesis documents (with entry/exit levels), while
+    plain `list` emits only the lightweight index entries. Backs the thesis
+    alert sync, which needs the levels in one JSON pass."""
+    tid, _ = _register_and_get(tmp_path)
+    sd = str(tmp_path)
+
+    assert thesis_store.main(["--state-dir", sd, "list"]) == 0
+    shallow = json.loads(capsys.readouterr().out)
+    assert shallow[0]["thesis_id"] == tid
+    assert "entry" not in shallow[0]  # index entry is lightweight
+
+    assert thesis_store.main(["--state-dir", sd, "list", "--full"]) == 0
+    full = json.loads(capsys.readouterr().out)
+    assert full[0]["thesis_id"] == tid
+    assert "entry" in full[0] and "exit" in full[0]
+    assert "status_history" in full[0]
+
+
 def test_short_close_pnl_positive_when_exit_below_entry(tmp_path: Path):
     """Side-aware P&L: a short closed below entry is a PROFIT (the old
     long-only (exit − entry) sign-flipped every short outcome)."""

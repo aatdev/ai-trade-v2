@@ -18,21 +18,40 @@ function initialValues(def: OpDef): Values {
   return Object.fromEntries(def.fields.map((f) => [f.name, fieldDefault(f)]));
 }
 
-function OpLog({ op }: { op: MemoryOpRun }) {
+export function OpLog({ op, collapsible = false }: { op: MemoryOpRun; collapsible?: boolean }) {
   const logRef = useRef<HTMLPreElement>(null);
+  const [open, setOpen] = useState(true);
+  // Re-open on each new run so live progress is visible even after a collapse.
   useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [op.lines]);
+    if (op.state === 'running') setOpen(true);
+  }, [op.state]);
+  useEffect(() => {
+    if (open) logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [op.lines, open]);
   if (op.state === 'idle') return null;
   const color =
     op.state === 'done' ? 'var(--green)' : op.state === 'running' ? 'var(--accent)' : 'var(--orange)';
+  const statusText = op.state === 'running' ? 'выполняется…' : op.state;
+  const hasBody = op.lines.length > 0 || op.state === 'running';
+  const showBody = hasBody && (!collapsible || open);
   return (
     <div className="field">
-      <strong>
-        Лог — <span style={{ color }}>{op.state === 'running' ? 'выполняется…' : op.state}</span>
-      </strong>
+      {collapsible ? (
+        <button
+          className="link-btn"
+          onClick={() => setOpen((v) => !v)}
+          style={{ padding: 0, fontWeight: 600, alignSelf: 'flex-start', textAlign: 'left' }}
+          title={open ? 'Свернуть лог' : 'Развернуть лог'}
+        >
+          {hasBody ? (open ? '▾' : '▸') : '•'} Лог — <span style={{ color }}>{statusText}</span>
+        </button>
+      ) : (
+        <strong>
+          Лог — <span style={{ color }}>{statusText}</span>
+        </strong>
+      )}
       {op.error ? <div className="err" style={{ marginBottom: 6 }}>{op.error}</div> : null}
-      {op.lines.length > 0 || op.state === 'running' ? (
+      {showBody ? (
         <pre className="joblog" ref={logRef}>
           {op.lines.length
             ? op.lines.map((l, i) => (

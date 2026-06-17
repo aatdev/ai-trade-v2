@@ -121,6 +121,23 @@ node .claude/skills/signals-alerts/scripts/delete_alerts.mjs --tickers NVDA --me
 
 Выводит JSON `{ results: [{ ticker, deleted, kept, not_found_in_ui, errors }], summary, mode: "diff"|"purge", layout_save }`.
 
+### Теги владения алертами (ownership scopes)
+
+`--message-contains <тег>` сужает «наши» алерты до конкретного владельца, чтобы
+синхронизация никогда не удаляла чужие. В системе три класса алертов по тегу в
+тексте сообщения:
+
+- **`[WL]`** — авто-алерты вечернего watchlist (`run_trading_schedule` →
+  `scripts/lib/tv_alerts.py::sync_watchlist_alerts`).
+- **`[TH]`** — алерты открытых тезисов trader-memory
+  (`scripts/sync_thesis_alerts.py` → `tv_alerts.py::sync_thesis_alerts`, кнопка
+  «Синхр. алерты с TV» в карточке Trader Memory в UI). Trigger/Stop/T1 берутся из
+  уровней тезиса (`entry.target_price` / `exit.stop_loss` / `exit.take_profit`).
+- **без тега** — ручные алерты пользователя и tagless-алерты из `signals.md`.
+
+Каждый sync делает все удаления scoped своим тегом (`--message-contains [WL]` или
+`[TH]`), поэтому алерты другого владельца и ручные алерты не затрагиваются.
+
 ## Алгоритм работы скилла
 
 ### 0. Разбор запроса

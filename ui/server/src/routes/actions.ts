@@ -13,6 +13,7 @@ const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TRADER_MEMORY_CLI = 'skills/trader-memory-core/scripts/trader_memory_cli.py';
 const RECALC_SCRIPT = 'scripts/recalc_watchlist_from_profile.py';
+const SYNC_THESIS_ALERTS_SCRIPT = 'scripts/sync_thesis_alerts.py';
 
 function resolveClaudeBin(): string {
   // claude-p: a drop-in `claude -p` emulator that takes the prompt as a
@@ -93,6 +94,22 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [],
       cwd: projectRoot,
       shell: true,
+    });
+  });
+
+  r.post('/actions/sync-thesis-alerts', (_req, res) => {
+    // Bring TradingView [TH] alerts in line with the OPEN theses: create
+    // missing, diff-delete stale levels, purge alerts of closed/deleted theses.
+    // Every delete is scoped --message-contains [TH], so manual alerts and [WL]
+    // watchlist alerts are never touched. Reads thesis levels via the trader-
+    // memory CLI (uv → PyYAML). Respects the single-run lock like every job.
+    return startAndRespond(res, {
+      label: 'sync-thesis-alerts (theses → TradingView [TH])',
+      cmd: resolvePythonBin(),
+      args: [SYNC_THESIS_ALERTS_SCRIPT],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'sync-thesis-alerts' },
     });
   });
 

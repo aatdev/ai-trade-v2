@@ -426,6 +426,9 @@ export const runSlot = (body: { slot: string; dryRun: boolean; force: boolean; n
 
 export const syncAlerts = () => postJSON<StartJobResponse>('/api/actions/sync-alerts', {});
 
+export const syncThesisAlerts = () =>
+  postJSON<StartJobResponse>('/api/actions/sync-thesis-alerts', {});
+
 export const memoryOp = (body: Record<string, unknown>) =>
   postJSON<StartJobResponse>('/api/actions/memory', body);
 

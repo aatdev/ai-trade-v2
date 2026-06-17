@@ -919,7 +919,9 @@ def _finalize_outcome(
                 "shares_sold": remaining,
                 "price": exit_price,
                 "proceeds": round(exit_price * remaining, 2),
-                "realized_pnl": round(_pnl_per_share(thesis, exit_price, entry_price) * remaining, 2),
+                "realized_pnl": round(
+                    _pnl_per_share(thesis, exit_price, entry_price) * remaining, 2
+                ),
             }
         )
 
@@ -1550,6 +1552,11 @@ def main(argv: list[str] | None = None) -> int:
     list_p.add_argument("--type", dest="thesis_type", help="Filter by thesis type")
     list_p.add_argument("--date-from", help="Filter by created_at >= YYYY-MM-DD")
     list_p.add_argument("--date-to", help="Filter by created_at <= YYYY-MM-DD")
+    list_p.add_argument(
+        "--full",
+        action="store_true",
+        help="Emit full thesis documents (incl. entry/exit levels), not index entries",
+    )
 
     # get
     get_p = sub.add_parser("get", help="Get thesis by ID")
@@ -1652,7 +1659,12 @@ def main(argv: list[str] | None = None) -> int:
             date_from=args.date_from,
             date_to=args.date_to,
         )
-        print(json.dumps(results, indent=2))
+        if getattr(args, "full", False):
+            # Replace each lightweight index entry with the full thesis document
+            # (entry/exit levels) so downstream tools (e.g. thesis alert sync) get
+            # the prices in one JSON pass instead of N `get` calls.
+            results = [get(state_dir, r["thesis_id"]) for r in results]
+        print(json.dumps(results, indent=2, default=str))
     elif args.command == "get":
         thesis = get(state_dir, args.thesis_id)
         print(yaml.dump(thesis, default_flow_style=False, sort_keys=False))
@@ -1754,8 +1766,10 @@ def main(argv: list[str] | None = None) -> int:
         removed, missing = [], []
         for tid in ids:
             (removed if delete(state_dir, tid) else missing).append(tid)
-        print(f"Deleted {len(removed)}/{len(ids)} theses"
-              + (f"; not found: {', '.join(missing)}" if missing else ""))
+        print(
+            f"Deleted {len(removed)}/{len(ids)} theses"
+            + (f"; not found: {', '.join(missing)}" if missing else "")
+        )
         if not removed:
             print(f"No theses deleted: {', '.join(missing)}", file=sys.stderr)
             return 1

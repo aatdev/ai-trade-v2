@@ -1,12 +1,12 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AnalysisIndexEntry, MemoryThesis } from '@shared/types';
-import { useAnalysisIndex, useMemory, deleteTheses, type Refetch } from '../api';
+import { useAnalysisIndex, useMemory, deleteTheses, syncThesisAlerts, type Refetch } from '../api';
 import { useMemoryOp } from '../lib/useMemoryOp';
 import { fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
 import AnalysisModal from './AnalysisModal';
 import type { ChartLevels } from './CandleChart';
-import { MemoryOpsModal, ThesisOps } from './MemoryOps';
+import { MemoryOpsModal, OpLog, ThesisOps } from './MemoryOps';
 import SkillDocModal from './SkillDocModal';
 import { AnalysisLink, Card, Empty, ErrorNote, Loading, Modal } from './ui';
 
@@ -298,6 +298,9 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
     (body) => deleteTheses((body.ids as string[]) ?? []),
   );
 
+  // Sync TradingView [TH] alerts with the open theses (same SSE job runner).
+  const syncTh = useMemoryOp(undefined, () => syncThesisAlerts());
+
   const toggleId = (id: string, on: boolean) =>
     setSelIds((prev) => {
       const next = new Set(prev);
@@ -327,6 +330,14 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
 
   const headerBtns = (
     <div className="btn-row">
+      <button
+        className="link-btn"
+        disabled={syncTh.state === 'running'}
+        onClick={() => void syncTh.run({})}
+        title="Синхронизировать алерты TradingView с открытыми тезисами (тег [TH]): создать недостающие, удалить устаревшие и алерты закрытых тезисов. Ручные алерты и [WL] не трогаются. Требует запущенного TradingView Desktop (CDP)."
+      >
+        {syncTh.state === 'running' ? '⏳ Синхронизация…' : '🔔 Синхр. алерты с TV'}
+      </button>
       <button className="link-btn" onClick={() => setOpsOpen(true)} title="Операции над памятью">
         ⚙ Операции
       </button>
@@ -391,6 +402,8 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
         </div>
         {headerBtns}
       </div>
+
+      <OpLog op={syncTh} collapsible />
 
       {(data?.theses.length ?? 0) === 0 ? (
         <Empty>Тезисов пока нет. Зарегистрируй их через trader-memory-core (ingest).</Empty>

@@ -242,3 +242,143 @@ class TestSync:
             wl([long_candidate()]), tmp_path / "s.json", project_root=tmp_path
         )
         assert res["not_found_in_ui"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# theses_to_alert_plan  ([TH] thesis alerts)
+# --------------------------------------------------------------------------- #
+def thesis(**overrides):
+    t = {
+        "thesis_id": "th_msft_pvt_1",
+        "ticker": "MSFT",
+        "side": "long",
+        "status": "IDEA",
+        "entry": {"target_price": 402.0},
+        "exit": {"stop_loss": 382.0, "take_profit": 413.0},
+    }
+    t.update(overrides)
+    return t
+
+
+class TestThesisAlertPlan:
+    def test_open_thesis_three_alerts(self):
+        plan = ta.theses_to_alert_plan([thesis()])
+        assert len(plan["signals"]) == 1
+        sig = plan["signals"][0]
+        assert sig["ticker"] == "MSFT"
+        assert sig["direction"] == "LONG"
+        levels = {a["level"]: a for a in sig["alerts"]}
+        assert levels["Trigger"]["price"] == 402.0
+        assert levels["Trigger"]["price_condition"] == "Crossing Up"
+        assert levels["Stop"]["price"] == 382.0
+        assert levels["Stop"]["price_condition"] == "Crossing Down"
+        assert levels["T1"]["price"] == 413.0
+        assert levels["T1"]["price_condition"] == "Crossing Up"
+
+    def test_short_thesis_mirrored_conditions(self):
+        plan = ta.theses_to_alert_plan(
+            [
+                thesis(
+                    side="short",
+                    entry={"target_price": 210.0},
+                    exit={"stop_loss": 220.0, "take_profit": 190.0},
+                )
+            ]
+        )
+        sig = plan["signals"][0]
+        assert sig["direction"] == "SHORT"
+        levels = {a["level"]: a for a in sig["alerts"]}
+        assert levels["Trigger"]["price_condition"] == "Crossing Down"
+        assert levels["Stop"]["price_condition"] == "Crossing Up"
+        assert levels["T1"]["price_condition"] == "Crossing Down"
+
+    def test_messages_have_ticker_prefix_and_th_tag(self):
+        plan = ta.theses_to_alert_plan([thesis()])
+        for alert in plan["signals"][0]["alerts"]:
+            assert alert["message"].startswith("MSFT: ")
+            assert ta.TH_TAG in alert["message"]
+            assert ta.WL_TAG not in alert["message"]
+
+    def test_closed_and_invalidated_are_dropped(self):
+        plan = ta.theses_to_alert_plan(
+            [thesis(status="CLOSED"), thesis(ticker="AAPL", status="INVALIDATED")]
+        )
+        assert plan["signals"] == []
+        # dropped silently (so the sync purges their [TH] alerts), not "skipped"
+        assert plan["skipped"] == []
+
+    def test_all_open_statuses_kept(self):
+        theses = [
+            thesis(ticker="A", status="IDEA"),
+            thesis(ticker="B", status="ENTRY_READY"),
+            thesis(ticker="C", status="ACTIVE"),
+            thesis(ticker="D", status="PARTIALLY_CLOSED"),
+        ]
+        plan = ta.theses_to_alert_plan(theses)
+        assert sorted(s["ticker"] for s in plan["signals"]) == ["A", "B", "C", "D"]
+
+    def test_missing_take_profit_two_alerts(self):
+        plan = ta.theses_to_alert_plan([thesis(exit={"stop_loss": 382.0, "take_profit": None})])
+        levels = [a["level"] for a in plan["signals"][0]["alerts"]]
+        assert levels == ["Trigger", "Stop"]
+
+    def test_missing_target_or_stop_skipped(self):
+        plan = ta.theses_to_alert_plan([thesis(entry={"target_price": None})])
+        assert plan["signals"] == []
+        assert plan["skipped"][0]["ticker"] == "MSFT"
+
+    def test_empty(self):
+        assert ta.theses_to_alert_plan([])["signals"] == []
+        assert ta.theses_to_alert_plan(None)["signals"] == []
+
+
+# --------------------------------------------------------------------------- #
+# sync_thesis_alerts (node subprocess mocked) — [TH]-scoped
+# --------------------------------------------------------------------------- #
+class TestSyncThesisAlerts:
+    def _capture_node(self, monkeypatch, responses=None):
+        calls = []
+
+        def fake_run_node(script, args, *, project_root, timeout):
+            calls.append((script, list(args)))
+            if responses:
+                return responses.pop(0)
+            return {"summary": {"created": 3, "deleted": 0, "kept": 0, "errors": 0}}
+
+        monkeypatch.setattr(ta, "_run_node", fake_run_node)
+        return calls
+
+    def test_sync_diff_delete_then_create_scoped_to_th(self, monkeypatch, tmp_path):
+        calls = self._capture_node(monkeypatch)
+        state_path = tmp_path / "thesis_alerts_state.json"
+        res = ta.sync_thesis_alerts([thesis()], state_path, project_root=tmp_path)
+        assert [c[0] for c in calls] == ["delete_alerts.mjs", "create_alerts.mjs"]
+        delete_args = calls[0][1]
+        assert "--keep-from-plan" in delete_args
+        assert ta.TH_TAG in delete_args  # --message-contains [TH]
+        assert ta.WL_TAG not in delete_args
+        state = json.loads(state_path.read_text())
+        assert state["tickers"] == ["MSFT"]
+        assert res["errors"] == 0
+
+    def test_sync_purges_dropped_thesis_tickers(self, monkeypatch, tmp_path):
+        calls = self._capture_node(monkeypatch)
+        state_path = tmp_path / "thesis_alerts_state.json"
+        state_path.write_text(json.dumps({"tickers": ["OLD", "MSFT"]}))
+        ta.sync_thesis_alerts([thesis()], state_path, project_root=tmp_path)
+        purge_args = calls[0][1]
+        assert "--tickers" in purge_args
+        assert purge_args[purge_args.index("--tickers") + 1] == "OLD"
+        assert "--keep-from-plan" not in purge_args
+        assert ta.TH_TAG in purge_args
+
+    def test_closed_thesis_alerts_get_purged(self, monkeypatch, tmp_path):
+        # MSFT thesis closed since last sync → its ticker drops out → purge only.
+        calls = self._capture_node(monkeypatch)
+        state_path = tmp_path / "thesis_alerts_state.json"
+        state_path.write_text(json.dumps({"tickers": ["MSFT"]}))
+        ta.sync_thesis_alerts([thesis(status="CLOSED")], state_path, project_root=tmp_path)
+        assert [c[0] for c in calls] == ["delete_alerts.mjs"]
+        assert ta.TH_TAG in calls[0][1]
+        state = json.loads(state_path.read_text())
+        assert state["tickers"] == []

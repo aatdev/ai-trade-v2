@@ -139,7 +139,11 @@ rendered block, and each row / the modal has a 🗑 delete button (with
 confirmation).
 
 Actions (whitelisted, single-job mutex, SSE log stream):
-`POST /api/actions/run-slot`, `/sync-alerts`, `/delete-alerts`,
+`POST /api/actions/run-slot`, `/sync-alerts`, `/sync-thesis-alerts`
+(brings TradingView `[TH]` alerts in line with the OPEN trader-memory theses —
+Trigger/Stop/T1 from each thesis's levels; every delete is scoped
+`--message-contains [TH]` so manual and `[WL]` alerts are never touched;
+backs the Trader-Memory card button), `/delete-alerts`,
 `/analyze-ticker` (runs the `ticker-analysis` skill via headless
 `claude -p … --output-format stream-json`), `/recalc-profile` (re-plan latest
 screener → watchlist → non-active theses, see the **Профиль** tab);
