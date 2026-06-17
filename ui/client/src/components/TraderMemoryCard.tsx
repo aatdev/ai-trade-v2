@@ -1,12 +1,20 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { MemoryThesis } from '@shared/types';
-import { useMemory, deleteTheses, type Refetch } from '../api';
+import type { AnalysisIndexEntry, MemoryThesis } from '@shared/types';
+import { useAnalysisIndex, useMemory, deleteTheses, type Refetch } from '../api';
 import { useMemoryOp } from '../lib/useMemoryOp';
 import { fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
+import AnalysisModal from './AnalysisModal';
+import type { ChartLevels } from './CandleChart';
 import { MemoryOpsModal, ThesisOps } from './MemoryOps';
 import SkillDocModal from './SkillDocModal';
-import { Card, Empty, ErrorNote, Loading, Modal } from './ui';
+import { AnalysisLink, Card, Empty, ErrorNote, Loading, Modal } from './ui';
+
+// Code-split the charting library (lightweight-charts) — only pulled in once a
+// ticker is clicked, mirroring the watchlist/screener tables.
+const TickerChartModal = lazy(() => import('./TickerChartModal'));
+
+type Index = Record<string, AnalysisIndexEntry>;
 
 /* ---------------- coercion helpers (records are Record<string, unknown>) ---------------- */
 function rec(v: unknown): Record<string, unknown> {
@@ -20,6 +28,22 @@ function str(v: unknown): string | null {
 }
 function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
+}
+
+/** Build chart overlay levels from a thesis (entry/stop/take + provenance T1-T3). */
+function levelsFromThesis(t: MemoryThesis): ChartLevels {
+  const entry = rec(t.entry);
+  const exit = rec(t.exit);
+  const prov = rec(rec(t.origin).raw_provenance);
+  return {
+    side: str(t.raw.side) ?? undefined,
+    entry: num(entry.actual_price) ?? num(entry.target_price),
+    stop: num(exit.stop_loss),
+    target: num(exit.take_profit),
+    t1: num(prov.t1),
+    t2: num(prov.t2),
+    t3: num(prov.t3),
+  };
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -253,9 +277,13 @@ function ThesisDetailModal({ t, onClose }: { t: MemoryThesis; onClose: () => voi
 
 export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useMemory(refetch);
+  const { data: analysisIndex } = useAnalysisIndex(refetch);
+  const index: Index = analysisIndex?.tickers ?? {};
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<MemoryThesis | null>(null);
+  const [chartFor, setChartFor] = useState<MemoryThesis | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
   const [docsOpen, setDocsOpen] = useState(false);
   const [opsOpen, setOpsOpen] = useState(false);
   const [selIds, setSelIds] = useState<Set<string>>(new Set());
@@ -446,7 +474,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                       }
                     />
                   </th>
-                  <th>Тикер</th>
+                  <th style={{ width: 1, whiteSpace: 'nowrap' }}>Тикер</th>
                   <th style={{ textAlign: 'left' }}>Статус</th>
                   <th style={{ textAlign: 'left' }}>Тип</th>
                   <th>Вход</th>
@@ -474,10 +502,21 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                           />
                         ) : null}
                       </td>
-                      <td className="sym">
-                        <Link to={`/ticker/${t.ticker}`} onClick={(e) => e.stopPropagation()}>
+                      <td className="sym" style={{ whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="ticker-btn"
+                          title={`Открыть график ${t.ticker}`}
+                          onClick={() => setChartFor(t)}
+                        >
                           {t.ticker}
-                        </Link>
+                        </button>
+                        <AnalysisLink
+                          ticker={t.ticker.toUpperCase()}
+                          entry={index[t.ticker.toUpperCase()]}
+                          compact
+                          onOpen={setAnalysisFor}
+                        />
                       </td>
                       <td style={{ textAlign: 'left' }}>
                         <StatusBadge status={t.status} />
@@ -505,6 +544,24 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
       )}
 
       {sel ? <ThesisDetailModal t={sel} onClose={() => setSel(null)} /> : null}
+      {chartFor ? (
+        <Suspense fallback={null}>
+          <TickerChartModal
+            ticker={chartFor.ticker.toUpperCase()}
+            levels={levelsFromThesis(chartFor)}
+            hasAnalysis={!!index[chartFor.ticker.toUpperCase()]}
+            onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.ticker.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
+      ) : null}
       {opsOpen ? <MemoryOpsModal onClose={() => setOpsOpen(false)} /> : null}
       {docsOpen ? (
         <SkillDocModal skill="trader-memory-core" title="Trader Memory Core" onClose={() => setDocsOpen(false)} />
