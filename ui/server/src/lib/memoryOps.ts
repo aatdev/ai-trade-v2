@@ -264,14 +264,27 @@ export function buildMemoryArgs(body: Record<string, unknown>, stateDir: string)
     case 'ingest': {
       const source = str(body.source).toLowerCase();
       if (!SKILL_RE.test(source)) return { error: 'invalid source skill name' };
+      // The signal → thesis source reads a signals.md journal (default
+      // $TRADING_DATE_DIR/analysis/signals.md), so --input is optional and may
+      // be a .md file; an optional --ticker registers one symbol's latest signal.
+      const isSignal = source === 'ticker-analysis';
+      const args = ['ingest', ...sd, '--source', source];
       const input = str(body.input);
-      if (!input) return { error: 'input path required' };
-      const pe = relPathErr(input, true);
-      if (pe) return { error: `input: ${pe}` };
-      return {
-        args: ['ingest', ...sd, '--source', source, '--input', input],
-        label: `memory: ingest ${source}`,
-      };
+      if (input) {
+        const pe = relPathErr(input, !isSignal); // .json required except for signals
+        if (pe) return { error: `input: ${pe}` };
+        args.push('--input', input);
+      } else if (!isSignal) {
+        return { error: 'input path required' };
+      }
+      if (isSignal) {
+        const ticker = str(body.ticker);
+        if (ticker) {
+          if (!TICKER_RE.test(ticker.toUpperCase())) return { error: 'invalid ticker' };
+          args.push('--ticker', ticker.toUpperCase());
+        }
+      }
+      return { args, label: `memory: ingest ${source}` };
     }
 
     /* ---- heat ---- */

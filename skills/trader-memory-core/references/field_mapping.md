@@ -27,6 +27,16 @@
 | edge-candidate-agent | `id` | `origin.raw_provenance.edge_id` | |
 | edge-candidate-agent | `hypothesis_type` | `origin.raw_provenance.hypothesis_type` | |
 | edge-candidate-agent | `mechanism_tag` | `mechanism_tag` | behavior/structure/uncertain |
+| ticker-analysis | `ticker` | `ticker` | Required |
+| ticker-analysis | `direction` / `side` | `side` | Required; `long`/`short` |
+| ticker-analysis | `trigger` | `entry.target_price` | Required; also → `entry.conditions` (`close above/below $X`) |
+| ticker-analysis | `stop` | `exit.stop_loss` | Required |
+| ticker-analysis | `t1` | `exit.take_profit` | First/conservative target (single `take_profit` in schema) |
+| ticker-analysis | `t2` / `t3` | `origin.raw_provenance.t2` / `.t3` | Preserved in raw |
+| ticker-analysis | `entry_low` / `entry_high` | `origin.raw_provenance.*` | Entry range preserved in raw |
+| ticker-analysis | `report` | `origin.raw_provenance.report` | Report path preserved in raw |
+| ticker-analysis | `thesis_type` | `thesis_type` | Optional; defaults to `pivot_breakout` |
+| ticker-analysis | `date` | `_source_date` (date-only `[:10]`) | Stamps `thesis_id` / `created_at` at the signal date |
 | manual | `ticker` | `ticker` | Required |
 | manual | `thesis_statement` | `thesis_statement` | Required |
 | manual | `thesis_type` | `thesis_type` | Required; must be a valid enum value |
@@ -81,6 +91,17 @@ are set later by the `open-position` lifecycle step, not at ingest.
 `entry_date` is normalized to a date-only `_source_date` so the IDEA
 `status_history` entry is stamped at the entry date — keeping a backdated
 IDEA → ENTRY_READY → ACTIVE chain chronological.
+
+## Ticker-Analysis Signal (signals.md → thesis)
+
+The `ticker-analysis` source converts a signal the skill wrote to
+`analysis/signals.md` into an `IDEA` thesis — the signal → thesis path for a
+ticker analyzed outside a screener watchlist. Input is a `signals.md` journal
+(default `$TRADING_DATE_DIR/analysis/signals.md`, optional `--ticker` filter) or
+a signal-JSON object/array. 🟡 HOLD blocks and blocks missing direction /
+trigger / stop / T1 are skipped. A re-analysis does **not** duplicate an existing
+non-terminal same-side thesis: `ingest` reuses it and refreshes `entry`/`exit`
+levels from the fresher signal.
 
 ## Phase 1 Constraints
 

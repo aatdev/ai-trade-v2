@@ -68,9 +68,44 @@ python3 skills/trader-memory-core/scripts/trader_memory_cli.py ingest \
   --state-dir state/theses/
 ```
 
-Supported sources: `kanchi-dividend-sop`, `earnings-trade-analyzer`, `vcp-screener`, `pead-screener`, `canslim-screener`, `edge-candidate-agent`, `manual`.
+Supported sources: `kanchi-dividend-sop`, `earnings-trade-analyzer`, `vcp-screener`, `pead-screener`, `canslim-screener`, `edge-candidate-agent`, `ticker-analysis`, `manual`.
 
 Each thesis starts in `IDEA` status.
+
+#### From a ticker-analysis signal (`signals.md`)
+
+Turn a signal the `ticker-analysis` skill wrote to the journal into a thesis —
+the **signal → thesis** path. This closes the gap for a ticker analyzed on its
+own (not promoted from a screener watchlist), whose signal would otherwise stay
+orphaned in `signals.md`.
+
+```bash
+# Latest signal for one ticker from the default journal
+# ($TRADING_DATE_DIR/analysis/signals.md):
+python3 skills/trader-memory-core/scripts/trader_memory_cli.py ingest \
+  --source ticker-analysis --ticker ALB --state-dir state/theses/
+
+# All fresh (non-HOLD) signals in the journal:
+python3 .../trader_memory_cli.py ingest --source ticker-analysis --state-dir state/theses/
+
+# An explicit journal or a signal-JSON file:
+python3 .../trader_memory_cli.py ingest --source ticker-analysis \
+  --input trading-data/analysis/signals.md --ticker ALB --state-dir state/theses/
+```
+
+`--input` is optional for this source (defaults to the configured `signals.md`)
+and accepts either a `signals.md` journal or a signal-JSON object/array. The
+signal's direction sets `side`; `Trigger → entry.target_price`,
+`Stop → exit.stop_loss`, `T1 → exit.take_profit` (the first/conservative
+target); T2/T3, the entry range and the report link are preserved in
+`origin.raw_provenance`. `thesis_type` defaults to `pivot_breakout` (a
+trigger-cross entry is breakout-shaped) unless the record carries a valid one.
+🟡 HOLD blocks (no armable levels) are skipped.
+
+When a **non-terminal same-side thesis already exists** for the ticker (e.g. a
+screener already created it), the signal does not duplicate it — `ingest` reuses
+that thesis and refreshes its `entry`/`exit` levels from the fresher signal, so
+a re-analysis updates the live idea in place.
 
 #### Manual brokerage entry (fractional shares)
 

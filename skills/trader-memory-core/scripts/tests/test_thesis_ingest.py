@@ -499,9 +499,7 @@ def test_watchlist_filter_excludes_non_candidates(tmp_path: Path):
         "watchlist.json",
     )
 
-    ids = thesis_ingest.ingest(
-        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
-    )
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file)
     assert len(ids) == 2
     tickers = {thesis_store.get(state_dir, i)["ticker"] for i in ids}
     assert tickers == {"PLTR", "NVDA"}
@@ -515,9 +513,7 @@ def test_watchlist_filter_case_insensitive(tmp_path: Path):
     )
     wl_file = _write_json(tmp_path, {"candidates": [{"ticker": "pltr"}]}, "wl.json")
 
-    ids = thesis_ingest.ingest(
-        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
-    )
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file)
     assert len(ids) == 1
 
 
@@ -529,9 +525,7 @@ def test_watchlist_filter_empty_candidates_registers_nothing(tmp_path: Path):
     )
     wl_file = _write_json(tmp_path, {"candidates": []}, "wl.json")
 
-    ids = thesis_ingest.ingest(
-        "vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file
-    )
+    ids = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), watchlist_filter=wl_file)
     assert ids == []
 
 
@@ -795,8 +789,12 @@ def _short_record(symbol: str, entry: float, stop: float, target: float) -> dict
                 "sector": "Technology",
                 "grade": "A",
                 "composite_score": 82.5,
-                "trade_levels": {"entry": entry, "stop": stop, "stop_pct": 4.0,
-                                 "target_2r": target},
+                "trade_levels": {
+                    "entry": entry,
+                    "stop": stop,
+                    "stop_pct": 4.0,
+                    "target_2r": target,
+                },
             }
         ]
     }
@@ -874,10 +872,14 @@ def test_repeat_ticker_creates_new_thesis_after_closed(tmp_path: Path):
 
 def _main_args(input_file: str, state_dir: Path, wl: str) -> list[str]:
     return [
-        "--source", "vcp-screener",
-        "--input", input_file,
-        "--state-dir", str(state_dir),
-        "--watchlist-filter", wl,
+        "--source",
+        "vcp-screener",
+        "--input",
+        input_file,
+        "--state-dir",
+        str(state_dir),
+        "--watchlist-filter",
+        wl,
     ]
 
 
@@ -909,3 +911,157 @@ def test_main_registers_candidate_exits_zero(tmp_path: Path):
 
     assert thesis_ingest.main(_main_args(input_file, state_dir, wl)) == 0
     assert len(thesis_store.query(state_dir, ticker="PLTR")) == 1
+
+
+# -- Tests: ticker-analysis (signal → thesis) ----------------------------------
+
+
+def _signal(ticker="ALB", direction="long", **over) -> dict:
+    rec = {
+        "ticker": ticker,
+        "date": "2026-06-16",
+        "direction": direction,
+        "trigger": 165.0,
+        "stop": 140.0,
+        "t1": 168.0,
+        "t2": 182.0,
+        "t3": 200.0,
+        "entry_low": 155.0,
+        "entry_high": 165.0,
+        "report": "trading-data/analysis/ALB/2026-06-16/report.md",
+    }
+    rec.update(over)
+    return rec
+
+
+SIGNALS_MD = """# Trading Signals Journal
+
+---
+
+## 2026-06-16 — ALB — 🟢 BUY (oversold bounce)
+
+- **Trigger для Long:** close 1D > $165 при удержании выше MA200 ($144)
+- **Entry (Long):** $155.00–$165.00
+- **Stop:** $140.00
+- **T1 / T2 / T3:** $168.00 / $182.00 / $200.00
+- **Альтернатива (Short):** close < $140 → stop $153
+- **Полный отчёт:** [`trading-data/analysis/ALB/2026-06-16/report.md`](./ALB/2026-06-16/report.md)
+
+---
+
+## 2026-06-16 — ALLE — 🟡 HOLD (waiting)
+
+- **Trigger для Long:** close 1D > $135.50
+- **Stop:** $129.40
+- **T1 / T2 / T3:** $138.50 / $144.50 / $148.80
+"""
+
+
+def test_ingest_signal_long(tmp_path: Path):
+    """Long signal JSON → pivot_breakout thesis with mapped levels."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _signal(), "signal.json")
+
+    ids = thesis_ingest.ingest("ticker-analysis", input_file, str(state_dir))
+    assert len(ids) == 1
+    th = thesis_store.get(state_dir, ids[0])
+
+    assert th["ticker"] == "ALB"
+    assert th["side"] == "long"
+    assert th["thesis_type"] == "pivot_breakout"  # default for trigger-cross entry
+    assert th["entry"]["target_price"] == 165.0
+    assert th["entry"]["conditions"] == ["close above $165"]
+    assert th["exit"]["stop_loss"] == 140.0
+    assert th["exit"]["take_profit"] == 168.0  # T1, the first/conservative target
+    assert th["origin"]["skill"] == "ticker-analysis"
+    # T2/T3 + entry range + report preserved in raw_provenance, not lost.
+    prov = th["origin"]["raw_provenance"]
+    assert prov["t2"] == 182.0 and prov["t3"] == 200.0
+    assert prov["report"] == "trading-data/analysis/ALB/2026-06-16/report.md"
+    # _source_date drives the id/created_at stamp.
+    assert th["created_at"].startswith("2026-06-16")
+    assert th["status"] == "IDEA"
+
+
+def test_ingest_signal_short(tmp_path: Path):
+    """Short signal → side short with a 'close below' entry condition."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(
+        tmp_path, _signal("ADBE", "short", trigger=210.0, stop=218.5, t1=200.0), "signal.json"
+    )
+
+    ids = thesis_ingest.ingest("ticker-analysis", input_file, str(state_dir))
+    th = thesis_store.get(state_dir, ids[0])
+    assert th["side"] == "short"
+    assert th["entry"]["conditions"] == ["close below $210"]
+    assert th["exit"]["stop_loss"] == 218.5
+
+
+def test_ingest_signal_thesis_type_override(tmp_path: Path):
+    """An explicit valid thesis_type in the signal record wins over the default."""
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _signal(thesis_type="mean_reversion"), "signal.json")
+
+    ids = thesis_ingest.ingest("ticker-analysis", input_file, str(state_dir))
+    assert thesis_store.get(state_dir, ids[0])["thesis_type"] == "mean_reversion"
+
+
+def test_ingest_signal_missing_levels_skipped(tmp_path: Path):
+    """A signal without a stop is unusable → adapter ValueError → 0 registered."""
+    state_dir = tmp_path / "theses"
+    bad = _signal()
+    del bad["stop"]
+    input_file = _write_json(tmp_path, bad, "signal.json")
+
+    ids = thesis_ingest.ingest("ticker-analysis", input_file, str(state_dir))
+    assert ids == []
+
+
+def test_ingest_signal_bad_direction_skipped(tmp_path: Path):
+    state_dir = tmp_path / "theses"
+    input_file = _write_json(tmp_path, _signal(direction="flat"), "signal.json")
+    assert thesis_ingest.ingest("ticker-analysis", input_file, str(state_dir)) == []
+
+
+def test_ingest_signal_from_markdown_with_ticker_filter(tmp_path: Path):
+    """signals.md input + --ticker registers the latest block; HOLD skipped."""
+    state_dir = tmp_path / "theses"
+    md = tmp_path / "signals.md"
+    md.write_text(SIGNALS_MD, encoding="utf-8")
+
+    ids = thesis_ingest.ingest("ticker-analysis", str(md), str(state_dir), ticker="ALB")
+    assert len(ids) == 1
+    th = thesis_store.get(state_dir, ids[0])
+    assert th["ticker"] == "ALB"
+    assert th["entry"]["target_price"] == 165.0
+
+    # ALLE is HOLD → no thesis even without a filter.
+    ids_all = thesis_ingest.ingest("ticker-analysis", str(md), str(state_dir))
+    assert all(thesis_store.get(state_dir, i)["ticker"] != "ALLE" for i in ids_all)
+
+
+def test_ingest_signal_reuses_and_refreshes_existing(tmp_path: Path):
+    """A signal for a ticker with a non-terminal same-side thesis reuses it and
+    refreshes the levels (re-analysis updates, not duplicates)."""
+    state_dir = tmp_path / "theses"
+    # Seed a long IDEA thesis from the VCP screener at an old level.
+    vcp = _write_json(tmp_path, _vcp_record("ALB", "2026-06-10"), "vcp.json")
+    seed_ids = thesis_ingest.ingest("vcp-screener", vcp, str(state_dir))
+    assert len(seed_ids) == 1
+
+    # Now ingest a fresh ticker-analysis signal for the same ticker/side.
+    signal = _write_json(tmp_path, _signal("ALB", "long", stop=150.0, t1=180.0), "signal.json")
+    ids = thesis_ingest.ingest("ticker-analysis", signal, str(state_dir))
+
+    assert ids == seed_ids  # reused, not a new thesis
+    assert len(thesis_store.query(state_dir, ticker="ALB")) == 1
+    th = thesis_store.get(state_dir, ids[0])
+    assert th["entry"]["target_price"] == 165.0  # refreshed from the signal
+    assert th["exit"]["stop_loss"] == 150.0
+    assert th["exit"]["take_profit"] == 180.0
+
+
+def test_ingest_signal_requires_input_for_other_sources(tmp_path: Path):
+    """Non-signals sources still require --input (regression guard)."""
+    with pytest.raises(ValueError, match="input is required"):
+        thesis_ingest.ingest("vcp-screener", None, str(tmp_path / "theses"))

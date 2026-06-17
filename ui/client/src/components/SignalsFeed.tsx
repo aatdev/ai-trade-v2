@@ -5,9 +5,17 @@ import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router-dom';
 import type { SignalBlock } from '@shared/types';
 import { deleteSignal, useSignals, type Refetch } from '../api';
+import { useMemoryOp } from '../lib/useMemoryOp';
 import { Card, Empty, ErrorNote, Loading, Modal } from './ui';
 
 const REPORT_LINK_RE = /\.?\/?([A-Za-z0-9.\-]+)\/(\d{4}-\d{2}-\d{2})\//;
+
+/** A signal carries armable levels only when it's a BUY/SELL (not 🟡 HOLD) —
+ * the ingest adapter skips HOLD, so the "→ thesis" button is hidden for them. */
+function isActionable(status: string | null): boolean {
+  const s = (status || '').toUpperCase();
+  return /\b(BUY|LONG|SELL|SHORT)\b/.test(s) || /🟢|🔴/.test(status || '');
+}
 
 function MdLink({ href, children }: { href?: string; children?: React.ReactNode }) {
   const m = href?.match(REPORT_LINK_RE);
@@ -33,6 +41,14 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
   const [active, setActive] = useState<SignalBlock | null>(null);
   const [busy, setBusy] = useState(false);
   const [delError, setDelError] = useState<string | null>(null);
+  const toThesis = useMemoryOp();
+  const [ingestTicker, setIngestTicker] = useState<string | null>(null);
+  const ingesting = toThesis.state === 'running';
+
+  function onToThesis(s: SignalBlock) {
+    setIngestTicker(s.ticker);
+    void toThesis.run({ op: 'ingest', source: 'ticker-analysis', ticker: s.ticker });
+  }
 
   const signals = data?.signals ?? [];
   const tickers = useMemo(
@@ -75,7 +91,7 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
       </Card>
     );
 
-  // Fallback: journal present but unparseable into blocks — render raw markdown.
+  // Fallback: journal present but unparsable into blocks — render raw markdown.
   if (signals.length === 0)
     return (
       <Card title="Signals Feed" className="full">
@@ -106,6 +122,13 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
         ) : null}
       </div>
       {delError ? <div className="err" style={{ marginBottom: 8 }}>{delError}</div> : null}
+      {ingesting ? (
+        <div className="muted" style={{ marginBottom: 8 }}>создаю тезис {ingestTicker}…</div>
+      ) : null}
+      {toThesis.state === 'done' ? (
+        <div className="muted" style={{ marginBottom: 8 }}>✓ тезис {ingestTicker} создан/обновлён</div>
+      ) : null}
+      {toThesis.error ? <div className="err" style={{ marginBottom: 8 }}>{toThesis.error}</div> : null}
 
       <div className="scroll-x feed">
         <table className="rows-clickable">
@@ -133,6 +156,16 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
                   <button className="link-btn" onClick={(e) => (e.stopPropagation(), setActive(s))}>
                     view
                   </button>
+                  {isActionable(s.status) ? (
+                    <button
+                      className="link-btn"
+                      disabled={ingesting}
+                      title="Создать IDEA-тезис из последнего сигнала"
+                      onClick={(e) => (e.stopPropagation(), onToThesis(s))}
+                    >
+                      → тезис
+                    </button>
+                  ) : null}
                   <button
                     className="link-btn danger"
                     disabled={busy}
@@ -153,6 +186,15 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
           onClose={() => setActive(null)}
           footer={
             <>
+              {isActionable(active.status) ? (
+                <button
+                  disabled={ingesting}
+                  title="Создать IDEA-тезис из этого сигнала"
+                  onClick={() => onToThesis(active)}
+                >
+                  → тезис
+                </button>
+              ) : null}
               <button className="danger" disabled={busy} onClick={() => void onDelete(active)}>
                 🗑 Delete signal
               </button>

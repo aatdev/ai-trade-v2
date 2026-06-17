@@ -14,6 +14,7 @@ from pathlib import Path
 # Allow imports from sibling modules
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import signals_md  # noqa: E402
 import thesis_store  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -303,6 +304,81 @@ def ingest_swing_short(record: dict, input_file: str) -> dict:
     return thesis_data
 
 
+@_adapter("ticker-analysis")
+def ingest_signal(record: dict, input_file: str) -> dict:
+    """Transform a ticker-analysis signal into thesis data — the signal → thesis path.
+
+    The record is a parsed ``signals.md`` block (see ``signals_md.parse_signals_md``)
+    or an equivalent signal-JSON object: direction + Trigger/Stop/T1-T3. It maps to
+    an ``IDEA`` thesis. ``exit.take_profit`` takes T1 (the first/conservative target,
+    mirroring swing-short's ``target_2r`` mapping — the schema has a single
+    ``take_profit``); T2/T3, the entry range and the report link stay in
+    ``origin.raw_provenance``. ``thesis_type`` defaults to ``pivot_breakout`` (a
+    trigger-cross entry is breakout-shaped); a valid explicit ``thesis_type`` wins.
+
+    Like every adapter this creates an IDEA thesis only. When a non-terminal
+    same-side thesis already exists for the ticker, ``ingest()`` reuses it and
+    refreshes its levels from this fresher signal — so a re-analysis updates the
+    live thesis instead of duplicating it.
+    """
+    ticker = record.get("ticker")
+    if not ticker:
+        raise ValueError("Missing required field 'ticker' in signal record")
+
+    side = str(record.get("side") or record.get("direction") or "").lower()
+    if side not in ("long", "short"):
+        raise ValueError(f"Signal for {ticker} needs a long/short direction, got {side!r}")
+
+    trigger = record.get("trigger")
+    stop = record.get("stop")
+    if trigger is None or stop is None:
+        raise ValueError(
+            f"Signal for {ticker} needs both a trigger and a stop "
+            f"(got trigger={trigger!r}, stop={stop!r})"
+        )
+
+    thesis_type = record.get("thesis_type")
+    if thesis_type not in _VALID_THESIS_TYPES:
+        thesis_type = "pivot_breakout"
+
+    t1 = record.get("t1")
+    date = record.get("date")
+    cmp_word = "above" if side == "long" else "below"
+    statement = (
+        f"{ticker} {side} from ticker-analysis signal"
+        + (f" ({date})" if date else "")
+        + f" — trigger ${trigger:g}, stop ${stop:g}"
+        + (f", T1 ${t1:g}" if t1 is not None else "")
+    )
+
+    thesis_data = {
+        "ticker": ticker,
+        "side": side,
+        "thesis_type": thesis_type,
+        "thesis_statement": statement,
+        "setup_type": record.get("setup_type") or "ticker_analysis_signal",
+        "_register_reason": "from ticker-analysis signal",
+        "entry": {
+            "target_price": trigger,
+            "conditions": [f"close {cmp_word} ${trigger:g}"],
+        },
+        "exit": {"stop_loss": stop},
+        "origin": {
+            "skill": "ticker-analysis",
+            "output_file": input_file,
+            # Full signal record (T2/T3, entry range, report link) preserved.
+            "raw_provenance": {k: v for k, v in record.items()},
+        },
+    }
+    if t1 is not None:
+        thesis_data["exit"]["take_profit"] = t1
+    if isinstance(date, str) and date:
+        # Stamp the thesis_id / created_at / history at the signal date.
+        thesis_data["_source_date"] = date[:10]
+
+    return thesis_data
+
+
 @_adapter("pead-screener")
 def ingest_pead(record: dict, input_file: str) -> dict:
     """Transform pead-screener result into thesis data."""
@@ -469,9 +545,7 @@ def _watchlist_tickers(wl_file: str) -> set[str]:
     """Return set of uppercase tickers from watchlist.candidates[]."""
     data = json.loads(Path(wl_file).read_text(encoding="utf-8"))
     return {
-        str(c.get("ticker", "")).upper()
-        for c in (data.get("candidates") or [])
-        if c.get("ticker")
+        str(c.get("ticker", "")).upper() for c in (data.get("candidates") or []) if c.get("ticker")
     }
 
 
@@ -519,9 +593,56 @@ def _enrich_from_plan(thesis_data: dict, plan_index: dict[str, dict]) -> None:
     for key, sub in _plan_fields(tp).items():
         thesis_data.setdefault(key, {}).update(sub)
     prov = thesis_data.setdefault("origin", {}).setdefault("raw_provenance", {})
-    for key, val in [("plan_shares", tp.get("shares")), ("plan_risk_dollars", tp.get("risk_dollars"))]:
+    for key, val in [
+        ("plan_shares", tp.get("shares")),
+        ("plan_risk_dollars", tp.get("risk_dollars")),
+    ]:
         if val is not None:
             prov[key] = val
+
+
+# -- Input loading ------------------------------------------------------------
+
+
+def _default_signals_md() -> Path:
+    """Default signals journal: $TRADING_DATE_DIR/analysis/signals.md."""
+    base = _default_output_dir("analysis", "trading-data/analysis")
+    return Path(base) / "signals.md"
+
+
+def _load_records(
+    source: str, input_file: str | None, ticker: str | None
+) -> tuple[list[dict], str | None, str]:
+    """Return (records, source_date, resolved_input) for the chosen source.
+
+    The ``ticker-analysis`` source reads a ``signals.md`` journal (default
+    $TRADING_DATE_DIR/analysis/signals.md when ``--input`` is omitted) or a
+    signal-JSON file, optionally filtered to one ``ticker``; each record carries
+    its own date so ``source_date`` is None (the adapter stamps ``_source_date``
+    per record). Every other source keeps the existing JSON contract and
+    requires ``input_file``.
+    """
+    if source == "ticker-analysis":
+        path = Path(input_file).expanduser() if input_file else _default_signals_md()
+        if not path.exists():
+            raise FileNotFoundError(f"Signals input not found: {path}")
+        if path.suffix.lower() == ".md":
+            records = signals_md.parse_signals_md(path.read_text(encoding="utf-8"), ticker=ticker)
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            records = data if isinstance(data, list) else [data]
+            if ticker:
+                want = ticker.upper()
+                records = [r for r in records if str(r.get("ticker", "")).upper() == want]
+        return records, None, str(path)
+
+    if not input_file:
+        raise ValueError(f"--input is required for source '{source}'")
+    path = Path(input_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Input file not found: {input_file}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return _extract_records(data, source), _extract_source_date(data), str(path)
 
 
 # -- Public API ---------------------------------------------------------------
@@ -529,24 +650,29 @@ def _enrich_from_plan(thesis_data: dict, plan_index: dict[str, dict]) -> None:
 
 def ingest(
     source: str,
-    input_file: str,
+    input_file: str | None,
     state_dir: str = "state/theses",
     *,
     plan_input: str | None = None,
     watchlist_filter: str | None = None,
     ids_output: str | None = None,
+    ticker: str | None = None,
 ) -> list[str]:
     """Ingest skill output and register theses.
 
     Args:
         source: Source skill name (e.g., "kanchi-dividend-sop").
-        input_file: Path to JSON file with skill output.
+        input_file: Path to JSON file with skill output. For the
+            "ticker-analysis" source this may be a signals.md journal or a
+            signal-JSON file, and may be omitted to use the default journal.
         state_dir: Path to thesis state directory.
         plan_input: Optional path to breakout_trade_plan_*.json; enriches
             entry.target_price / exit.stop_loss / exit.take_profit from planner.
         watchlist_filter: Optional path to watchlist_*.json; only registers
             tickers present in candidates[] (rejects orphan screener entries).
         ids_output: Optional path to write {TICKER: thesis_id} JSON mapping.
+        ticker: Optional symbol filter (signals source only) — register just
+            this ticker's latest signal.
 
     Returns:
         List of registered thesis IDs.
@@ -558,12 +684,7 @@ def ingest(
     if source not in _ADAPTERS:
         raise ValueError(f"Unknown source: {source}. Available: {sorted(_ADAPTERS.keys())}")
 
-    input_path = Path(input_file)
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_file}")
-
-    with open(input_path) as f:
-        data = json.load(f)
+    records, source_date, resolved_input = _load_records(source, input_file, ticker)
 
     adapter = _ADAPTERS[source]
     state_path = Path(state_dir)
@@ -571,17 +692,11 @@ def ingest(
     plan_index = _build_plan_index(plan_input) if plan_input else {}
     allowed_tickers = _watchlist_tickers(watchlist_filter) if watchlist_filter else None
 
-    # Extract source date from top-level metadata (as_of, generated_at, etc.)
-    source_date = _extract_source_date(data)
-
-    # Handle both single-record and multi-record (results array) formats
-    records = _extract_records(data, source)
-
     thesis_ids: list[str] = []
     ticker_id_map: dict[str, str] = {}
     for record in records:
         try:
-            thesis_data = adapter(record, input_file)
+            thesis_data = adapter(record, resolved_input)
         except ValueError as e:
             logger.error("Adapter error for %s: %s", source, e)
             continue
@@ -589,9 +704,9 @@ def ingest(
             continue  # skipped (e.g., edge research_only)
         # Filter to watchlist-only tickers when requested
         if allowed_tickers is not None:
-            ticker = str(thesis_data.get("ticker", "")).upper()
-            if ticker not in allowed_tickers:
-                logger.debug("Skipping %s: not in watchlist filter", ticker)
+            cand_ticker = str(thesis_data.get("ticker", "")).upper()
+            if cand_ticker not in allowed_tickers:
+                logger.debug("Skipping %s: not in watchlist filter", cand_ticker)
                 continue
         # Enrich with exact plan levels when available
         if plan_index:
@@ -606,7 +721,8 @@ def ingest(
         t_ticker = str(thesis_data.get("ticker", "")).upper()
         t_side = str(thesis_data.get("side") or "long").lower()
         existing_active = [
-            e for e in thesis_store.query(state_path, ticker=t_ticker)
+            e
+            for e in thesis_store.query(state_path, ticker=t_ticker)
             if e.get("status") not in ("CLOSED", "INVALIDATED")
             and str(e.get("side") or "long").lower() == t_side
         ]
@@ -615,7 +731,9 @@ def ingest(
             tid = existing["thesis_id"]
             logger.info(
                 "Reusing thesis %s for %s (status=%s, non-terminal)",
-                tid, t_ticker, existing.get("status"),
+                tid,
+                t_ticker,
+                existing.get("status"),
             )
             # Refresh levels on PRE-ENTRY reuse: the fresh screener record /
             # plan carries new pivot/stop/target while the thesis still holds
@@ -699,6 +817,7 @@ def _extract_records(data: dict | list, source: str) -> list[dict]:
 
 # -- CLI entry point ----------------------------------------------------------
 
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -706,7 +825,20 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Ingest skill output into Trader Memory Core")
     parser.add_argument("--source", required=True, help="Source skill name")
-    parser.add_argument("--input", required=True, help="Path to JSON input file")
+    parser.add_argument(
+        "--input",
+        default=None,
+        help=(
+            "Path to JSON input file. For --source ticker-analysis this may be a "
+            "signals.md journal or a signal-JSON file; omit it to use the default "
+            "$TRADING_DATE_DIR/analysis/signals.md."
+        ),
+    )
+    parser.add_argument(
+        "--ticker",
+        default=None,
+        help="Symbol filter (ticker-analysis source): register only this ticker's latest signal",
+    )
     parser.add_argument(
         "--state-dir",
         default=_default_output_dir("journal/theses", "state/theses"),
@@ -736,6 +868,7 @@ def main(argv: list[str] | None = None) -> int:
         plan_input=args.plan_input,
         watchlist_filter=args.watchlist_filter,
         ids_output=args.ids_output,
+        ticker=args.ticker,
     )
     if ids:
         print(f"Registered {len(ids)} thesis(es): {', '.join(ids)}")
