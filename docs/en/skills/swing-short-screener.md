@@ -3,7 +3,7 @@ layout: default
 title: "Swing Short Screener"
 grand_parent: English
 parent: Skill Guides
-nav_order: 54
+nav_order: 55
 lang_peer: /ja/skills/swing-short-screener/
 permalink: /en/skills/swing-short-screener/
 generated: true
@@ -126,8 +126,16 @@ for the full rubric):
 4. **Lower Highs (15%)** — descending swing-high structure
 5. **Liquidity / Borrow (10%)** — tradable, borrowable, low squeeze risk
 
-A name that is RSI-oversold or >20% below its MA50 gets its grade **capped at C**
-(falling-knife / bounce risk) — flagged with ★.
+A name gets its grade **capped at C** (bounce risk, flagged ★) when it is
+RSI-oversold / >20% below its MA50 (falling-knife), being squeezed up (a
+single-day pop ≥ 10% in the last 10 sessions, or price ≥ 15% above its 20-session
+low), **or** shorting into a leading sector (its SPDR ETF outperforming SPY by
+≥ 5% over ~3 months — don't fight a strong group). All three are price-action
+only (no short-interest feed); flags carried: `squeeze_risk` / `squeeze_reason`
+and `sector_fight` / `sector_etf` / `sector_rs` / `sector_leadership`. The sector
+cap is toggled by `sector_rs_gate` (1/0) and tuned by `sector_rs_threshold`
+(default 5pp) in the trading profile; `--sector-rs-gate` / `--sector-rs-threshold`
+override per run.
 
 ### Step 3: Present the Watchlist
 
@@ -140,7 +148,7 @@ For each top candidate, present:
   Candidates whose stop distance falls outside 2–10% of entry are rejected
   (`--min-stop-pct` / `--max-stop-pct`): below the floor the stop sits in daily
   noise, above the ceiling the geometry is post-crash junk
-- ★ marker if the oversold/extended state cap was applied
+- ★ marker if the oversold/extended, squeeze, **or counter-sector** state cap was applied
 - Relative strength vs the index and volume ratio on the breakdown
 
 Read `references/weakness_methodology.md` for Stage 4 interpretation context.

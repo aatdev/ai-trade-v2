@@ -3,7 +3,7 @@ layout: default
 title: "Ticker Analysis"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 56
+nav_order: 57
 lang_peer: /en/skills/ticker-analysis/
 permalink: /ja/skills/ticker-analysis/
 generated: true

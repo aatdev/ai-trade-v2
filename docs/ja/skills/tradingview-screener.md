@@ -3,7 +3,7 @@ layout: default
 title: "Tradingview Screener"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 61
+nav_order: 62
 lang_peer: /en/skills/tradingview-screener/
 permalink: /ja/skills/tradingview-screener/
 generated: true

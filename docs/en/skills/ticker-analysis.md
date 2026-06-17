@@ -3,7 +3,7 @@ layout: default
 title: "Ticker Analysis"
 grand_parent: English
 parent: Skill Guides
-nav_order: 56
+nav_order: 57
 lang_peer: /ja/skills/ticker-analysis/
 permalink: /en/skills/ticker-analysis/
 generated: true

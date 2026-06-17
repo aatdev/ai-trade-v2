@@ -3,7 +3,7 @@ layout: default
 title: "IB Portfolio Manager"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 29
+nav_order: 30
 lang_peer: /en/skills/ib-portfolio-manager/
 permalink: /ja/skills/ib-portfolio-manager/
 generated: true

@@ -118,6 +118,7 @@ The table below is **auto-generated** from `skills-index.yaml` by `scripts/gener
 | Skill | FMP API | FINVIZ Elite | Alpaca | Notes |
 |-------|---------|--------------|--------|-------|
 | **Backtest Expert** | ❌ Not used | ❌ Not used | ❌ Not used | User provides strategy parameters |
+| **Bottom Flow Divergence Screener** | ❌ Not used | ❌ Not used | ❌ Not used | Beaten-down US fundamentals + money-flow via the public scanner.tradingview.com endpoint; no API key; offline --fixture mode for testing |
 | **Breadth Chart Analyst** | ❌ Not used | ❌ Not used | ❌ Not used | Chart screenshot input |
 | **Breakout Trade Planner** | ❌ Not used | ❌ Not used | ❌ Not used | Consumes VCP screener output; pure calculation + Alpaca-shaped and Interactive Brokers order templates; Optional earnings-date gate (--earnings-gate-days) via public scanner.tradingview.com; no API key |
 | **CANSLIM Screener** | ✅ Required | ❌ Not used | ❌ Not used | US stock fundamentals via FMP |

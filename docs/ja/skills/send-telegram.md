@@ -3,7 +3,7 @@ layout: default
 title: "Send Telegram"
 grand_parent: 日本語
 parent: スキルガイド
-nav_order: 46
+nav_order: 47
 lang_peer: /en/skills/send-telegram/
 permalink: /ja/skills/send-telegram/
 generated: true

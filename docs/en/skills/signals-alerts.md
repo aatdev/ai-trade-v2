@@ -3,7 +3,7 @@ layout: default
 title: "Signals Alerts"
 grand_parent: English
 parent: Skill Guides
-nav_order: 48
+nav_order: 49
 lang_peer: /ja/skills/signals-alerts/
 permalink: /en/skills/signals-alerts/
 generated: true

@@ -169,6 +169,7 @@ cd ui && npm install && npm run dev   # → http://localhost:5173
 
 | スキル | サマリ | 依存 | ステータス |
 |---|---|---|---|
+| **Bottom Flow Divergence Screener** (`bottom-flow-divergence-screener`) | Screen beaten-down US stocks near 52-week lows whose flows refuse to confirm the bottom — fundamental (revenue still growing + positive operating cash flow) and accumulation (Chaikin / Money Flow) divergence — and emit a graded A / B-accum / B-fund reversal watchlist. | `tradingview` — | production |
 | **Breakout Trade Planner** (`breakout-trade-planner`) | Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio heat management, and broker order templates — Alpaca-shaped bracket JSON plus Interactive Brokers MCP place_order leg sequences — for pre-placement and post-confirmation. | `local_calculation` —, `tradingview` — | production |
 | **CANSLIM Screener** (`canslim-screener`) | Screen US stocks using William O'Neil's CANSLIM growth stock methodology. | `fmp` **required** | production |
 | **Finviz Screener** (`finviz-screener`) | Build and open FinViz screener URLs from natural language requests. | `finviz` optional | production |

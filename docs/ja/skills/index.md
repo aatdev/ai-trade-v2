@@ -24,6 +24,7 @@ permalink: /ja/skills/
 | スキル | 概要 | API |
 |--------|------|-----|
 | [Backtest Expert]({{ '/ja/skills/backtest-expert/' | relative_url }}) ★ | Expert guidance for systematic backtesting of trading strategies | <span class="badge badge-free">API不要</span> |
+| [Bottom Flow Divergence Screener]({{ '/ja/skills/bottom-flow-divergence-screener/' | relative_url }}) | Screen the US market for "bottom + flow divergence" — stocks whose PRICE is on the floor (near the 52-week low, deep ... | <span class="badge badge-free">API不要</span> |
 | [Breadth Chart Analyst]({{ '/ja/skills/breadth-chart-analyst/' | relative_url }}) | This skill should be used when analyzing market breadth charts, specifically the S&P 500 Breadth Index (200-Day MA ba... | <span class="badge badge-free">API不要</span> |
 | [Breakout Trade Planner]({{ '/ja/skills/breakout-trade-planner/' | relative_url }}) | Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio he... | <span class="badge badge-free">API不要</span> |
 | [CANSLIM Screener]({{ '/ja/skills/canslim-screener/' | relative_url }}) ★ | Screen US stocks using William O'Neil's CANSLIM growth stock methodology | <span class="badge badge-api">FMP必須</span> |

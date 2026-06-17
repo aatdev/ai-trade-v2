@@ -3,7 +3,7 @@ layout: default
 title: "IB Portfolio Manager"
 grand_parent: English
 parent: Skill Guides
-nav_order: 29
+nav_order: 30
 lang_peer: /ja/skills/ib-portfolio-manager/
 permalink: /en/skills/ib-portfolio-manager/
 generated: true

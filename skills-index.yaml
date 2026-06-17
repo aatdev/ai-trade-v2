@@ -30,6 +30,25 @@ skills:
   workflows:
   - trade-memory-loop
   - monthly-performance-review
+- id: bottom-flow-divergence-screener
+  display_name: Bottom Flow Divergence Screener
+  category: swing-opportunity
+  status: production
+  summary: Screen beaten-down US stocks near 52-week lows whose flows refuse to confirm the bottom —
+    fundamental (revenue still growing + positive operating cash flow) and accumulation (Chaikin /
+    Money Flow) divergence — and emit a graded A / B-accum / B-fund reversal watchlist.
+  timeframe: daily
+  difficulty: advanced
+  integrations:
+  - id: tradingview
+    type: screener
+    requirement: not_required
+    note: Beaten-down US fundamentals + money-flow via the public scanner.tradingview.com endpoint; no API key; offline --fixture mode for testing
+  inputs:
+  - us_equity_universe
+  outputs:
+  - reversal_candidates
+  workflows: []
 - id: breadth-chart-analyst
   display_name: Breadth Chart Analyst
   category: market-regime

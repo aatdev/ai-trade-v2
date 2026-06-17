@@ -1,0 +1,92 @@
+{
+  "rows": [
+    {
+      "symbol": "NASDAQ:FOO",
+      "close": 10.0, "price_52_week_low": 8.5, "price_52_week_high": 20.0,
+      "Perf.Y": -50.0, "Perf.6M": -30.0, "Perf.3M": 5.0, "RSI": 45.0,
+      "total_revenue_yoy_growth_ttm": 20.0, "total_revenue_qoq_growth_fq": 10.0,
+      "cash_f_operating_activities_ttm": 500000000, "free_cash_flow_ttm": 300000000,
+      "free_cash_flow_margin_ttm": 15.0, "gross_margin_ttm": 40.0, "operating_margin_ttm": 12.0,
+      "net_income_ttm": 100000000, "MoneyFlow": 60.0, "ChaikinMoneyFlow": 0.12,
+      "altman_z_score_ttm": 4.0, "current_ratio_fq": 2.0, "SMA50": 9.5,
+      "market_cap_basic": 5000000000, "average_volume_30d_calc": 2000000
+    },
+    {
+      "symbol": "NYSE:MNA",
+      "close": 10.0, "price_52_week_low": 9.0, "price_52_week_high": 22.0,
+      "Perf.Y": -55.0, "Perf.6M": -30.0, "Perf.3M": 8.0, "RSI": 47.0,
+      "total_revenue_yoy_growth_ttm": 120.0, "total_revenue_qoq_growth_fq": 80.0,
+      "cash_f_operating_activities_ttm": 200000000, "free_cash_flow_ttm": 100000000,
+      "free_cash_flow_margin_ttm": 10.0, "gross_margin_ttm": 35.0, "operating_margin_ttm": 8.0,
+      "net_income_ttm": 50000000, "MoneyFlow": 58.0, "ChaikinMoneyFlow": 0.05,
+      "altman_z_score_ttm": 3.5, "current_ratio_fq": 1.8, "SMA50": 9.0,
+      "market_cap_basic": 3000000000, "average_volume_30d_calc": 1000000
+    },
+    {
+      "symbol": "NASDAQ:BAR",
+      "close": 5.0, "price_52_week_low": 4.5, "price_52_week_high": 15.0,
+      "Perf.Y": -60.0, "Perf.6M": -40.0, "Perf.3M": -10.0, "RSI": 35.0,
+      "total_revenue_yoy_growth_ttm": -5.0, "total_revenue_qoq_growth_fq": -2.0,
+      "cash_f_operating_activities_ttm": -50000000, "free_cash_flow_ttm": -80000000,
+      "free_cash_flow_margin_ttm": -10.0, "gross_margin_ttm": 30.0, "operating_margin_ttm": -15.0,
+      "net_income_ttm": -120000000, "MoneyFlow": 63.0, "ChaikinMoneyFlow": 0.14,
+      "altman_z_score_ttm": 1.5, "current_ratio_fq": 1.2, "SMA50": 6.0,
+      "market_cap_basic": 2000000000, "average_volume_30d_calc": 1500000
+    },
+    {
+      "symbol": "NYSE:BAZ",
+      "close": 50.0, "price_52_week_low": 48.0, "price_52_week_high": 100.0,
+      "Perf.Y": -45.0, "Perf.6M": -35.0, "Perf.3M": -8.0, "RSI": 40.0,
+      "total_revenue_yoy_growth_ttm": 18.0, "total_revenue_qoq_growth_fq": 12.0,
+      "cash_f_operating_activities_ttm": 800000000, "free_cash_flow_ttm": 400000000,
+      "free_cash_flow_margin_ttm": 20.0, "gross_margin_ttm": 60.0, "operating_margin_ttm": 25.0,
+      "net_income_ttm": 300000000, "MoneyFlow": 35.0, "ChaikinMoneyFlow": -0.05,
+      "altman_z_score_ttm": 5.0, "current_ratio_fq": 2.5, "SMA50": 55.0,
+      "market_cap_basic": 8000000000, "average_volume_30d_calc": 3000000
+    },
+    {
+      "symbol": "NASDAQ:DEAD",
+      "close": 12.0, "price_52_week_low": 10.0, "price_52_week_high": 25.0,
+      "Perf.Y": -52.0, "Perf.6M": -45.0, "Perf.3M": -20.0, "RSI": 30.0,
+      "total_revenue_yoy_growth_ttm": -10.0, "total_revenue_qoq_growth_fq": -8.0,
+      "cash_f_operating_activities_ttm": -100000000, "free_cash_flow_ttm": -150000000,
+      "free_cash_flow_margin_ttm": -20.0, "gross_margin_ttm": 20.0, "operating_margin_ttm": -25.0,
+      "net_income_ttm": -200000000, "MoneyFlow": 30.0, "ChaikinMoneyFlow": -0.20,
+      "altman_z_score_ttm": 0.8, "current_ratio_fq": 0.9, "SMA50": 14.0,
+      "market_cap_basic": 2500000000, "average_volume_30d_calc": 1200000
+    },
+    {
+      "symbol": "NYSE:HIGH",
+      "close": 18.0, "price_52_week_low": 10.0, "price_52_week_high": 20.0,
+      "Perf.Y": -5.0, "Perf.6M": 10.0, "Perf.3M": 12.0, "RSI": 65.0,
+      "total_revenue_yoy_growth_ttm": 25.0, "total_revenue_qoq_growth_fq": 6.0,
+      "cash_f_operating_activities_ttm": 400000000, "free_cash_flow_ttm": 200000000,
+      "free_cash_flow_margin_ttm": 12.0, "gross_margin_ttm": 45.0, "operating_margin_ttm": 15.0,
+      "net_income_ttm": 150000000, "MoneyFlow": 70.0, "ChaikinMoneyFlow": 0.20,
+      "altman_z_score_ttm": 6.0, "current_ratio_fq": 3.0, "SMA50": 16.0,
+      "market_cap_basic": 4000000000, "average_volume_30d_calc": 2500000
+    },
+    {
+      "symbol": "NASDAQ:SHALLOW",
+      "close": 9.5, "price_52_week_low": 9.0, "price_52_week_high": 11.0,
+      "Perf.Y": -8.0, "Perf.6M": -4.0, "Perf.3M": 1.0, "RSI": 50.0,
+      "total_revenue_yoy_growth_ttm": 15.0, "total_revenue_qoq_growth_fq": 5.0,
+      "cash_f_operating_activities_ttm": 300000000, "free_cash_flow_ttm": 150000000,
+      "free_cash_flow_margin_ttm": 11.0, "gross_margin_ttm": 38.0, "operating_margin_ttm": 10.0,
+      "net_income_ttm": 90000000, "MoneyFlow": 55.0, "ChaikinMoneyFlow": 0.08,
+      "altman_z_score_ttm": 4.5, "current_ratio_fq": 2.2, "SMA50": 9.3,
+      "market_cap_basic": 3500000000, "average_volume_30d_calc": 1800000
+    },
+    {
+      "symbol": "NYSE:NULLP",
+      "close": null, "price_52_week_low": null, "price_52_week_high": null,
+      "Perf.Y": -40.0, "Perf.6M": -30.0, "Perf.3M": -5.0, "RSI": null,
+      "total_revenue_yoy_growth_ttm": null, "total_revenue_qoq_growth_fq": null,
+      "cash_f_operating_activities_ttm": null, "free_cash_flow_ttm": null,
+      "free_cash_flow_margin_ttm": null, "gross_margin_ttm": null, "operating_margin_ttm": null,
+      "net_income_ttm": null, "MoneyFlow": null, "ChaikinMoneyFlow": null,
+      "altman_z_score_ttm": null, "current_ratio_fq": null, "SMA50": null,
+      "market_cap_basic": 1500000000, "average_volume_30d_calc": 900000
+    }
+  ]
+}

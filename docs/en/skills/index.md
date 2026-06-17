@@ -22,6 +22,7 @@ Hand-written guides (marked with ★) follow a detailed 10-section structure. Au
 | Skill | Description | API |
 |-------|-------------|-----|
 | [Backtest Expert]({{ '/en/skills/backtest-expert/' | relative_url }}) ★ | Expert guidance for systematic backtesting of trading strategies | <span class="badge badge-free">No API</span> |
+| [Bottom Flow Divergence Screener]({{ '/en/skills/bottom-flow-divergence-screener/' | relative_url }}) | Screen the US market for "bottom + flow divergence" — stocks whose PRICE is on the floor (near the 52-week low, deep ... | <span class="badge badge-free">No API</span> |
 | [Breadth Chart Analyst]({{ '/en/skills/breadth-chart-analyst/' | relative_url }}) | This skill should be used when analyzing market breadth charts, specifically the S&P 500 Breadth Index (200-Day MA ba... | <span class="badge badge-free">No API</span> |
 | [Breakout Trade Planner]({{ '/en/skills/breakout-trade-planner/' | relative_url }}) | Generate Minervini-style breakout trade plans from VCP screener output with worst-case risk calculation, portfolio he... | <span class="badge badge-free">No API</span> |
 | [CANSLIM Screener]({{ '/en/skills/canslim-screener/' | relative_url }}) ★ | Screen US stocks using William O'Neil's CANSLIM growth stock methodology | <span class="badge badge-api">FMP Required</span> |
