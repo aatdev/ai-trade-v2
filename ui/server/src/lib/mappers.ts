@@ -2,6 +2,8 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { basename, findLatest, listDir, readJson, readText, resolveFile } from './files';
 import type {
+  BottomFlowCandidate,
+  BottomFlowResult,
   ExposureGate,
   ExposurePosture,
   MemoryResponse,
@@ -55,6 +57,7 @@ export const RE = {
   vcp: /^vcp_screener_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   plan: /^breakout_trade_plan_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   swingShort: /^swing_short_screener_\d{4}-\d{2}-\d{2}_\d+\.json$/,
+  bottomFlow: /^bottom_flow_divergence_\d{4}-\d{2}-\d{2}_\d+\.json$/,
   weeklyReview: /^weekly_review_\d{4}-\d{2}-\d{2}\.json$/,
   monthlyReview: /^monthly_review_\d{4}-\d{2}-\d{2}\.json$/,
 };
@@ -341,6 +344,59 @@ export function getScreener(
   const file = resolveFile(sub(dataDir, 'screeners'), pattern, date, source);
   if (!file) return sourced<ScreenerResult>(null, null, date);
   return sourced(file, mapScreenerResult(readJson(file), kind), date);
+}
+
+/* ---------------- bottom flow divergence screener ---------------- */
+
+function strList(v: unknown): string[] {
+  return asArray<unknown>(v).filter((x): x is string => typeof x === 'string');
+}
+
+/** Normalize one bottom-flow candidate (`{...tags, metrics{}}`) into a flat record. */
+export function mapBottomFlowCandidate(cIn: Record<string, unknown>): BottomFlowCandidate {
+  const c = asRecord(cIn);
+  const m = asRecord(c.metrics);
+  return {
+    symbol: String(c.symbol ?? ''),
+    grade: strOrNull(c.grade) ?? '',
+    score: numOrNull(c.score),
+    pct_off_low: numOrNull(m.pct_off_low),
+    pct_off_high: numOrNull(m.pct_off_high),
+    perf_y: numOrNull(m.perf_y),
+    perf_6m: numOrNull(m.perf_6m),
+    perf_3m: numOrNull(m.perf_3m),
+    rsi: numOrNull(m.rsi),
+    rev_ttm: numOrNull(m.rev_ttm),
+    rev_qoq: numOrNull(m.rev_qoq),
+    ocf: numOrNull(m.ocf),
+    fcf: numOrNull(m.fcf),
+    fcf_margin: numOrNull(m.fcf_margin),
+    gross_margin: numOrNull(m.gross_margin),
+    oper_margin: numOrNull(m.oper_margin),
+    net_income: numOrNull(m.net_income),
+    mfi: numOrNull(m.mfi),
+    cmf: numOrNull(m.cmf),
+    altman_z: numOrNull(m.altman_z),
+    current_ratio: numOrNull(m.current_ratio),
+    mkt_cap: numOrNull(m.mkt_cap),
+    avg_vol: numOrNull(m.avg_vol),
+    flow_profile: strList(c.flow_profile),
+    turning: c.turning === true,
+    survivable: c.survivable === true,
+    organic_warn: c.organic_warn === true,
+    risk_flags: strList(c.risk_flags),
+    fundamental_ok: c.fundamental_ok === true,
+    accumulation_ok: c.accumulation_ok === true,
+  };
+}
+
+/** Normalize a native bottom-flow file (`{meta, candidates[]}`) into a BottomFlowResult. */
+export function mapBottomFlowResult(rawIn: unknown): BottomFlowResult {
+  const raw = asRecord(rawIn);
+  return {
+    meta: asRecord(raw.meta),
+    candidates: asArray<Record<string, unknown>>(raw.candidates).map(mapBottomFlowCandidate),
+  };
 }
 
 /* ---------------- theses ---------------- */

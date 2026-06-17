@@ -639,6 +639,89 @@ export interface StagedShortScreenerResponse {
   notes: string[];
 }
 
+/* ---------------- Bottom flow divergence staging ("Скринер" tab, "дно" sub-tab) ----------------
+ * bottom-flow-divergence-screener finds beaten-down names near 52-week lows whose
+ * FLOWS refuse to confirm the bottom — fundamental (revenue + operating cash flow
+ * holding) and/or accumulation (Chaikin / Money Flow). It emits a bespoke
+ * `{meta, candidates[]}` file (grade + divergence tags, no trade levels), so it
+ * gets its own typed shape rather than the trade-level-oriented ScreenerResult.
+ * Detection-only — no plan/save step. Data: public scanner.tradingview.com (no key).
+ */
+
+export type BottomFlowGrade = 'A' | 'B-accum' | 'B-fund';
+
+/** One graded bottom-divergence candidate (flat metrics for table rendering). */
+export interface BottomFlowCandidate {
+  symbol: string;
+  grade: BottomFlowGrade | string;
+  score: number | null;
+  // Bottom proximity
+  pct_off_low: number | null; // % above the 52-week low
+  pct_off_high: number | null; // % below the 52-week high
+  perf_y: number | null;
+  perf_6m: number | null;
+  perf_3m: number | null;
+  rsi: number | null;
+  // Fundamental flow
+  rev_ttm: number | null; // TTM revenue YoY growth %
+  rev_qoq: number | null; // sequential revenue growth %
+  ocf: number | null; // operating cash flow (TTM, $)
+  fcf: number | null; // free cash flow (TTM, $)
+  fcf_margin: number | null;
+  gross_margin: number | null;
+  oper_margin: number | null;
+  net_income: number | null;
+  // Accumulation flow
+  mfi: number | null; // Money Flow Index (0..100)
+  cmf: number | null; // Chaikin Money Flow (−1..1)
+  // Survivability
+  altman_z: number | null;
+  current_ratio: number | null;
+  // Size
+  mkt_cap: number | null;
+  avg_vol: number | null;
+  // Tags / classification
+  flow_profile: string[]; // e.g. ["recovering","resilient"]
+  turning: boolean; // Perf.3M ≥ 0 or close > SMA50
+  survivable: boolean;
+  organic_warn: boolean; // growth may be inorganic (M&A) — verify
+  risk_flags: string[]; // unprofitable | fcf_negative | low_altman_z
+  fundamental_ok: boolean;
+  accumulation_ok: boolean;
+}
+
+export interface BottomFlowResult {
+  meta: Record<string, unknown>;
+  candidates: BottomFlowCandidate[];
+}
+
+export type BottomFlowUniverse = 'common' | 'all';
+
+/** POST /api/screener/bottom-flow/run body (server validates ranges; all optional). */
+export interface BottomFlowRunRequest {
+  universe?: BottomFlowUniverse;
+  grades?: string; // comma list of A | B-accum | B-fund (empty ⇒ script default = all)
+  requireTurn?: boolean; // drop names still falling (keep Perf.3M≥0 or close>SMA50)
+  requireSurvivable?: boolean; // drop names failing the survivability check
+  nearLowPct?: number; // max % above 52w low to count as "on the floor"
+  minDrawdownPct?: number; // min % below 52w high to count as "beaten down"
+  revTtmMin?: number; // TTM revenue-growth floor for the fundamental layer
+  mfiMin?: number; // Money Flow Index accumulation threshold
+  maxPerf1y?: number; // require Perf.Y below this (server pre-filter)
+  minCap?: number; // min market cap (raw USD)
+  minAvgVol?: number; // min 30d avg volume (raw shares)
+  minPrice?: number; // min close price
+  top?: number; // max rows in the report (0 = all)
+}
+
+/** GET /api/screener/bottom-flow/staged — the latest staged bottom-flow run + gate context. */
+export interface StagedBottomFlowResponse {
+  screener: BottomFlowResult | null;
+  source: string | null; // staged filename
+  gate: Sourced<ExposureGate>;
+  notes: string[];
+}
+
 /* ---------------- Theses ---------------- */
 
 export interface ThesisIndexEntry {

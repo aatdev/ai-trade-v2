@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app';
 import { clearListCache } from '../lib/files';
-import { buildScreenArgs, buildShortScreenArgs } from './screener';
+import { buildBottomFlowArgs, buildScreenArgs, buildShortScreenArgs } from './screener';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
 const ROOT = path.resolve(process.cwd());
@@ -297,5 +297,60 @@ describe('ui-staging isolation', () => {
     // trade_levels normalized into entry/stop/target.
     expect(staged.body.screener.candidates[0].entry).toBe(145.8);
     expect(staged.body.screener.candidates[0].target).toBe(130.2);
+  });
+});
+
+/* ---------------- buildBottomFlowArgs (pure) ---------------- */
+
+describe('buildBottomFlowArgs', () => {
+  it('defaults to only the server-controlled --output-dir', () => {
+    expect(buildBottomFlowArgs({}, STAGING)).toEqual({ args: ['--output-dir', STAGING] });
+  });
+
+  it('rejects an unknown universe but accepts common | all', () => {
+    expect('error' in buildBottomFlowArgs({ universe: 'sp500' }, STAGING)).toBe(true);
+    const out = buildBottomFlowArgs({ universe: 'all' }, STAGING);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(expect.arrayContaining(['--universe', 'all']));
+  });
+
+  it('validates grade tokens and passes a clean comma list', () => {
+    expect('error' in buildBottomFlowArgs({ grades: 'A,Z' }, STAGING)).toBe(true);
+    expect('error' in buildBottomFlowArgs({ grades: 'B' }, STAGING)).toBe(true); // bare B invalid
+    const out = buildBottomFlowArgs({ grades: 'A, B-accum' }, STAGING);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(expect.arrayContaining(['--grades', 'A,B-accum']));
+  });
+
+  it('adds the boolean gate flags only when true', () => {
+    const out = buildBottomFlowArgs({ requireTurn: true, requireSurvivable: false }, STAGING);
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toContain('--require-turn');
+    expect(out.args).not.toContain('--require-survivable');
+  });
+
+  it('validates numeric ranges (nearLowPct, maxPerf1y, mfiMin, top integer)', () => {
+    expect('error' in buildBottomFlowArgs({ nearLowPct: 150 }, STAGING)).toBe(true);
+    expect('error' in buildBottomFlowArgs({ maxPerf1y: 5 }, STAGING)).toBe(true); // must be ≤ 0
+    expect('error' in buildBottomFlowArgs({ mfiMin: -1 }, STAGING)).toBe(true);
+    expect('error' in buildBottomFlowArgs({ top: 2.5 }, STAGING)).toBe(true);
+  });
+
+  it('passes valid numeric tuning flags through', () => {
+    const out = buildBottomFlowArgs(
+      { nearLowPct: 20, minDrawdownPct: 40, mfiMin: 55, maxPerf1y: -15, minCap: 2e9, top: 30 },
+      STAGING,
+    );
+    if ('error' in out) throw new Error(out.error);
+    expect(out.args).toEqual(
+      expect.arrayContaining([
+        '--near-low-pct', '20',
+        '--min-drawdown-pct', '40',
+        '--mfi-min', '55',
+        '--max-perf-1y', '-15',
+        '--min-cap', '2000000000',
+        '--top', '30',
+      ]),
+    );
   });
 });

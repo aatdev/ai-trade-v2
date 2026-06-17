@@ -4,14 +4,28 @@ import { Router } from 'express';
 import { basename, findLatest, readJson } from '../lib/files';
 import { resolvePythonBin, startAndRespond } from '../lib/jobActions';
 import type { JobManager } from '../lib/jobs';
-import { RE, getExposureGate, getPortfolio, mapScreenerResult, readProfile } from '../lib/mappers';
+import {
+  RE,
+  getExposureGate,
+  getPortfolio,
+  mapBottomFlowResult,
+  mapScreenerResult,
+  readProfile,
+} from '../lib/mappers';
 import { mapStagedPlan, mapStagedScreener } from '../lib/screenerMappers';
-import type { StagedScreenerResponse, StagedShortScreenerResponse } from '@shared/types';
+import type {
+  StagedBottomFlowResponse,
+  StagedScreenerResponse,
+  StagedShortScreenerResponse,
+} from '@shared/types';
 
 const SCREEN_SCRIPT = 'skills/vcp-screener/scripts/screen_vcp.py';
 const PLAN_SCRIPT = 'skills/breakout-trade-planner/scripts/plan_breakout_trades.py';
 const SAVE_SCRIPT = 'scripts/build_watchlist_from_plan.py';
 const SHORT_SCREEN_SCRIPT = 'skills/swing-short-screener/scripts/screen_short.py';
+const BOTTOM_FLOW_SCREEN_SCRIPT =
+  'skills/bottom-flow-divergence-screener/scripts/screen_bottom_flow.py';
+const BOTTOM_FLOW_GRADES = ['A', 'B-accum', 'B-fund'];
 const VCP_UNIVERSE_FILE = path.join('scripts', 'lib', 'data', 'vcp_universe.txt');
 const STAGING_SUBDIR = 'ui-staging';
 
@@ -199,6 +213,68 @@ export function buildShortScreenArgs(
   return { args };
 }
 
+/**
+ * Validate the bottom-flow-run body and build the screen_bottom_flow.py CLI args.
+ * Ranges mirror the script's argparse so a server 400 equals what the script would
+ * reject. `--output-dir` is always server-controlled. Unlike VCP/short there is no
+ * sp500/wide/custom universe — the screener scans the whole TradingView market in
+ * one POST; `--universe` here means common vs common+preferred. Pure + exported
+ * for unit tests.
+ */
+export function buildBottomFlowArgs(
+  body: Record<string, unknown>,
+  stagingDir: string,
+): { args: string[] } | { error: string } {
+  const args: string[] = ['--output-dir', stagingDir];
+
+  const universe = body.universe;
+  if (universe !== undefined && universe !== null && universe !== '') {
+    if (universe !== 'common' && universe !== 'all') {
+      return { error: 'universe must be common | all' };
+    }
+    args.push('--universe', universe);
+  }
+
+  const grades = body.grades;
+  if (grades !== undefined && grades !== null && grades !== '') {
+    if (typeof grades !== 'string') return { error: 'grades must be a comma-separated string' };
+    const toks = grades
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (toks.length === 0 || !toks.every((t) => BOTTOM_FLOW_GRADES.includes(t))) {
+      return { error: 'grades must be a comma list of A | B-accum | B-fund' };
+    }
+    args.push('--grades', toks.join(','));
+  }
+
+  if (body.requireTurn === true) args.push('--require-turn');
+  if (body.requireSurvivable === true) args.push('--require-survivable');
+
+  // [bodyKey, cliFlag, lo, hi, integer]. `top` allows 0 (= all rows).
+  const nums: [string, string, number, number, boolean][] = [
+    ['nearLowPct', '--near-low-pct', 0, 100, false],
+    ['minDrawdownPct', '--min-drawdown-pct', 0, 100, false],
+    ['revTtmMin', '--rev-ttm-min', -100, 1000, false],
+    ['mfiMin', '--mfi-min', 0, 100, false],
+    ['maxPerf1y', '--max-perf-1y', -100, 0, false],
+    ['minCap', '--min-cap', 0, 10_000_000_000_000, false],
+    ['minAvgVol', '--min-avg-vol', 0, 10_000_000_000, false],
+    ['minPrice', '--min-price', 0, 100_000, false],
+    ['top', '--top', 0, 500, true],
+  ];
+  for (const [key, flag, lo, hi, integer] of nums) {
+    const v = body[key];
+    if (v === undefined || v === null || v === '') continue;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) {
+      return { error: `${key} must be a number in [${lo}, ${hi}]` };
+    }
+    if (integer && !Number.isInteger(v)) return { error: `${key} must be an integer` };
+    args.push(flag, String(v));
+  }
+  return { args };
+}
+
 /** A provided file pin must be a well-formed basename of the expected kind. */
 function pinError(source: unknown, re: RegExp): string | null {
   if (source === undefined || source === null) return null;
@@ -372,6 +448,39 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       source: basename(file),
       gate,
       wideUniverse: { available: wideCount > 0, count: wideCount },
+      notes: [],
+    };
+    res.json(body);
+  });
+
+  // --- Bottom flow divergence screener ("дно" sub-tab) --------------------
+  // Detection-only run into staging. Like the shorts tab there is no plan/save
+  // step — the screener is a discovery tool (no trade levels). Data comes from
+  // the public scanner.tradingview.com endpoint (no API key, no TV Desktop).
+
+  r.post('/screener/bottom-flow/run', (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const built = buildBottomFlowArgs(body, stagingDir);
+    if ('error' in built) return res.status(400).json({ ok: false, error: built.error });
+    return startAndRespond(res, jobs, {
+      label: 'bottom-flow screener run',
+      cmd: resolvePythonBin(),
+      args: [BOTTOM_FLOW_SCREEN_SCRIPT, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir },
+      meta: { kind: 'bottom-flow-screener-run' },
+    });
+  });
+
+  // The staged bottom-flow view the UI polls after a run ends. Read-only.
+  r.get('/screener/bottom-flow/staged', (req, res) => {
+    const file = resolveStaged(stagingDir, RE.bottomFlow, req.query.bottomFlowSource);
+    const gate = getExposureGate(dataDir, null);
+    const screener = file ? mapBottomFlowResult(readJson(file)) : null;
+    const body: StagedBottomFlowResponse = {
+      screener,
+      source: basename(file),
+      gate,
       notes: [],
     };
     res.json(body);

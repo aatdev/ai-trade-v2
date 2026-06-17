@@ -5,6 +5,7 @@ import type {
   AuthActionResponse,
   AuthStatusResponse,
   AutopilotResponse,
+  BottomFlowRunRequest,
   DatesResponse,
   DeleteSignalResponse,
   DocsIndexResponse,
@@ -26,6 +27,7 @@ import type {
   ScreenersResponse,
   ShortScreenerRunRequest,
   SignalsResponse,
+  StagedBottomFlowResponse,
   StagedScreenerResponse,
   StagedShortScreenerResponse,
   SkillDocResponse,
@@ -279,6 +281,27 @@ export const useStagedShortScreener = (
 
 export const runShortScreener = (body: ShortScreenerRunRequest) =>
   postJSON<StartJobResponse>('/api/screener/shorts/run', body);
+
+export interface StagedBottomFlowSources {
+  bottomFlow?: string | null;
+}
+
+/** Latest (or pinned) staged bottom-flow-divergence run + gate context (дно sub-tab). */
+export const useStagedBottomFlow = (
+  sources: StagedBottomFlowSources = {},
+  refetchInterval: Refetch = false,
+) =>
+  useQuery({
+    queryKey: ['stagedBottomFlow', sources.bottomFlow],
+    queryFn: () =>
+      getJSON<StagedBottomFlowResponse>(
+        `/api/screener/bottom-flow/staged${qs({ bottomFlowSource: sources.bottomFlow })}`,
+      ),
+    refetchInterval,
+  });
+
+export const runBottomFlowScreener = (body: BottomFlowRunRequest) =>
+  postJSON<StartJobResponse>('/api/screener/bottom-flow/run', body);
 
 export const useTheses = (refetchInterval: Refetch = false) =>
   useQuery({ queryKey: ['theses'], queryFn: () => getJSON<ThesesResponse>('/api/theses'), refetchInterval });
