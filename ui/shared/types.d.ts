@@ -653,6 +653,7 @@ export type BottomFlowGrade = 'A' | 'B-accum' | 'B-fund';
 /** One graded bottom-divergence candidate (flat metrics for table rendering). */
 export interface BottomFlowCandidate {
   symbol: string;
+  sector: string | null;
   grade: BottomFlowGrade | string;
   score: number | null;
   // Bottom proximity

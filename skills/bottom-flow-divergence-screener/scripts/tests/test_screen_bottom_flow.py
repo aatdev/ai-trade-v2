@@ -42,6 +42,10 @@ def test_run_from_rows_counts(fixture_rows):
     assert stats["no_divergence"] == 1  # DEAD
     grades = sorted(r["grade"] for r in records)
     assert grades == ["A", "A", "B-accum", "B-fund"]
+    foo = next(r for r in records if r["symbol"] == "FOO")
+    assert foo["sector"] == "Producer Manufacturing"
+    bar = next(r for r in records if r["symbol"] == "BAR")
+    assert bar["sector"] is None  # row without a sector key maps to None
 
 
 def test_filter_and_rank_grade_selection(fixture_rows):

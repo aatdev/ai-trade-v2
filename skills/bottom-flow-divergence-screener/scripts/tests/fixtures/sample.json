@@ -2,6 +2,7 @@
   "rows": [
     {
       "symbol": "NASDAQ:FOO",
+      "sector": "Producer Manufacturing",
       "close": 10.0, "price_52_week_low": 8.5, "price_52_week_high": 20.0,
       "Perf.Y": -50.0, "Perf.6M": -30.0, "Perf.3M": 5.0, "RSI": 45.0,
       "total_revenue_yoy_growth_ttm": 20.0, "total_revenue_qoq_growth_fq": 10.0,
@@ -35,6 +36,7 @@
     },
     {
       "symbol": "NYSE:BAZ",
+      "sector": "Finance",
       "close": 50.0, "price_52_week_low": 48.0, "price_52_week_high": 100.0,
       "Perf.Y": -45.0, "Perf.6M": -35.0, "Perf.3M": -8.0, "RSI": 40.0,
       "total_revenue_yoy_growth_ttm": 18.0, "total_revenue_qoq_growth_fq": 12.0,

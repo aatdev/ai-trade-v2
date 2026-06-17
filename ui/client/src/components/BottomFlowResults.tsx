@@ -124,6 +124,7 @@ function GradeTable({
           <tr>
             <th />
             <th style={{ textAlign: 'left' }}>Symbol</th>
+            <th style={{ textAlign: 'left' }}>Сектор</th>
             <th>Score</th>
             <th>% над дном</th>
             <th>% ниже хая</th>
@@ -156,6 +157,9 @@ function GradeTable({
                       {c.symbol}
                     </button>
                   </td>
+                  <td style={{ textAlign: 'left' }} className="muted">
+                    {c.sector ?? '—'}
+                  </td>
                   <td style={{ color: scoreColor(c.score) }}>{fmtScore(c.score)}</td>
                   <td>{fmtPct(c.pct_off_low, 0)}</td>
                   <td>{fmtPct(c.pct_off_high, 0)}</td>
@@ -171,7 +175,7 @@ function GradeTable({
                 </tr>
                 {isOpen ? (
                   <tr>
-                    <td colSpan={12} style={{ background: 'rgba(127,127,127,0.06)' }}>
+                    <td colSpan={13} style={{ background: 'rgba(127,127,127,0.06)' }}>
                       <Drilldown c={c} />
                     </td>
                   </tr>

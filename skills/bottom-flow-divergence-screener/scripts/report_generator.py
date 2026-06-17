@@ -20,6 +20,7 @@ def build_result_record(metrics: dict, verdict: dict) -> dict:
     """Merge metrics + classification into one flat, JSON-serializable record."""
     return {
         "symbol": metrics["symbol"],
+        "sector": metrics["sector"],
         "grade": verdict["grade"],
         "score": verdict["score"],
         "flow_profile": verdict["flow_profile"],
@@ -113,14 +114,14 @@ def render_markdown(records: list[dict], meta: dict) -> str:
         lines.append(f"## {grade} — {GRADE_GUIDANCE[grade]}")
         lines.append("")
         lines.append(
-            "| # | Ticker | Score | %off Lo | %off Hi | PerfY | P3m | revTTM | revQoQ "
+            "| # | Ticker | Sector | Score | %off Lo | %off Hi | PerfY | P3m | revTTM | revQoQ "
             "| OCF | FCFm | CMF | MFI | mcap | Tags |"
         )
-        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for i, r in enumerate(group, 1):
             m = r["metrics"]
             lines.append(
-                f"| {i} | **{r['symbol']}** | {r['score']:.0f} | "
+                f"| {i} | **{r['symbol']}** | {r.get('sector') or '—'} | {r['score']:.0f} | "
                 f"{_round(m['pct_off_low'], 0):.0f}% | {_round(m['pct_off_high'], 0):.0f}% | "
                 f"{_pct(m['perf_y'])} | {_pct(m['perf_3m'])} | {_pct(m['rev_ttm'])} | "
                 f"{_pct(m['rev_qoq'])} | {_money(m['ocf'])} | "

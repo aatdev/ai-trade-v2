@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 # --- Canonical scanner field keys (as returned by scanner.tradingview.com) ---
 F_SYMBOL = "symbol"
+F_SECTOR = "sector"
 F_CLOSE = "close"
 F_LOW_52W = "price_52_week_low"
 F_HIGH_52W = "price_52_week_high"
@@ -77,6 +78,7 @@ SCAN_COLUMNS = [
     F_SMA50,
     F_MKT_CAP,
     F_AVG_VOL,
+    F_SECTOR,
 ]
 
 GRADES = ("A", "B-accum", "B-fund")
@@ -125,8 +127,10 @@ def extract_metrics(row: dict) -> dict:
     pct_off_high = (
         ((high - close) / high * 100) if (close is not None and high and high > 0) else None
     )
+    sector = row.get(F_SECTOR)
     return {
         "symbol": symbol,
+        "sector": sector if isinstance(sector, str) and sector else None,
         "close": close,
         "low_52w": low,
         "high_52w": high,

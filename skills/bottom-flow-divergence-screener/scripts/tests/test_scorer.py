@@ -19,6 +19,7 @@ CFG = ScoreConfig()
 def test_extract_metrics_derives_proximity(fixture_rows):
     m = extract_metrics(row_by_symbol(fixture_rows, "FOO"))
     assert m["symbol"] == "FOO"  # exchange prefix stripped
+    assert m["sector"] == "Producer Manufacturing"
     assert math.isclose(m["pct_off_low"], (10.0 - 8.5) / 8.5 * 100, rel_tol=1e-6)
     assert math.isclose(m["pct_off_high"], (20.0 - 10.0) / 20.0 * 100, rel_tol=1e-6)
 
@@ -27,6 +28,7 @@ def test_extract_metrics_handles_nulls(fixture_rows):
     m = extract_metrics(row_by_symbol(fixture_rows, "NULLP"))
     assert m["pct_off_low"] is None
     assert m["rev_ttm"] is None
+    assert m["sector"] is None  # missing sector key → None
 
 
 def test_bottom_gate_accepts_floor(fixture_rows):

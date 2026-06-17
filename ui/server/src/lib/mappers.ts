@@ -358,6 +358,7 @@ export function mapBottomFlowCandidate(cIn: Record<string, unknown>): BottomFlow
   const m = asRecord(c.metrics);
   return {
     symbol: String(c.symbol ?? ''),
+    sector: strOrNull(c.sector),
     grade: strOrNull(c.grade) ?? '',
     score: numOrNull(c.score),
     pct_off_low: numOrNull(m.pct_off_low),
