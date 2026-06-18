@@ -106,6 +106,41 @@ and the tab renders a friendly notice (with the same refresh button, so you can
 retry after completing IB login / 2FA). Set `TRADING_UI_IB_FIXTURE` to serve a
 recorded snapshot without a live connection.
 
+**Placing / cancelling IB brackets from the UI (write path).** Separate from the
+strictly read-only `/api/ib` snapshot, three whitelisted actions drive the IB
+bracket lifecycle for trader-memory theses by shelling out to
+`bash scripts/run_watchlist_orders.sh <sub>` — the canonical launcher that loads
+`.env`, fixes `PATH`, and picks the repo `.venv` (same role
+`run_trading_schedule.sh` plays for `run-slot`):
+
+- `POST /api/actions/place-ib-bracket { thesisId, quantity?, entryPrice?, stopPrice?, targetPrice?, target2?, target3? }`
+  — the **«Поставить IB-bracket»** button on an ENTRY_READY thesis (detail modal,
+  **Trader Memory** card). The server re-reads the thesis (status **must** be
+  ENTRY_READY — never trusted from the body) and forwards its
+  `entry.target_price` / `exit.stop_loss` / `exit.take_profit{,_2,_3}` /
+  `position.shares` (each overridable) to `watchlist_orders.py open-now` → a
+  **native IB bracket** (entry stop + protective stop + take-profit; IBKR runs the
+  OCO between the two exits). With **both** T2 and T3 set the size splits 50/25/25
+  into **N independent native sub-brackets** — one POST each, each its own
+  parent/stop/take with a unique cOID (`{coid}-t{i}`). This is deliberate: a single
+  POST carrying several per-tranche OCA groups is collapsed by IB into one group and
+  sticks "Pending Submit"; independent sub-brackets each arm and fill on their own.
+- `POST /api/actions/cancel-ib-bracket { thesisId }` — the **«Отменить IB-bracket»**
+  button; cancels the placed-but-unfilled bracket (`watchlist_orders.py cancel` →
+  `DELETE …/order/:id`). Refused once the entry has filled (exit via **Закрыть**).
+- `POST /api/actions/sync-ib-fills` — the **«⟳ Сверить с тезисами»** button on the
+  **Счёт IB** tab; runs `watchlist_orders.py sync` — a Telegram-free fill reconcile:
+  a filled entry flips its thesis ENTRY_READY → ACTIVE with the real fill price;
+  TP/SL fills close it. Read-only on IB; the only write is the thesis transition.
+
+**Safety (real money).** Placement is triple-gated: the UI click, the always-passed
+`--live` flag, **and** `IB_ALLOW_ORDER_PLACEMENT=true` in `.env`. Without the env
+flag every run is a no-post **preview** (the would-be `orders` array is printed and
+the thesis is untouched); `IB_PAPER_TRADING=true` keeps it on the paper account.
+This is the same two-lock guard the Telegram-confirmed `watchlist-order-daemon`
+uses — the UI buttons are just an alternative confirmation surface over the same
+ledger + `place_ib_bracket` helpers.
+
 `/api/ib/health` — a cheap Gateway **liveness probe** (`{ ok, reachable,
 authenticated, port, error, source, checked_at }`), meant to be polled on an
 interval. It avoids the Python snapshot entirely: it reads the Gateway's
@@ -152,7 +187,10 @@ Trigger/Stop/T1 from each thesis's levels; every delete is scoped
 backs the Trader-Memory card button), `/delete-alerts`,
 `/analyze-ticker` (runs the `ticker-analysis` skill via headless
 `claude -p … --output-format stream-json`), `/recalc-profile` (re-plan latest
-screener → watchlist → non-active theses, see the **Профиль** tab);
+screener → watchlist → non-active theses, see the **Профиль** tab),
+`/place-ib-bracket` + `/cancel-ib-bracket` + `/sync-ib-fills` (the IB bracket
+buttons on an ENTRY_READY thesis + the **Счёт IB** "Сверить с тезисами" button —
+see the IB write-path note below);
 `GET /api/actions/jobs[/:id[/stream]]`, `POST /api/actions/jobs/:id/cancel`.
 
 ### Скринер tab (VCP longs + swing-short + bottom-flow)
