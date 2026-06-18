@@ -18,12 +18,15 @@ import type { CompanyFundamentals, FundamentalsResponse } from '@shared/types';
  *
  * NB: TradingView's scanner exposes no free-text business description and does
  * not localize `sector`/`industry`/`country` (lang=ru is a no-op here), so we
- * return the raw EN strings and localize them in the client.
+ * return the raw EN strings and localize them in the client. The "what the
+ * company does" blurb is scraped separately from the public symbol page's
+ * JSON-LD (see fetchDescription); it is also EN-only.
  */
 
 const DEFAULT_TIMEOUT_MS = 12_000;
 const SCANNER_URL = 'https://scanner.tradingview.com/symbol';
 const SEARCH_URL = 'https://symbol-search.tradingview.com/symbol_search/';
+const SYMBOL_PAGE_URL = 'https://www.tradingview.com/symbols/';
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
   '(KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -95,6 +98,9 @@ export function parseFundamentals(
   const r = raw as Record<string, unknown>;
   const data: CompanyFundamentals = {
     name: str(r.description) ?? str(r.name),
+    // Live scanner returns null for every description field; populated from the
+    // symbol page in fetchFundamentals(). A fixture may carry one to test the path.
+    description: str(r.business_description) ?? str(r.long_description),
     sector: str(r.sector),
     industry: str(r.industry),
     country: str(r.country),
@@ -167,6 +173,79 @@ export async function resolveExchange(
   return exchange ? `${exchange}:${sym}`.toUpperCase() : null;
 }
 
+/**
+ * Pull the business description ("what the company does") out of a TradingView
+ * symbol page. The scanner has no such field, but the public page embeds it in a
+ * `<script type="application/ld+json">` schema.org `FinancialProduct` block, so
+ * we parse that rather than the volatile hashed React markup. Returns null when
+ * no such block carries a description (e.g. many non-US listings).
+ */
+const LD_JSON_RE = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
+
+export function parseDescriptionHtml(html: string): string | null {
+  for (const m of html.matchAll(LD_JSON_RE)) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(m[1]);
+    } catch {
+      continue;
+    }
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      const o = obj as Record<string, unknown>;
+      if (o['@type'] === 'FinancialProduct') {
+        const desc = str(o.description);
+        if (desc) return desc;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetch the symbol page and extract its business description. Best-effort and
+ * never throws — any failure (page down, no JSON-LD, timeout) returns null and
+ * the caller simply renders without a description.
+ */
+export async function fetchDescription(
+  qualified: string,
+  timeoutMs: number,
+): Promise<string | null> {
+  // EXCHANGE:TICKER -> the page slug EXCHANGE-TICKER (e.g. "NASDAQ-AAPL").
+  const slug = qualified.replace(':', '-');
+  const url = `${SYMBOL_PAGE_URL}${encodeURIComponent(slug)}/`;
+  try {
+    const res = await fetch(url, {
+      headers: { ...TV_HEADERS, Accept: 'text/html' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return null;
+    return parseDescriptionHtml(await res.text());
+  } catch {
+    return null;
+  }
+}
+
+/** Fetch the snapshot fundamentals from the scanner `/symbol` endpoint. */
+async function fetchScannerSnapshot(
+  qualified: string,
+  timeoutMs: number,
+): Promise<FundamentalsResponse> {
+  const url =
+    `${SCANNER_URL}?symbol=${encodeURIComponent(qualified)}` +
+    `&fields=${FIELDS.map(encodeURIComponent).join(',')}&no_404=true`;
+  try {
+    const res = await fetch(url, { headers: TV_HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return errorFundamentals(qualified, `scanner returned HTTP ${res.status}`);
+    const json = (await res.json()) as unknown;
+    return parseFundamentals(json, qualified, 'live');
+  } catch (e) {
+    const msg = (e as Error).name === 'TimeoutError'
+      ? `scanner request timed out after ${timeoutMs}ms`
+      : `fundamentals fetch failed: ${(e as Error).message}`;
+    return errorFundamentals(qualified, msg);
+  }
+}
+
 export async function fetchFundamentals(
   symbol: string,
   opts: { timeoutMs?: number } = {},
@@ -184,19 +263,14 @@ export async function fetchFundamentals(
     qualified = resolved;
   }
 
-  const url =
-    `${SCANNER_URL}?symbol=${encodeURIComponent(qualified)}` +
-    `&fields=${FIELDS.map(encodeURIComponent).join(',')}&no_404=true`;
-
-  try {
-    const res = await fetch(url, { headers: TV_HEADERS, signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return errorFundamentals(qualified, `scanner returned HTTP ${res.status}`);
-    const json = (await res.json()) as unknown;
-    return parseFundamentals(json, qualified, 'live');
-  } catch (e) {
-    const msg = (e as Error).name === 'TimeoutError'
-      ? `scanner request timed out after ${timeoutMs}ms`
-      : `fundamentals fetch failed: ${(e as Error).message}`;
-    return errorFundamentals(qualified, msg);
+  // The metrics (scanner) and the description (symbol page) are independent
+  // endpoints — fetch both at once so the description never adds latency.
+  const [snapshot, description] = await Promise.all([
+    fetchScannerSnapshot(qualified, timeoutMs),
+    fetchDescription(qualified, timeoutMs),
+  ]);
+  if (snapshot.ok && snapshot.data && description && !snapshot.data.description) {
+    snapshot.data.description = description;
   }
+  return snapshot;
 }

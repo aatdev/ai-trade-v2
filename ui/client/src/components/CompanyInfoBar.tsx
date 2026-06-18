@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { FundamentalsResponse } from '@shared/types';
 import { fmtNum, fmtPct, fmtSignedPct } from '../lib/format';
 import { localizeCountry, localizeIndustry, localizeSector } from '../lib/tvLocale';
@@ -45,6 +46,29 @@ function tags(d: NonNullable<FundamentalsResponse['data']>): string[] {
 }
 
 /**
+ * "What the company does" blurb (EN, from TradingView's symbol page). Long, so
+ * it clamps to a few lines with a показать ещё / свернуть toggle. The text is
+ * English because TradingView ships no localized description here.
+ */
+const DESC_CLAMP_CHARS = 240;
+
+function Description({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > DESC_CLAMP_CHARS;
+  return (
+    <div className="ci-desc">
+      <span className="ci-label">Чем занимается</span>
+      <p className={`ci-desc-text${long && !open ? ' ci-desc-text--clamped' : ''}`}>{text}</p>
+      {long ? (
+        <button type="button" className="ci-desc-toggle" onClick={() => setOpen((v) => !v)}>
+          {open ? 'Свернуть' : 'Показать полностью'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * Company profile + key metrics strip shown above the candle chart. Sourced from
  * TradingView (scanner /symbol). Renders nothing until data arrives, so the chart
  * still works when fundamentals are unavailable (e.g. an unresolved symbol).
@@ -61,6 +85,8 @@ export default function CompanyInfoBar({ funda }: { funda?: FundamentalsResponse
         {d.name ? <span className="ci-name">{d.name}</span> : null}
         {tags(d).length ? <span className="ci-tags">{tags(d).join(' · ')}</span> : null}
       </div>
+
+      {d.description ? <Description text={d.description} /> : null}
 
       <div className="ci-metrics">
         <Metric label="Рын. кап." value={fmtCap(d.marketCap)} />

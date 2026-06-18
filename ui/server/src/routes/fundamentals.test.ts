@@ -21,6 +21,7 @@ describe('GET /api/fundamentals/:symbol', () => {
     expect(res.body.symbol).toBe('NASDAQ:AAPL');
     const d = res.body.data;
     expect(d.name).toBe('Apple Inc.');
+    expect(d.description).toMatch(/designs, manufactures/);
     expect(d.sector).toBe('Electronic Technology');
     expect(d.country).toBe('United States');
     expect(d.employees).toBe(166000);

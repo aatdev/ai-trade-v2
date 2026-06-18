@@ -397,6 +397,26 @@ button.analysis-link:hover { text-decoration: underline; border-color: transpare
 .ci-metric { display: inline-flex; flex-direction: column; line-height: 1.25; }
 .ci-metric .ci-label { color: var(--muted); font-size: 11px; }
 .ci-metric .ci-value { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ci-desc { display: flex; flex-direction: column; gap: 2px; }
+.ci-desc .ci-label { color: var(--muted); font-size: 11px; }
+.ci-desc-text { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--text); max-width: 80ch; }
+.ci-desc-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ci-desc-toggle {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ci-desc-toggle:hover { text-decoration: underline; }
 .chart-title { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chart-toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; flex-wrap: wrap; }
 .chart-legend { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }

@@ -955,6 +955,13 @@ export interface OhlcvResponse {
  */
 export interface CompanyFundamentals {
   name: string | null; // TradingView "description", e.g. "Apple Inc."
+  /**
+   * Free-text business description ("what the company does") — EN. The scanner
+   * /symbol endpoint returns null here, so this is scraped from the public
+   * TradingView symbol page's JSON-LD (FinancialProduct.description); null when
+   * unavailable. EN only, like sector/industry (TradingView ships no RU text).
+   */
+  description: string | null;
   sector: string | null; // raw EN sector (e.g. "Electronic Technology")
   industry: string | null; // raw EN industry
   country: string | null; // raw EN country
