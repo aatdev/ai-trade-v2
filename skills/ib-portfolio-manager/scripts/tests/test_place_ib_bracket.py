@@ -19,7 +19,7 @@ def test_long_bracket_shape_and_wiring():
     # Parent = BUY STP @ pivot, DAY, carries the cOID and no parentId.
     assert parent["side"] == "BUY"
     assert parent["orderType"] == "STP"
-    assert parent["auxPrice"] == 155.23
+    assert parent["price"] == 155.23  # CP carries the STP trigger in `price`
     assert parent["tif"] == "DAY"
     assert parent["cOID"] == "wl-x-d"
     assert "parentId" not in parent
@@ -30,7 +30,7 @@ def test_long_bracket_shape_and_wiring():
         assert leg["tif"] == "GTC"
         assert leg["parentId"] == "wl-x-d"
         assert "cOID" not in leg
-    assert stop_leg["orderType"] == "STP" and stop_leg["auxPrice"] == 150.0
+    assert stop_leg["orderType"] == "STP" and stop_leg["price"] == 150.0
     assert target_leg["orderType"] == "LMT" and target_leg["price"] == 167.68
     assert all(leg["conid"] == 265598 for leg in orders)
 
@@ -41,7 +41,7 @@ def test_short_bracket_is_mirrored():
     )
     parent, stop_leg, target_leg = orders
     assert parent["side"] == "SELL" and parent["orderType"] == "STP"
-    assert stop_leg["side"] == "BUY" and stop_leg["auxPrice"] == 53.0
+    assert stop_leg["side"] == "BUY" and stop_leg["price"] == 53.0
     assert target_leg["side"] == "BUY" and target_leg["price"] == 44.0
 
 
@@ -229,6 +229,26 @@ def test_live_order_refs_collects_coid(monkeypatch):
     assert pib.live_order_refs(9000) == {"wl-a-d", "wl-b-d"}
 
 
+def test_live_order_refs_skips_dead_statuses(monkeypatch):
+    # Cancelled / Inactive / Rejected rows linger in the orders list but must NOT
+    # count as live — else a torn-down bracket can never be re-placed. A Filled
+    # entry still counts (a real position exists).
+    monkeypatch.setattr(
+        pib,
+        "http_get_json",
+        lambda *a, **k: {
+            "orders": [
+                {"order_ref": "wl-live-d", "status": "Submitted"},
+                {"order_ref": "wl-cxl-d", "status": "Cancelled"},
+                {"order_ref": "wl-inact-d", "status": "Inactive"},
+                {"order_ref": "wl-rej-d", "status": "Rejected"},
+                {"order_ref": "wl-filled-d", "status": "Filled"},
+            ]
+        },
+    )
+    assert pib.live_order_refs(9000) == {"wl-live-d", "wl-filled-d"}
+
+
 # --------------------------------------------------------------------------- #
 # Scale-out / close helpers (+2R)
 # --------------------------------------------------------------------------- #
@@ -262,7 +282,7 @@ def test_place_stop_builds_stp(monkeypatch):
     res = pib.place_stop(9000, "DU1", 1, "SELL", 25, 150.0)
     assert res["ok"] is True
     o = seen["body"]["orders"][0]
-    assert o["orderType"] == "STP" and o["auxPrice"] == 150.0 and o["tif"] == "GTC"
+    assert o["orderType"] == "STP" and o["price"] == 150.0 and o["tif"] == "GTC"
 
 
 def test_cancel_order_calls_delete(monkeypatch):
@@ -330,4 +350,175 @@ def test_cli_preview_does_not_post(monkeypatch, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["mode"] == "preview"
-    assert out["would_place"][0]["side"] == "BUY"
+    assert out["sub_brackets"] == 1  # single target → one standalone bracket
+    assert out["would_place"][0][0]["side"] == "BUY"  # first sub-bracket's parent
+
+
+# --------------------------------------------------------------------------- #
+# reject_reason — surface IB's actual rejection message
+# --------------------------------------------------------------------------- #
+def test_reject_reason_from_error_envelope():
+    assert pib.reject_reason({"error": "Order rejected: insufficient margin"}) == (
+        "Order rejected: insufficient margin"
+    )
+
+
+def test_reject_reason_from_list_messages():
+    resp = [{"message": ["Stop price must be above the current price"]}]
+    assert pib.reject_reason(resp) == "Stop price must be above the current price"
+
+
+def test_reject_reason_from_order_status():
+    assert pib.reject_reason([{"order_status": "Rejected"}]) == "order_status=Rejected"
+
+
+def test_reject_reason_none_for_clean_terminal():
+    assert pib.reject_reason([{"order_id": "123", "order_status": "Submitted"}]) is None
+
+
+# --------------------------------------------------------------------------- #
+# build_bracket_orders carries NO ocaGroup (a scale-out is N standalone brackets)
+# --------------------------------------------------------------------------- #
+def test_build_bracket_orders_has_no_oca_group():
+    orders = pib.build_bracket_orders("long", 1, 100, 100, 95, 110, "wl-th-d")
+    assert len(orders) == 3
+    assert "ocaGroup" not in orders[1] and "ocaGroup" not in orders[2]
+
+
+# --------------------------------------------------------------------------- #
+# Multi-target scale-out: 50/25/25 split into N INDEPENDENT native sub-brackets
+# --------------------------------------------------------------------------- #
+def test_split_targets_3_rounding_and_floor():
+    assert pib.split_targets_3(159) == (80, 40, 39)  # round(79.5)=80, round(39.75)=40, rem 39
+    assert pib.split_targets_3(4) == (2, 1, 1)
+    assert pib.split_targets_3(3) is None  # would leave a 0-share tranche
+    assert pib.split_targets_3(2) is None
+
+
+def test_sub_coid_is_per_tranche():
+    assert pib.sub_coid("wl-th-d", 1) == "wl-th-d-t1"
+    assert pib.sub_coid("wl-th-d", 3) == "wl-th-d-t3"
+
+
+def test_attempt_nonce_is_short_hex():
+    n = pib.attempt_nonce()
+    assert n and all(c in "0123456789abcdef" for c in n)
+
+
+def test_attempt_coid_keeps_base_as_prefix():
+    # The per-attempt base (`{coid}-{nonce}`) must still start with the stable
+    # coid_for() anchor so prefix detection / idempotency keep matching.
+    base = pib.coid_for("th_x_pvt_20260618_aaaa", "2026-06-18")
+    attempt = f"{base}-{pib.attempt_nonce()}"
+    assert attempt.startswith(base) and attempt != base
+    # ...and a tranche cOID built from it still starts with the anchor.
+    assert pib.sub_coid(attempt, 1).startswith(base)
+
+
+def test_build_sub_brackets_multi_target_structure():
+    brackets = pib.build_sub_brackets(
+        "long",
+        conid=1,
+        shares=100,
+        pivot=100,
+        stop=95,
+        target=110,
+        coid="wl-th-d",
+        target2=120,
+        target3=130,
+    )
+    # Three INDEPENDENT brackets, each a standalone parent + stop + take.
+    assert len(brackets) == 3
+    assert all(len(b) == 3 for b in brackets)
+    parents = [b[0] for b in brackets]
+    # Each parent enters at the pivot with a UNIQUE per-tranche cOID, no parentId.
+    assert [p["cOID"] for p in parents] == ["wl-th-d-t1", "wl-th-d-t2", "wl-th-d-t3"]
+    assert all(p["price"] == 100 and "parentId" not in p for p in parents)
+    assert [p["quantity"] for p in parents] == [50, 25, 25]  # 50/25/25 split
+    # Per bracket: stop + take share that bracket's cOID as parentId; no ocaGroup.
+    for b, qty, tp in zip(brackets, (50, 25, 25), (110, 120, 130)):
+        parent, stop_leg, take_leg = b
+        assert stop_leg["orderType"] == "STP" and stop_leg["price"] == 95
+        assert take_leg["orderType"] == "LMT" and take_leg["price"] == tp
+        assert stop_leg["quantity"] == qty and take_leg["quantity"] == qty
+        assert stop_leg["parentId"] == parent["cOID"] == take_leg["parentId"]
+        assert "ocaGroup" not in stop_leg and "ocaGroup" not in take_leg
+    # Full position is protected across the tranche stops.
+    assert sum(b[1]["quantity"] for b in brackets) == 100
+
+
+def test_build_sub_brackets_single_when_no_scale_targets():
+    brackets = pib.build_sub_brackets("long", 1, 100, 100, 95, 110, "wl-th-d")
+    assert len(brackets) == 1 and len(brackets[0]) == 3
+    assert brackets[0][0]["cOID"] == "wl-th-d-t1"
+
+
+def test_build_sub_brackets_falls_back_to_single_when_too_few_shares():
+    brackets = pib.build_sub_brackets(
+        "long", 1, 3, 100, 95, 110, "wl-th-d", target2=120, target3=130
+    )
+    assert len(brackets) == 1  # 3 shares can't split → single full-size bracket
+    assert brackets[0][0]["quantity"] == 3
+
+
+def test_build_sub_brackets_rejects_unordered_scale_targets():
+    with pytest.raises(ValueError):
+        pib.build_sub_brackets(
+            "long", 1, 100, 100, 95, 110, "wl-th-d", target2=105, target3=130
+        )  # T2 (105) < T1 (110) for a long
+
+
+def test_build_sub_brackets_short_multi_target_mirrors():
+    brackets = pib.build_sub_brackets(
+        "short", 1, 100, 100, 105, 90, "wl-th-d", target2=85, target3=80
+    )
+    assert len(brackets) == 3
+    takes = [b[2] for b in brackets]
+    assert all(b[1]["side"] == "BUY" and b[2]["side"] == "BUY" for b in brackets)  # short exits = BUY
+    assert [t["price"] for t in takes] == [90, 85, 80]  # T1>T2>T3 for a short
+
+
+# --------------------------------------------------------------------------- #
+# submit_brackets — N independent POSTs aggregated into one envelope
+# --------------------------------------------------------------------------- #
+def test_submit_brackets_aggregates_all_ids(monkeypatch):
+    posts = []
+
+    def fake_submit(port, account_id, orders, timeout=20.0):
+        posts.append(orders)
+        n = len(posts)
+        return {
+            "ok": True,
+            "order_ids": [f"{n}00", f"{n}01", f"{n}02"],
+            "entry_order_id": f"{n}00",
+            "reason": None,
+            "raw": [{"order_id": f"{n}00"}],
+        }
+
+    monkeypatch.setattr(pib, "submit_bracket", fake_submit)
+    res = pib.submit_brackets(9000, "DU1", [[{"a": 1}], [{"b": 2}], [{"c": 3}]])
+    assert res["ok"] is True
+    assert len(posts) == 3  # one POST per sub-bracket
+    assert res["order_ids"] == ["100", "101", "102", "200", "201", "202", "300", "301", "302"]
+    assert res["entry_order_id"] == "100"  # first tranche's parent = fill anchor
+    assert res["entry_order_ids"] == ["100", "200", "300"]
+
+
+def test_submit_brackets_partial_failure_reports_placed_and_reason(monkeypatch):
+    seq = iter(
+        [
+            {"ok": True, "order_ids": ["100"], "entry_order_id": "100", "reason": None, "raw": {}},
+            {
+                "ok": False,
+                "order_ids": [],
+                "entry_order_id": None,
+                "reason": "price exceeds the Percentage constraint of 3%",
+                "raw": {"error": "x"},
+            },
+        ]
+    )
+    monkeypatch.setattr(pib, "submit_bracket", lambda *a, **k: next(seq))
+    res = pib.submit_brackets(9000, "DU1", [[{"a": 1}], [{"b": 2}]])
+    assert res["ok"] is False
+    assert res["order_ids"] == ["100"]  # the placed tranche is still reported
+    assert "Percentage constraint" in res["reason"]

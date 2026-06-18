@@ -363,7 +363,7 @@ def test_heat_ok_for_passes(monkeypatch, tmp_path):
 def test_handle_open_preview_when_not_live(monkeypatch):
     monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
     monkeypatch.setattr(
-        wo.pib, "submit_bracket", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no place"))
+        wo.pib, "submit_brackets", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no place"))
     )
     entry = _entry()
     wo.handle_open(entry, port=9000, live=False, bot_token="B")
@@ -393,11 +393,12 @@ def test_handle_open_success(monkeypatch):
     monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
     monkeypatch.setattr(
         wo.pib,
-        "submit_bracket",
+        "submit_brackets",
         lambda *a, **k: {
             "ok": True,
             "order_ids": ["100", "101", "102"],
             "entry_order_id": "100",
+            "entry_order_ids": ["100"],
             "raw": [],
         },
     )
@@ -405,7 +406,63 @@ def test_handle_open_success(monkeypatch):
     wo.handle_open(entry, port=9000, live=True, bot_token="B")
     assert entry["status"] == "placed"
     assert entry["entry_order_id"] == "100" and entry["order_ids"] == ["100", "101", "102"]
+    assert entry["entry_order_ids"] == ["100"]
     assert entry["placed_at"] is not None
+
+
+def test_handle_open_surfaces_broker_reason(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 265598)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_brackets",
+        lambda *a, **k: {
+            "ok": False,
+            "order_ids": [],
+            "entry_order_id": None,
+            "entry_order_ids": [],
+            "reason": "Stop price must be above the current price",
+            "raw": {"error": "Stop price must be above the current price"},
+        },
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "error"
+    assert entry["error"] == "Stop price must be above the current price"
+
+
+def test_handle_open_uses_unique_attempt_coid(monkeypatch):
+    # The cOID sent to IB carries a per-attempt nonce so re-placing after a cancel
+    # never collides with the already-registered (cancelled) Local order ID — but
+    # it still starts with the stable base coid used for detection/idempotency.
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, t: 1)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
+    seen = {}
+
+    def fake_build(side, conid, shares, pivot, stop, target, coid, **k):
+        seen["coid"] = coid
+        return [[{"x": 1}]]
+
+    monkeypatch.setattr(wo.pib, "build_sub_brackets", fake_build)
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_brackets",
+        lambda *a, **k: {
+            "ok": True,
+            "order_ids": ["1"],
+            "entry_order_id": "1",
+            "entry_order_ids": ["1"],
+        },
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert seen["coid"].startswith(entry["coid"]) and seen["coid"] != entry["coid"]
 
 
 def test_handle_open_idempotent_existing_coid(monkeypatch):
@@ -415,7 +472,7 @@ def test_handle_open_idempotent_existing_coid(monkeypatch):
     monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: {entry["coid"]})
     monkeypatch.setattr(
         wo.pib,
-        "submit_bracket",
+        "submit_brackets",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("no double place")),
     )
     wo.handle_open(entry, port=9000, live=True, bot_token="B")
@@ -439,11 +496,12 @@ def test_handle_open_broker_rejects(monkeypatch):
     monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU1")
     monkeypatch.setattr(
         wo.pib,
-        "submit_bracket",
+        "submit_brackets",
         lambda *a, **k: {
             "ok": False,
             "order_ids": [],
             "entry_order_id": None,
+            "entry_order_ids": [],
             "raw": {"error": "x"},
         },
     )
@@ -1224,3 +1282,278 @@ def test_cmd_listen_once_routes_close_detected_tap(monkeypatch, patched):
     rc = wo.cmd_listen(_ListenArgs())
     assert rc == 0 and routed == ["th_x_pvt_20260101_0001"]
     assert wo.load_ledger("2026-06-15")["orders"][token]["status"] == "closed"
+
+
+# --------------------------------------------------------------------------- #
+# UI path (Telegram-free): open-now / cancel / sync
+# --------------------------------------------------------------------------- #
+_TID = "th_nvda_pvt_20260612_aaaa"
+
+
+class _OpenArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.thesis_id = _TID
+        self.ticker = "NVDA"
+        self.side = "long"
+        self.shares = 10.0
+        self.pivot = 100.0
+        self.stop = 95.0
+        self.target = 110.0
+        self.worst_entry = 101.0
+        self.risk_dollars = 50.0
+        self.live = False
+        self.dry_run = False
+        self.timeout = 20.0
+        self.__dict__.update(kw)
+
+
+class _CancelArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.thesis_id = _TID
+        self.timeout = 20.0
+        self.__dict__.update(kw)
+
+
+class _SyncArgs:
+    def __init__(self, **kw):
+        self.date = "2026-06-15"
+        self.timeout = 20.0
+        self.__dict__.update(kw)
+
+
+def _seed(tmp_path, **entry):
+    ledger = wo.load_ledger("2026-06-15")
+    ledger["orders"][_TID] = {"thesis_id": _TID, **entry}
+    wo.save_ledger("2026-06-15", ledger)
+
+
+# -- open-now ---------------------------------------------------------------- #
+def test_open_now_preview_when_not_live(monkeypatch, patched):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (False, "preview mode"))
+    assert wo.cmd_open_now(_OpenArgs(live=False)) == 0
+    entry = wo.load_ledger("2026-06-15")["orders"][_TID]
+    assert entry["status"] == "preview"
+    assert entry["message_id"] is None  # Telegram-free entry
+    assert entry["coid"] == "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
+
+
+def test_open_now_places_bracket_when_live(monkeypatch, patched):
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
+    monkeypatch.setattr(wo.pib, "resolve_conid", lambda port, ticker: 4815747)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU123")
+    monkeypatch.setattr(wo.pib, "build_sub_brackets", lambda *a, **k: [[{"leg": 1}]])
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_brackets",
+        lambda port, acct, brackets, *a, **k: {
+            "ok": True,
+            "order_ids": ["111", "112", "113"],
+            "entry_order_id": "111",
+            "entry_order_ids": ["111"],
+        },
+    )
+    assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
+    entry = wo.load_ledger("2026-06-15")["orders"][_TID]
+    assert entry["status"] == "placed"
+    assert entry["entry_order_id"] == "111"
+    assert entry["order_ids"] == ["111", "112", "113"]
+
+
+def test_open_now_blocked_by_heat(monkeypatch, patched):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda card: (False, "нет слотов"))
+    monkeypatch.setattr(
+        wo.pib, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no connect"))
+    )
+    assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
+    assert wo.load_ledger("2026-06-15")["orders"][_TID]["status"] == "skipped"
+
+
+def test_open_now_idempotent_when_already_placed(monkeypatch, patched):
+    # No cOID on the seeded entry → can't confirm the broker → conservative no-op.
+    _seed(patched, status="placed", order_ids=["111"])
+    called = []
+    monkeypatch.setattr(wo, "handle_open", lambda *a, **k: called.append(1))
+    assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
+    assert called == []  # never re-places an already-placed bracket
+
+
+def test_open_now_noop_when_bracket_still_live(monkeypatch, patched):
+    # Ledger placed AND a live order still carries the cOID (its `-t1` sub-bracket)
+    # → genuine no-op, no re-placement.
+    coid = "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
+    _seed(patched, status="placed", order_ids=["111"], coid=coid)
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: {coid + "-t1"})
+    monkeypatch.setattr(
+        wo, "handle_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-place"))
+    )
+    assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
+    assert wo.load_ledger("2026-06-15")["orders"][_TID]["status"] == "placed"
+
+
+def test_open_now_replaces_stale_placed_when_broker_empty(monkeypatch, patched):
+    # Ledger says placed, but the bracket is gone at the broker (manually cleared)
+    # → open-now re-validates, finds nothing live, and re-places.
+    coid = "wl-th_nvda_pvt_20260612_aaaa-2026-06-15"
+    _seed(patched, status="placed", order_ids=["111"], coid=coid)
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())  # nothing live
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    placed = []
+    monkeypatch.setattr(
+        wo,
+        "handle_open",
+        lambda entry, port, *, live, bot_token: (
+            placed.append(1) or entry.update(status="placed", order_ids=["999"])
+        ),
+    )
+    assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
+    assert placed == [1]  # re-placed after finding the broker empty
+    led = wo.load_ledger("2026-06-15")["orders"][_TID]
+    assert led["status"] == "placed" and led["order_ids"] == ["999"]
+
+
+def test_open_now_incomplete_geometry_returns_1(patched):
+    assert wo.cmd_open_now(_OpenArgs(target=None)) == 1
+
+
+def test_open_now_auto_sizes_when_no_shares(monkeypatch, patched):
+    # A signal-derived thesis: no shares supplied → size from the trading profile.
+    monkeypatch.setattr(wo.sched, "_profile_sized_shares", lambda profile, pivot, stop: (7, 35.0))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (False, "preview mode"))
+    captured = {}
+    monkeypatch.setattr(
+        wo,
+        "handle_open",
+        lambda entry, port, *, live, bot_token: (
+            captured.update(entry) or entry.update(status="preview")
+        ),
+    )
+    assert wo.cmd_open_now(_OpenArgs(shares=None, risk_dollars=None)) == 0
+    assert captured["shares"] == 7
+    assert captured["risk_dollars"] == 35.0  # sized risk used when caller gives none
+
+
+def test_open_now_errors_when_unsizable(monkeypatch, patched):
+    # No shares and the profile can't size (no account / bad levels) → rc=1.
+    monkeypatch.setattr(
+        wo.sched, "_profile_sized_shares", lambda profile, pivot, stop: (None, None)
+    )
+    monkeypatch.setattr(
+        wo, "handle_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not place"))
+    )
+    assert wo.cmd_open_now(_OpenArgs(shares=None)) == 1
+
+
+# -- cancel ------------------------------------------------------------------ #
+def test_cancel_cancels_working_orders(monkeypatch, patched):
+    _seed(patched, status="placed", order_ids=["111", "112", "113"])
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU123")
+    cancelled = []
+    monkeypatch.setattr(
+        wo.pib, "cancel_order", lambda port, acct, oid, *a, **k: cancelled.append(oid)
+    )
+    assert wo.cmd_cancel(_CancelArgs()) == 0
+    assert set(cancelled) == {"111", "112", "113"}
+    assert wo.load_ledger("2026-06-15")["orders"][_TID]["status"] == "cancelled"
+
+
+def test_cancel_refuses_when_filled(monkeypatch, patched):
+    _seed(patched, status="filled", order_ids=["111"])
+    monkeypatch.setattr(
+        wo.pib, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no connect"))
+    )
+    assert wo.cmd_cancel(_CancelArgs()) == 1  # use close, not cancel, once filled
+
+
+def test_cancel_missing_entry_returns_1(patched):
+    assert wo.cmd_cancel(_CancelArgs(thesis_id="th_absent_pvt_20260612_zzzz")) == 1
+
+
+class _CancelOrdersArgs:
+    def __init__(self, **kw):
+        self.order_ids = "111,112,113"
+        self.timeout = 20.0
+        self.__dict__.update(kw)
+
+
+def test_cancel_orders_by_id(monkeypatch):
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(wo.pib, "resolve_account_id", lambda port: "DU123")
+    cancelled = []
+    monkeypatch.setattr(
+        wo.pib, "cancel_order", lambda port, acct, oid, *a, **k: cancelled.append(oid)
+    )
+    assert wo.cmd_cancel_orders(_CancelOrdersArgs()) == 0
+    assert cancelled == ["111", "112", "113"]
+
+
+def test_cancel_orders_empty_returns_1(monkeypatch):
+    monkeypatch.setattr(
+        wo.pib, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no connect"))
+    )
+    assert wo.cmd_cancel_orders(_CancelOrdersArgs(order_ids="")) == 1
+
+
+# -- sync -------------------------------------------------------------------- #
+def test_sync_transitions_filled_entry(monkeypatch, patched):
+    _seed(
+        patched,
+        ticker="NVDA",
+        status="placed",
+        entry_order_id="111",
+        pivot=100.0,
+        shares=10,
+        message_id=None,
+        chat_id=None,
+    )
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(
+        wo.pib,
+        "order_fill_status",
+        lambda port, oid, *a, **k: {"status": "Filled", "filled": True, "avg_price": 100.5},
+    )
+    seen = []
+    monkeypatch.setattr(
+        wo,
+        "transition_to_active",
+        lambda tid, price, shares: seen.append((tid, price, shares)) or True,
+    )
+    assert wo.cmd_sync(_SyncArgs()) == 0
+    assert seen == [(_TID, 100.5, 10)]
+    entry = wo.load_ledger("2026-06-15")["orders"][_TID]
+    assert entry["status"] == "filled" and entry["fill_price"] == 100.5
+
+
+def test_sync_noop_when_no_placed(monkeypatch, patched):
+    monkeypatch.setattr(
+        wo.pib, "connect", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no connect"))
+    )
+    assert wo.cmd_sync(_SyncArgs()) == 0
+
+
+def test_sync_unfilled_stays_placed(monkeypatch, patched):
+    _seed(
+        patched,
+        ticker="NVDA",
+        status="placed",
+        entry_order_id="111",
+        pivot=100.0,
+        shares=10,
+        message_id=None,
+        chat_id=None,
+    )
+    monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
+    monkeypatch.setattr(
+        wo.pib,
+        "order_fill_status",
+        lambda port, oid, *a, **k: {"status": "Submitted", "filled": False, "avg_price": None},
+    )
+    assert wo.cmd_sync(_SyncArgs()) == 0
+    assert wo.load_ledger("2026-06-15")["orders"][_TID]["status"] == "placed"

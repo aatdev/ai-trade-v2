@@ -158,6 +158,10 @@ def build_card(cand: dict, thesis: dict, date_str: str) -> dict | None:
         "worst_entry": cand.get("worst_entry"),
         "stop": stop,
         "target": target,
+        # Optional scale-out targets: when both present, the size splits 50/25/25
+        # into independent sub-brackets (see place_ib_bracket.build_sub_brackets).
+        "t2": cand.get("t2"),
+        "t3": cand.get("t3"),
         "shares": shares,
         "risk_dollars": cand.get("risk_dollars"),
         "coid": pib.coid_for(tid, date_str),
@@ -562,9 +566,10 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
         return
 
     try:
-        # Idempotency: a live order already carrying this cOID means we placed it
-        # before (crash/restart) — don't double-place.
-        if entry["coid"] in pib.live_order_refs(port):
+        # Idempotency: a live order already carrying this cOID (or any of its
+        # per-tranche sub-cOIDs `{coid}-t{i}`) means we placed it before
+        # (crash/restart) — don't double-place. Match the base coid as a PREFIX.
+        if any(ref.startswith(entry["coid"]) for ref in pib.live_order_refs(port)):
             entry["status"] = "placed"
             _edit(
                 entry,
@@ -574,16 +579,33 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
             return
         conid = pib.resolve_conid(port, entry["ticker"])
         account_id = pib.resolve_account_id(port)
-        orders = pib.build_bracket_orders(
+        # Scale-out (T2+T3) → several INDEPENDENT native sub-brackets, one POST
+        # each (IB collapses a single-POST multi-OCA bracket into one group and
+        # leaves it stuck Pending Submit). A single target → one bracket.
+        #
+        # Submit under a per-ATTEMPT cOID base (`{coid}-{nonce}`): IB forbids
+        # reusing a cancelled order's Local order ID within a session, so a
+        # re-place after a cancel must use fresh cOIDs. The stored `entry["coid"]`
+        # stays the stable base prefix used for detection / idempotency above.
+        attempt_coid = f"{entry['coid']}-{pib.attempt_nonce()}"
+        brackets = pib.build_sub_brackets(
             entry["side"],
             conid,
             entry["shares"],
             entry["pivot"],
             entry["stop"],
             entry["target"],
-            entry["coid"],
+            attempt_coid,
+            target2=entry.get("t2"),
+            target3=entry.get("t3"),
         )
-        result = pib.submit_bracket(port, account_id, orders)
+        log.info(
+            "placing %d sub-bracket(s) (%d legs) for %s",
+            len(brackets),
+            sum(len(b) for b in brackets),
+            entry["thesis_id"],
+        )
+        result = pib.submit_brackets(port, account_id, brackets)
     except (ConnectionError, LookupError, ValueError) as exc:
         entry["status"] = "error"
         entry["error"] = str(exc)
@@ -594,6 +616,7 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
         entry["status"] = "placed"
         entry["order_ids"] = result["order_ids"]
         entry["entry_order_id"] = result["entry_order_id"]
+        entry["entry_order_ids"] = result.get("entry_order_ids", [])
         entry["placed_at"] = _now_iso()
         _edit(
             entry,
@@ -604,8 +627,13 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
         )
     else:
         entry["status"] = "error"
-        entry["error"] = "broker rejected order"
-        _edit(entry, "❗️Брокер отклонил ордер. Тезис остаётся ENTRY_READY.", bot_token)
+        reason = result.get("reason") or "broker rejected order"
+        entry["error"] = reason
+        entry["raw"] = result.get("raw")  # full IB response for diagnostics
+        log.warning(
+            "broker rejected %s: %s | raw=%s", entry["thesis_id"], reason, result.get("raw")
+        )
+        _edit(entry, f"❗️Брокер отклонил ордер: {reason}. Тезис остаётся ENTRY_READY.", bot_token)
 
 
 def handle_skip(entry: dict, *, bot_token: str) -> None:
@@ -1103,6 +1131,304 @@ def _attach_file_log() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# UI path (Telegram-free): open-now / cancel / sync
+#
+# The same ledger + handle_open + check_fills machinery the Telegram daemon
+# uses, driven instead by explicit per-thesis commands so the web dashboard can
+# place / cancel a bracket and reconcile fills without a bot. A UI-placed entry
+# carries message_id=None, so every _edit() Telegram side effect is a no-op.
+# --------------------------------------------------------------------------- #
+def _emit(obj: dict) -> None:
+    """Print a single JSON result line for the UI job to capture."""
+    json.dump(obj, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+def _bracket_still_live(entry: dict, args) -> bool:
+    """True when a live IB order still carries this entry's cOID (a genuine no-op).
+
+    A ledger entry can be left at "placed" while the bracket is actually gone at
+    the broker — cancelled/cleared manually, or it never transmitted. Before
+    treating "placed" as a no-op, re-validate read-only against IB: match the base
+    cOID as a PREFIX (sub-brackets are ``{coid}-t{i}``). On any gateway failure —
+    or a missing cOID — assume it IS still live: the conservative default never
+    silently re-places when we cannot confirm the broker is empty.
+    """
+    coid = entry.get("coid")
+    if not coid:
+        return True
+    try:
+        port = pib.connect(timeout=getattr(args, "timeout", pib.DEFAULT_TIMEOUT))
+        refs = pib.live_order_refs(port)
+    except (ConnectionError, OSError, ValueError):
+        return True
+    return any(str(r).startswith(coid) for r in refs)
+
+
+def _auto_size_shares(pivot, stop) -> tuple[int | None, float | None]:
+    """Risk-based shares from the trading profile when the caller passed none.
+
+    A thesis created from a signal (ticker-analysis) has no planner-sized
+    watchlist candidate, so the UI can't supply a size. Fall back to the same
+    fixed-fractional sizing the scheduler/reconcile use:
+    shares = account x risk% / |pivot - stop|, capped at max_position_pct.
+    Returns (shares, risk_dollars), or (None, None) when the profile can't size.
+    """
+    profile = sched._read_json(sched.TRADING_DATA_DIR / "trading_profile.json") or {}
+    return sched._profile_sized_shares(profile, pivot, stop)
+
+
+def cmd_open_now(args) -> int:
+    """Place a native bracket for one ENTRY_READY thesis (no Telegram card).
+
+    Geometry is passed explicitly by the caller (the UI server reads the thesis
+    entry/exit levels and forwards them), mirroring scale-card / close-card.
+    When --shares is omitted (e.g. a signal-derived thesis with no planner
+    sizing), size it from the trading profile. Preview unless BOTH --live and
+    IB_ALLOW_ORDER_PLACEMENT are set.
+    """
+    date_str = _today_iso(args.date)
+    tid = args.thesis_id
+
+    shares = args.shares
+    risk_dollars = getattr(args, "risk_dollars", None)
+    if shares is None:
+        shares, sized_risk = _auto_size_shares(args.pivot, args.stop)
+        if shares is None:
+            log.error("open-now: cannot size %s — supply --shares or check profile/levels", tid)
+            _emit(
+                {
+                    "ok": False,
+                    "thesis_id": tid,
+                    "error": "could not size position — supply a share count or check "
+                    "trading_profile.json (account_size/risk_pct) and the entry/stop levels",
+                }
+            )
+            return 1
+        if risk_dollars is None:
+            risk_dollars = sized_risk
+        log.info("open-now: auto-sized %s → %s shares (risk $%s)", tid, shares, risk_dollars)
+
+    cand = {
+        "ticker": args.ticker,
+        "side": args.side,
+        "pivot": args.pivot,
+        "stop": args.stop,
+        "target": args.target,
+        "t2": getattr(args, "target2", None),
+        "t3": getattr(args, "target3", None),
+        "shares": shares,
+        "worst_entry": getattr(args, "worst_entry", None),
+        "risk_dollars": risk_dollars,
+    }
+    card = build_card(cand, {"thesis_id": tid, "side": args.side}, date_str)
+    if card is None:
+        log.error("open-now: incomplete geometry for %s", tid)
+        _emit({"ok": False, "thesis_id": tid, "error": "incomplete geometry"})
+        return 1
+
+    ledger = load_ledger(date_str)
+    existing = ledger["orders"].get(tid)
+    if existing and existing.get("status") in {"placed", "filled"}:
+        # A filled entry is a real position — never re-place. A "placed" entry is
+        # a genuine no-op only while its bracket is STILL live at the broker; if it
+        # was cancelled/cleared (manually, or it never transmitted), the ledger is
+        # stale — re-validate against IB and fall through to re-place when gone.
+        if existing.get("status") == "filled" or _bracket_still_live(existing, args):
+            log.info("open-now: %s already %s — no-op", tid, existing["status"])
+            _emit(
+                {
+                    "ok": True,
+                    "thesis_id": tid,
+                    "status": existing["status"],
+                    "order_ids": existing.get("order_ids", []),
+                    "note": "already placed",
+                }
+            )
+            return 0
+        log.info("open-now: %s ledger=placed but no live bracket at broker — re-placing", tid)
+
+    entry = {
+        **card,
+        "kind": "open",
+        "message_id": None,
+        "chat_id": None,
+        "status": "pending",
+        "order_ids": [],
+        "entry_order_id": None,
+        "placed_at": None,
+        "error": None,
+        "fill_price": None,
+        "source": "ui",
+    }
+
+    live = bool(args.live) and not getattr(args, "dry_run", False)
+    port = None
+    # Only touch the Gateway when both gates actually clear; handle_open re-checks
+    # heat / placement / idempotency and is the source of truth.
+    if live and heat_ok_for(entry)[0] and pib.order_placement_status(live)[0]:
+        try:
+            port = pib.connect(timeout=getattr(args, "timeout", pib.DEFAULT_TIMEOUT))
+        except ConnectionError as exc:
+            log.warning("open-now: gateway connect failed: %s", exc)  # handle_open → error
+
+    handle_open(entry, port, live=live, bot_token=None)
+
+    ledger["orders"][tid] = entry
+    ledger["mode"] = "paper" if pib.is_paper() else "live"
+    save_ledger(date_str, ledger)
+    out = {
+        "ok": entry["status"] in {"placed", "filled"},
+        "thesis_id": tid,
+        "status": entry["status"],
+        "order_ids": entry.get("order_ids", []),
+        "entry_order_id": entry.get("entry_order_id"),
+        "entry_order_ids": entry.get("entry_order_ids", []),
+        "error": entry.get("error"),
+    }
+    if entry.get("raw") is not None:
+        out["raw"] = entry["raw"]  # full IB response on rejection (diagnostics)
+    _emit(out)
+    return 0
+
+
+def cmd_cancel(args) -> int:
+    """Cancel a placed-but-unfilled bracket for one thesis (the UI 'delete' button).
+
+    Refuses once the entry has filled — a live position must be exited via close,
+    not by cancelling its protective legs (which would leave it unprotected).
+    """
+    date_str = _today_iso(args.date)
+    tid = args.thesis_id
+    ledger = load_ledger(date_str)
+    entry = ledger["orders"].get(tid)
+    if entry is None:
+        log.error("cancel: no ledger entry for %s", tid)
+        _emit({"ok": False, "thesis_id": tid, "error": "no order on record for this thesis"})
+        return 1
+    if entry.get("status") != "placed":
+        log.warning("cancel: %s is %s, not 'placed' — refusing", tid, entry.get("status"))
+        _emit(
+            {
+                "ok": False,
+                "thesis_id": tid,
+                "status": entry.get("status"),
+                "error": "only a placed (unfilled) bracket can be cancelled — use close once filled",
+            }
+        )
+        return 1
+
+    order_ids = entry.get("order_ids") or []
+    try:
+        port = pib.connect(timeout=getattr(args, "timeout", pib.DEFAULT_TIMEOUT))
+        account_id = pib.resolve_account_id(port)
+    except (ConnectionError, LookupError) as exc:
+        log.warning("cancel: gateway unavailable: %s", exc)
+        _emit({"ok": False, "thesis_id": tid, "error": str(exc)})
+        return 2
+
+    cancelled, gone, errors = [], [], []
+    for oid in order_ids:
+        try:
+            pib.cancel_order(port, account_id, oid)
+            cancelled.append(oid)
+        except (ConnectionError, OSError, ValueError) as exc:  # noqa: BLE001 - per-leg degrade
+            # Cancelling a sub-bracket parent cascades to its children, so the
+            # child DELETE then reports "doesn't exist" — that's the goal state,
+            # not a failure. Same for a never-transmitted / Inactive leg.
+            if _order_already_gone(str(exc)):
+                gone.append(oid)
+            else:
+                log.warning("cancel: leg %s failed: %s", oid, exc)
+                errors.append(oid)
+
+    entry["status"] = "cancelled"
+    entry["error"] = None if not errors else f"legs not cancelled: {','.join(errors)}"
+    save_ledger(date_str, ledger)
+    _emit({"ok": not errors, "thesis_id": tid, "cancelled": cancelled, "gone": gone, "errors": errors})
+    return 0
+
+
+def _order_already_gone(msg: str) -> bool:
+    """True when a cancel failure means there's simply no live order to cancel
+    (already cancelled, never transmitted, or a non-cancellable Inactive leg)."""
+    m = msg.lower()
+    return "doesn't exist" in m or "does not exist" in m or "not found" in m
+
+
+def cmd_cancel_orders(args) -> int:
+    """Cancel specific IB orders by id (the IB-account tab's per-order delete).
+
+    Order-id-centric (no ledger): DELETEs each id at the broker. Cancelling a
+    bracket parent cascades to its children at IB; passing every leg id is also
+    safe (already-done legs just error and are reported).
+    """
+    ids = [s.strip() for s in (args.order_ids or "").split(",") if s.strip()]
+    if not ids:
+        _emit({"ok": False, "error": "no order ids supplied"})
+        return 1
+    try:
+        port = pib.connect(timeout=getattr(args, "timeout", pib.DEFAULT_TIMEOUT))
+        account_id = pib.resolve_account_id(port)
+    except (ConnectionError, LookupError) as exc:
+        log.warning("cancel-orders: gateway unavailable: %s", exc)
+        _emit({"ok": False, "error": str(exc)})
+        return 2
+
+    cancelled, gone, errors, reasons = [], [], [], {}
+    for oid in ids:
+        try:
+            pib.cancel_order(port, account_id, oid)
+            cancelled.append(oid)
+        except (ConnectionError, OSError, ValueError) as exc:  # noqa: BLE001 - per-id degrade
+            msg = str(exc)
+            if _order_already_gone(msg):
+                # No live order with this id (already cancelled / never transmitted /
+                # a non-cancellable Inactive leg) — the goal state is satisfied.
+                gone.append(oid)
+            else:
+                log.warning("cancel-orders: %s failed: %s", oid, exc)
+                errors.append(oid)
+                reasons[oid] = msg
+    out = {"ok": not errors, "cancelled": cancelled, "gone": gone, "errors": errors}
+    if reasons:
+        out["reasons"] = reasons
+    _emit(out)
+    return 0
+
+
+def cmd_sync(args) -> int:
+    """Telegram-free fill reconcile: flip ENTRY_READY→ACTIVE for any filled entry.
+
+    Same detection as the daemon's periodic check_fills; the _edit() card update
+    is a no-op for UI-placed entries (message_id is None). Run on a 1-min timer
+    or behind the dashboard's 'Сверить с IB' button.
+    """
+    date_str = _today_iso(args.date)
+    ledger = load_ledger(date_str)
+    if not any(e.get("status") == "placed" for e in ledger["orders"].values()):
+        _emit({"ok": True, "transitioned": [], "note": "no placed orders"})
+        return 0
+    try:
+        port = pib.connect(timeout=getattr(args, "timeout", pib.DEFAULT_TIMEOUT))
+    except ConnectionError as exc:
+        log.warning("sync: gateway unavailable: %s", exc)
+        _emit({"ok": False, "error": str(exc)})
+        return 2
+
+    before = {tid: e.get("status") for tid, e in ledger["orders"].items()}
+    if check_fills(ledger, port, bot_token=None):
+        save_ledger(date_str, ledger)
+    transitioned = [
+        tid
+        for tid, e in ledger["orders"].items()
+        if before.get(tid) == "placed" and e.get("status") == "filled"
+    ]
+    _emit({"ok": True, "transitioned": transitioned})
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def _configure_logging(verbose: bool = False) -> None:
@@ -1184,6 +1510,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_cdet.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     p_cdet.add_argument("--dry-run", action="store_true", help="log only, send nothing")
     p_cdet.set_defaults(func=cmd_close_detected_card)
+
+    # UI path (Telegram-free): driven per-thesis by the web dashboard.
+    p_open = sub.add_parser(
+        "open-now", help="place a bracket for one ENTRY_READY thesis (UI path, no Telegram)"
+    )
+    p_open.add_argument("--thesis-id", required=True)
+    p_open.add_argument("--ticker", required=True)
+    p_open.add_argument("--side", choices=["long", "short"], default="long")
+    p_open.add_argument(
+        "--shares",
+        type=float,
+        default=None,
+        help="share count; omit to auto-size from trading_profile.json (risk%% of stop)",
+    )
+    p_open.add_argument("--pivot", type=float, required=True, help="entry buy/sell-stop trigger")
+    p_open.add_argument("--stop", type=float, required=True, help="protective stop-loss")
+    p_open.add_argument("--target", type=float, required=True, help="take-profit target (T1)")
+    p_open.add_argument(
+        "--target2", type=float, default=None, help="T2 (with T3 → 50/25/25 scale-out)"
+    )
+    p_open.add_argument("--target3", type=float, default=None, help="T3 take-profit")
+    p_open.add_argument("--worst-entry", type=float, default=None, help="latest acceptable entry")
+    p_open.add_argument("--risk-dollars", type=float, default=None, help="risk $ for heat gate")
+    p_open.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_open.add_argument(
+        "--live", action="store_true", help="actually POST (needs IB_ALLOW_ORDER_PLACEMENT)"
+    )
+    p_open.add_argument("--dry-run", action="store_true", help="force preview even with --live")
+    p_open.add_argument("--timeout", type=float, default=pib.DEFAULT_TIMEOUT)
+    p_open.set_defaults(func=cmd_open_now)
+
+    p_cancel = sub.add_parser("cancel", help="cancel a placed (unfilled) bracket for one thesis")
+    p_cancel.add_argument("--thesis-id", required=True)
+    p_cancel.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_cancel.add_argument("--timeout", type=float, default=pib.DEFAULT_TIMEOUT)
+    p_cancel.set_defaults(func=cmd_cancel)
+
+    p_cxo = sub.add_parser("cancel-orders", help="cancel specific IB orders by id (IB-account tab)")
+    p_cxo.add_argument("--order-ids", required=True, help="comma-separated IB order ids")
+    p_cxo.add_argument("--timeout", type=float, default=pib.DEFAULT_TIMEOUT)
+    p_cxo.set_defaults(func=cmd_cancel_orders)
+
+    p_sync = sub.add_parser(
+        "sync", help="Telegram-free fill reconcile: ENTRY_READY→ACTIVE on entry fill"
+    )
+    p_sync.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    p_sync.add_argument("--timeout", type=float, default=pib.DEFAULT_TIMEOUT)
+    p_sync.set_defaults(func=cmd_sync)
     return parser
 
 
