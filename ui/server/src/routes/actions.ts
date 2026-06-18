@@ -2,9 +2,10 @@ import path from 'node:path';
 import { Router } from 'express';
 import { ANALYZE_MODEL, ANALYZE_TIMEOUT_SEC, resolveMcpConfigPath } from '../config';
 import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
+import { buildPlaceIbBracketArgs, buildCancelIbBracketArgs } from '../lib/ibBracketOps';
 import { buildAnalyzeTickerArgs } from '../lib/analyzeTicker';
 import { resolvePythonBin, startAndRespond as startJob } from '../lib/jobActions';
-import { getTheses } from '../lib/mappers';
+import { getTheses, getThesisDetail, getWatchlist } from '../lib/mappers';
 import type { JobManager } from '../lib/jobs';
 import type { SchedulerSlot, StartJobResponse } from '@shared/types';
 
@@ -14,6 +15,12 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TRADER_MEMORY_CLI = 'skills/trader-memory-core/scripts/trader_memory_cli.py';
 const RECALC_SCRIPT = 'scripts/recalc_watchlist_from_profile.py';
 const SYNC_THESIS_ALERTS_SCRIPT = 'scripts/sync_thesis_alerts.py';
+// Canonical launcher: loads .env (IB creds + the IB_ALLOW_ORDER_PLACEMENT lock),
+// fixes PATH, picks the repo .venv — same role run_trading_schedule.sh plays for
+// run-slot. The bracket actions shell it so the two-lock placement guard works.
+const WATCHLIST_ORDERS_LAUNCHER = 'scripts/run_watchlist_orders.sh';
+const THESIS_ID_RE = /^th_[a-z0-9_]+$/i;
+const ORDER_ID_RE = /^[A-Za-z0-9._-]{1,64}$/; // IB order ids: numeric or uuid-ish
 
 function resolveClaudeBin(): string {
   // claude-p: a drop-in `claude -p` emulator that takes the prompt as a
@@ -201,6 +208,107 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'delete-theses' },
+    });
+  });
+
+  r.post('/actions/place-ib-bracket', (req, res) => {
+    // Place a native IB bracket for one ENTRY_READY thesis. Geometry comes from
+    // the thesis (overridable in the body); the watchlist_orders launcher loads
+    // the IB_ALLOW_ORDER_PLACEMENT lock from .env, so without it the run is a
+    // no-post preview. Thesis status is re-read here — never trusted from body.
+    const id = String((req.body as Record<string, unknown>)?.thesisId ?? '').trim();
+    if (!THESIS_ID_RE.test(id)) {
+      const body: StartJobResponse = { ok: false, error: `invalid thesisId: ${id}` };
+      return res.status(400).json(body);
+    }
+    const detail = getThesisDetail(dataDir, id);
+    if (!detail) {
+      const body: StartJobResponse = { ok: false, error: `thesis not found: ${id}` };
+      return res.status(400).json(body);
+    }
+    if (detail.status !== 'ENTRY_READY') {
+      const body: StartJobResponse = {
+        ok: false,
+        error: `thesis must be ENTRY_READY to place a bracket (is ${detail.status})`,
+      };
+      return res.status(400).json(body);
+    }
+    // Pull the planner-sized watchlist candidate (shares + levels) for this
+    // thesis — the same source the Telegram flow uses; an ENTRY_READY thesis
+    // rarely carries position.shares on its own. Match by thesis_id, then ticker.
+    const wl = getWatchlist(dataDir, null).data;
+    const cand =
+      wl?.candidates.find((c) => c.thesis_id === id) ??
+      wl?.candidates.find((c) => c.ticker.toUpperCase() === detail.ticker.toUpperCase()) ??
+      null;
+    const built = buildPlaceIbBracketArgs((req.body ?? {}) as Record<string, unknown>, detail, cand);
+    if ('error' in built) {
+      const body: StartJobResponse = { ok: false, error: built.error };
+      return res.status(400).json(body);
+    }
+    return startAndRespond(res, {
+      label: built.label,
+      cmd: 'bash',
+      args: [WATCHLIST_ORDERS_LAUNCHER, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'place-ib-bracket', thesisId: id, ticker: detail.ticker },
+    });
+  });
+
+  r.post('/actions/cancel-ib-bracket', (req, res) => {
+    // Cancel a placed-but-unfilled bracket (the delete button). watchlist_orders
+    // refuses once the entry has filled — a live position is exited via close.
+    const built = buildCancelIbBracketArgs((req.body ?? {}) as Record<string, unknown>);
+    if ('error' in built) {
+      const body: StartJobResponse = { ok: false, error: built.error };
+      return res.status(400).json(body);
+    }
+    return startAndRespond(res, {
+      label: built.label,
+      cmd: 'bash',
+      args: [WATCHLIST_ORDERS_LAUNCHER, ...built.args],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: {
+        kind: 'cancel-ib-bracket',
+        thesisId: String((req.body as Record<string, unknown>)?.thesisId ?? ''),
+      },
+    });
+  });
+
+  r.post('/actions/cancel-ib-order', (req, res) => {
+    // Cancel specific IB orders by id — the per-row delete button on the
+    // **Счёт IB** tab (a bracket passes all its leg ids). Order-id-centric,
+    // independent of the thesis ledger.
+    const raw = (req.body as Record<string, unknown>)?.orderIds;
+    const ids = Array.isArray(raw) ? raw.map((x) => String(x).trim()).filter(Boolean) : [];
+    const clean = ids.filter((id) => ORDER_ID_RE.test(id));
+    if (clean.length === 0) {
+      const body: StartJobResponse = { ok: false, error: 'no valid order ids' };
+      return res.status(400).json(body);
+    }
+    return startAndRespond(res, {
+      label: `cancel IB order${clean.length > 1 ? `s ×${clean.length}` : ''}`,
+      cmd: 'bash',
+      args: [WATCHLIST_ORDERS_LAUNCHER, 'cancel-orders', '--order-ids', clean.join(',')],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'cancel-ib-order', count: clean.length },
+    });
+  });
+
+  r.post('/actions/sync-ib-fills', (_req, res) => {
+    // Telegram-free fill reconcile: flip ENTRY_READY→ACTIVE for any filled entry
+    // (read-only on IB; the only write is the thesis transition). Behind the
+    // dashboard's "Сверить с IB" button; also safe to run on a 1-min timer.
+    return startAndRespond(res, {
+      label: 'sync IB fills → theses',
+      cmd: 'bash',
+      args: [WATCHLIST_ORDERS_LAUNCHER, 'sync'],
+      cwd: projectRoot,
+      env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      meta: { kind: 'sync-ib-fills' },
     });
   });
 

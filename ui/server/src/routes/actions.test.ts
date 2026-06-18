@@ -74,6 +74,46 @@ describe('POST /api/actions/delete-theses', () => {
   });
 });
 
+describe('POST /api/actions/place-ib-bracket', () => {
+  it('rejects an invalid thesis id before spawning', async () => {
+    const res = await request(app).post('/api/actions/place-ib-bracket').send({ thesisId: 'not!an!id' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+
+  it('rejects a well-formed but unknown thesis id', async () => {
+    const res = await request(app)
+      .post('/api/actions/place-ib-bracket')
+      .send({ thesisId: 'th_absent_x_20260101_9999', quantity: 10 });
+    expect(res.status).toBe(400);
+  });
+
+  it('refuses a thesis that is not ENTRY_READY (fixture AAPL is IDEA)', async () => {
+    const res = await request(app)
+      .post('/api/actions/place-ib-bracket')
+      .send({ thesisId: 'th_aapl_pvt_20260602_2c8b', quantity: 10 });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toContain('ENTRY_READY');
+  });
+});
+
+describe('POST /api/actions/cancel-ib-bracket', () => {
+  it('rejects an invalid thesis id before spawning', async () => {
+    const res = await request(app).post('/api/actions/cancel-ib-bracket').send({ thesisId: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.ok).toBe(false);
+  });
+});
+
+describe('POST /api/actions/cancel-ib-order', () => {
+  it('rejects an empty / invalid order-id list before spawning', async () => {
+    expect((await request(app).post('/api/actions/cancel-ib-order').send({ orderIds: [] })).status).toBe(400);
+    expect(
+      (await request(app).post('/api/actions/cancel-ib-order').send({ orderIds: ['bad id!'] })).status,
+    ).toBe(400);
+  });
+});
+
 describe('buildDeleteThesesArgs', () => {
   const SD = '/data/journal/theses';
   const STATUS: Record<string, string> = {
