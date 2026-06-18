@@ -11,7 +11,8 @@ export function getStoredTheme(): Theme {
   } catch {
     /* localStorage unavailable */
   }
-  return 'dark';
+  // White/parchment gallery is the brand default (see ui/DESIGN.md); dark = derived near-black-tile variant.
+  return 'light';
 }
 
 export function applyTheme(theme: Theme): void {

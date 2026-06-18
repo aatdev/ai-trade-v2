@@ -239,11 +239,11 @@ export default function ProfileTab() {
           {dirty ? <span className="muted">● есть несохранённые изменения</span> : null}
         </div>
 
-        <span className="hint">
-          Поля с ↻ влияют на размер позиций / уровни ватчлиста и неактивных тезисов. Файл —{' '}
-          <code>trading-data/trading_profile.json</code>, тот же, что читают скрипты планировщика.
+        <p className="hint">
+          Поля с ↻ влияют на размер позиций / уровни ватчлиста и неактивных тезисов.<br/> Файл —{' '}
+          <code>trading-data/trading_profile.json</code>, тот же, что читают скрипты планировщика.<br/>
           Активные позиции (ACTIVE-тезисы) пересчёт не трогает — их стоп уже стоит у брокера.
-        </span>
+        </p>
 
         {saveErr ? (
           <div className="err" style={{ marginTop: 8 }}>
