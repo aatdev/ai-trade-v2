@@ -2,6 +2,8 @@
 """End-to-end and filter tests for the screener orchestration (offline)."""
 
 import json
+import sys
+import types
 
 from screen_short import (
     analyze_symbol,
@@ -10,6 +12,7 @@ from screen_short import (
     parse_arguments,
     passes_short_filter,
     run_from_fixture,
+    run_live,
     stop_geometry_reason,
 )
 from weakness_metrics import compute_metrics
@@ -126,6 +129,100 @@ def test_run_from_fixture_filters_strong_out(tmp_path):
     assert "WEAK" in symbols  # Stage 4 passes
     assert "STRONG" not in symbols  # above MA200 invalidated
     assert meta["source"] == "fixture"
+
+
+def _install_fake_tv_client(monkeypatch, bars_map, constituents=None):
+    """Replace the `tv_client` module run_live imports with a recording fake.
+
+    The fake mirrors the batch contract of the real TradingView client: a single
+    get_batch_historical() warms an internal "prefetched" set, and any later
+    get_historical_prices() for a symbol outside that set is recorded as a
+    one-at-a-time fetch (the slow path the batch is meant to eliminate).
+    Pass ``constituents`` to drive the S&P 500 universe path (each entry carries
+    a sector). Returns the list the constructed client instances are appended to.
+    """
+    instances = []
+
+    class FakeTVClient:
+        def __init__(self, api_key=None):
+            self.rate_limit_reached = False
+            self.api_calls_made = 0
+            self.batch_calls = []
+            self.individual_fetches = []
+            self._prefetched = set()
+            instances.append(self)
+
+        def get_sp500_constituents(self):
+            return constituents
+
+        def get_batch_historical(self, symbols, days=260):
+            syms = list(symbols)
+            self.batch_calls.append(syms)
+            self._prefetched.update(syms)
+            return {s: bars_map[s] for s in syms if s in bars_map}
+
+        def get_historical_prices(self, symbol, days=260):
+            if symbol not in self._prefetched:
+                self.individual_fetches.append(symbol)
+            bars = bars_map.get(symbol)
+            return {"symbol": symbol, "historical": bars} if bars else None
+
+    fake_mod = types.ModuleType("tv_client")
+    fake_mod.FMPClient = FakeTVClient
+    monkeypatch.setitem(sys.modules, "tv_client", fake_mod)
+    return instances
+
+
+def test_run_live_batches_history_in_one_prefetch(monkeypatch):
+    bars_map = {
+        "WEAK": make_series(
+            downtrend_closes(260, 220.0, 140.0), base_volume=3_000_000, last_vol_mult=2.5
+        ),
+        "STRONG": make_series(uptrend_closes(260, 100.0, 220.0), base_volume=3_000_000),
+        "SPY": make_series(uptrend_closes(260, 195.0, 200.0)),
+    }
+    instances = _install_fake_tv_client(monkeypatch, bars_map)
+
+    args = parse_arguments(
+        ["--universe", "WEAK", "STRONG", "--sector-rs-gate", "0", "--min-dollar-vol", "1000000"]
+    )
+    results, meta = run_live(args)
+
+    client = instances[0]
+    # Exactly one batch fetch, covering every universe symbol + the SPY benchmark.
+    assert len(client.batch_calls) == 1
+    assert set(client.batch_calls[0]) == {"WEAK", "STRONG", "SPY"}
+    # Every per-symbol read after the prefetch is a cache hit — the slow
+    # one-symbol-per-process path is never taken.
+    assert client.individual_fetches == []
+    assert meta["source"] == "tradingview"
+    assert {r["symbol"] for r in results} == {"WEAK"}  # STRONG is above MA200
+
+
+def test_run_live_prefetch_includes_sector_etfs(monkeypatch):
+    # S&P 500 path: WEAK is Technology, so XLK must ride along in the single
+    # prefetch batch — then compute_sector_rs() is a cache hit too.
+    bars_map = {
+        "WEAK": make_series(
+            downtrend_closes(260, 220.0, 140.0), base_volume=3_000_000, last_vol_mult=2.5
+        ),
+        "SPY": make_series(uptrend_closes(260, 195.0, 200.0)),
+        "XLK": make_series(uptrend_closes(260, 100.0, 120.0)),
+    }
+    constituents = [{"symbol": "WEAK", "name": "Weak Co", "sector": "Technology"}]
+    instances = _install_fake_tv_client(monkeypatch, bars_map, constituents=constituents)
+
+    monkeypatch.setattr(
+        "screen_short._load_profile",
+        lambda: {"sector_rs_gate": 1, "sector_rs_threshold": 5.0},
+    )
+    args = parse_arguments(["--full-sp500", "--min-dollar-vol", "1000000"])
+    results, meta = run_live(args)
+
+    client = instances[0]
+    assert len(client.batch_calls) == 1
+    assert set(client.batch_calls[0]) == {"WEAK", "SPY", "XLK"}
+    assert client.individual_fetches == []
 
 
 def test_main_writes_reports(tmp_path):

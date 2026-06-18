@@ -223,12 +223,6 @@ def run_live(args) -> tuple[list[dict], dict]:
 
     client = FMPClient(api_key=args.api_key)
 
-    # Index proxy: SPY history for the RS benchmark.
-    spy_hist = client.get_historical_prices("SPY", days=max(260, args.rs_lookback + 10))
-    spy_return = None
-    if spy_hist and "historical" in spy_hist:
-        spy_return = _index_return_from_bars(spy_hist["historical"], args.rs_lookback)
-
     # Resolve the universe.
     if args.universe:
         universe = [{"symbol": s, "name": s, "sector": ""} for s in args.universe]
@@ -247,13 +241,35 @@ def run_live(args) -> tuple[list[dict], dict]:
 
     # Sector relative strength (SPDR ETF vs SPY): a short into a leading sector
     # is fighting the group — score_candidate caps it at C.
-    from sector_strength import compute_sector_rs, gate_settings
+    from sector_strength import SECTOR_ETF, compute_sector_rs, gate_settings
 
     sector_gate, sector_threshold = gate_settings(
         _load_profile(),
         getattr(args, "sector_rs_gate", None),
         getattr(args, "sector_rs_threshold", None),
     )
+
+    # Batch-prefetch every daily history in one pass — the universe, the SPY
+    # benchmark, and (when the sector gate is on) the SPDR sector ETFs. One
+    # `tv bars` process per BATCH_CHUNK group warms the client cache, so every
+    # get_historical_prices() below is a cache hit. This is the same
+    # amortization vcp-screener gets from get_batch_quotes(); it replaces the
+    # old 3-4 `tv` spawns *per symbol* with ~1 spawn per 20 symbols. Falls back
+    # transparently to the per-symbol path on a CLI that predates `tv bars`.
+    hist_days = max(260, args.rs_lookback + 10)
+    prefetch = [e["symbol"] for e in universe] + ["SPY"]
+    if sector_gate:
+        prefetch += [
+            etf for etf in {SECTOR_ETF.get(e["sector"]) for e in universe if e.get("sector")} if etf
+        ]
+    client.get_batch_historical(list(dict.fromkeys(prefetch)), days=hist_days)
+
+    # Index proxy: SPY history for the RS benchmark (cache hit after prefetch).
+    spy_hist = client.get_historical_prices("SPY", days=hist_days)
+    spy_return = None
+    if spy_hist and "historical" in spy_hist:
+        spy_return = _index_return_from_bars(spy_hist["historical"], args.rs_lookback)
+
     if sector_gate:
         sector_rs_map = compute_sector_rs(
             client,
