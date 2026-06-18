@@ -86,7 +86,12 @@ All process-spawning and real mutations go through `routes/actions.ts` +
 
 - **Single-job mutex** (server-side, mirrors the scheduler's single-run lock): a second
   start while one runs returns `{ busy: true }`. Exit code **75** = scheduler busy
-  (`SCHEDULER_BUSY_CODE`) → job status `busy`.
+  (`SCHEDULER_BUSY_CODE`) → job status `busy`. The mutex only covers **exclusive** jobs
+  (the default) — slots, ticker analysis, IB order placement, TradingView-CDP alert sync:
+  things that contend for one external resource. Pass `exclusive: false` to `start()` for
+  fast local ledger writes (`/actions/memory`, `/actions/delete-theses` → the trader-memory
+  CLI, which guards its own cross-process `_index.lock`); those neither wait behind nor block
+  a long-running exclusive job, so a thesis status change can't be spuriously refused `busy`.
 - Log output is a per-job ring buffer (2000 lines), streamed to the client over **SSE**
   (`GET /actions/jobs/:id/stream`): replay buffered lines, then live; `end` event on close.
 - Commands are a **strict whitelist**. Shelling out goes through canonical launchers

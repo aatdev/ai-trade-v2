@@ -186,6 +186,12 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'memory', op: String((req.body as Record<string, unknown>)?.op ?? '') },
+      // Fast local ledger write (transition / close / ingest / heat / …): the
+      // trader-memory store guards its own cross-process `_index.lock`, so it
+      // must not be serialized behind a long exclusive job (e.g. a 30-min
+      // ticker analysis) — that was surfacing as a spurious `busy` on a simple
+      // thesis status change.
+      exclusive: false,
     });
   });
 
@@ -208,6 +214,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'delete-theses' },
+      exclusive: false, // local index-locked store delete — see /actions/memory
     });
   });
 

@@ -16,6 +16,15 @@ export interface StartOptions {
   env?: NodeJS.ProcessEnv;
   /** Arbitrary metadata surfaced in the jobs list (e.g. { kind, ticker }). */
   meta?: Record<string, unknown>;
+  /**
+   * Whether this job participates in the single-job mutex. Default `true`
+   * (mirrors the scheduler's single-run lock for slots / ticker analysis / IB
+   * order placement / TradingView-CDP alert sync — operations that contend for
+   * an external resource and must serialize). Set `false` for fast, local
+   * ledger writes (the trader-memory CLI guards its own `_index.lock`), so they
+   * neither wait behind nor block a long-running exclusive job.
+   */
+  exclusive?: boolean;
 }
 
 interface InternalJob {
@@ -49,7 +58,8 @@ export class JobManager {
   }
 
   start(opts: StartOptions): { busy: true; activeJobId: string } | { busy: false; job: InternalJob } {
-    if (this.activeJobId) return { busy: true, activeJobId: this.activeJobId };
+    const exclusive = opts.exclusive !== false; // default true
+    if (exclusive && this.activeJobId) return { busy: true, activeJobId: this.activeJobId };
 
     this.counter += 1;
     const id = `job-${Date.now().toString(36)}-${this.counter}`;
@@ -68,7 +78,7 @@ export class JobManager {
     };
     this.jobs.set(id, job);
     this.order.push(id);
-    this.activeJobId = id;
+    if (exclusive) this.activeJobId = id;
     this.trim();
 
     const spawnCmd = opts.shell ? 'bash' : opts.cmd;
