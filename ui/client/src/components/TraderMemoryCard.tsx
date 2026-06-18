@@ -1,8 +1,16 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AnalysisIndexEntry, MemoryThesis } from '@shared/types';
-import { useAnalysisIndex, useMemory, deleteTheses, syncThesisAlerts, type Refetch } from '../api';
+import type { AnalysisIndexEntry, IbOrder, MemoryThesis } from '@shared/types';
+import {
+  useAnalysisIndex,
+  useIbSnapshot,
+  useMemory,
+  deleteTheses,
+  syncThesisAlerts,
+  type Refetch,
+} from '../api';
 import { useMemoryOp } from '../lib/useMemoryOp';
+import { isDeadOrder, rowsForThesis } from '../lib/ibBrackets';
 import { fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
 import AnalysisModal from './AnalysisModal';
 import type { ChartLevels } from './CandleChart';
@@ -44,6 +52,24 @@ function levelsFromThesis(t: MemoryThesis): ChartLevels {
     t2: num(prov.t2),
     t3: num(prov.t3),
   };
+}
+
+/** IB order status for a thesis, derived from the live snapshot: a working
+ *  (placed, unfilled) bracket → "Выставлен"; only filled legs → "Исполнен";
+ *  nothing live (or all cancelled) → null. */
+function orderStatusFor(
+  orders: IbOrder[],
+  thesisId: string,
+): { label: string; color: string } | null {
+  const rows = rowsForThesis(orders, thesisId);
+  if (!rows.length) return null;
+  const legs = rows.flatMap((r) => (r.kind === 'bracket' ? r.legs : [r.order]));
+  const working = legs.some(
+    (l) => !isDeadOrder(l.status) && !(l.status ?? '').toLowerCase().includes('fill'),
+  );
+  return working
+    ? { label: 'Выставлен', color: 'var(--accent)' }
+    : { label: 'Исполнен', color: 'var(--green)' };
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -111,11 +137,9 @@ function ThesisDetailModal({ t, onClose }: { t: MemoryThesis; onClose: () => voi
         </>
       }
       onClose={onClose}
+      wide
       footer={
         <>
-          <Link to={`/ticker/${t.ticker}`} className="back-link">
-            Открыть тикер ↗
-          </Link>
           <button onClick={onClose}>Закрыть</button>
         </>
       }
@@ -279,6 +303,17 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useMemory(refetch);
   const { data: analysisIndex } = useAnalysisIndex(refetch);
   const index: Index = analysisIndex?.tickers ?? {};
+  // Live IB order status per thesis (shared React Query key with the IB tab).
+  const { data: ib } = useIbSnapshot(refetch);
+  const orders = useMemo(() => ib?.orders ?? [], [ib]);
+  const orderStatusByThesis = useMemo(() => {
+    const map = new Map<string, { label: string; color: string }>();
+    for (const t of data?.theses ?? []) {
+      const os = orderStatusFor(orders, t.id);
+      if (os) map.set(t.id, os);
+    }
+    return map;
+  }, [data, orders]);
   const [status, setStatus] = useState('');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<MemoryThesis | null>(null);
@@ -489,6 +524,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                   </th>
                   <th style={{ width: 1, whiteSpace: 'nowrap' }}>Тикер</th>
                   <th style={{ textAlign: 'left' }}>Статус</th>
+                  <th style={{ textAlign: 'left' }}>Ордер</th>
                   <th style={{ textAlign: 'left' }}>Тип</th>
                   <th>Вход</th>
                   <th>Стоп</th>
@@ -533,6 +569,18 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                       </td>
                       <td style={{ textAlign: 'left' }}>
                         <StatusBadge status={t.status} />
+                      </td>
+                      <td style={{ textAlign: 'left' }}>
+                        {(() => {
+                          const os = orderStatusByThesis.get(t.id);
+                          return os ? (
+                            <span className="badge" style={{ color: os.color }}>
+                              {os.label}
+                            </span>
+                          ) : (
+                            <span className="muted">—</span>
+                          );
+                        })()}
                       </td>
                       <td style={{ textAlign: 'left' }} className="muted">
                         {t.thesis_type ?? '—'}

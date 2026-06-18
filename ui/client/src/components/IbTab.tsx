@@ -1,11 +1,37 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import type { IbOrder } from '@shared/types';
-import { useIbSnapshot, type Refetch } from '../api';
+import { lazy, Suspense, useMemo, useState } from 'react';
+import type { IbOrder, Side } from '@shared/types';
+import { ibBracketOp, useAnalysisIndex, useIbSnapshot, type Refetch } from '../api';
+import { useMemoryOp } from '../lib/useMemoryOp';
 import { groupIbOrders, legRole, type BracketRow } from '../lib/ibBrackets';
 import { fmtDateTime, fmtMoney, fmtNum, fmtSignedPct } from '../lib/format';
 import { pnlColor, sideColor } from '../lib/zones';
+import type { ChartLevels } from './CandleChart';
+import { OpLog } from './MemoryOps';
 import { Card, Empty, ErrorNote, Loading, SideBadge, Stat } from './ui';
+
+const TickerChartModal = lazy(() => import('./TickerChartModal'));
+const AnalysisModal = lazy(() => import('./AnalysisModal'));
+
+/** Open the chart modal for a ticker, with optional entry/stop/target overlay. */
+type OpenChart = (ticker: string, levels: ChartLevels) => void;
+
+/** IB order/trade side ("BUY"/"SELL") → chart Side for overlay coloring. */
+function orderSideToSide(side: string | null): Side | undefined {
+  const s = (side ?? '').toUpperCase();
+  if (s === 'BUY') return 'long';
+  if (s === 'SELL') return 'short';
+  return undefined;
+}
+
+/** Chart overlay levels from a collapsed bracket row (entry pivot / stop / take). */
+function levelsFromBracket(row: BracketRow): ChartLevels {
+  return {
+    side: orderSideToSide(row.side),
+    entry: row.entryPrice,
+    stop: row.stop?.stop_price ?? null,
+    target: row.target?.limit_price ?? null,
+  };
+}
 
 /**
  * "Счёт IB" tab — live, read-only Interactive Brokers account balances and open
@@ -16,6 +42,27 @@ import { Card, Empty, ErrorNote, Loading, SideBadge, Stat } from './ui';
 export default function IbTab({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error, refetch: reload, isFetching } = useIbSnapshot(refetch);
   const reloadIb = () => void reload();
+  // Cancel op (declared before the early returns so hook order stays stable).
+  // Reloads the snapshot once the cancel job finishes.
+  const cancelOp = useMemoryOp((status) => {
+    if (status === 'done') void reload();
+  }, ibBracketOp);
+  const onCancelOrders = (orderIds: string[], label: string) => {
+    const ids = orderIds.filter(Boolean);
+    if (!ids.length) return;
+    if (!window.confirm(`Отменить в IB: ${label} (${ids.length} ног)?`)) return;
+    void cancelOp.run({ op: 'cancel-ib-order', orderIds: ids });
+  };
+
+  // Click a ticker (position / order / bracket / trade) → chart modal, mirroring
+  // the watchlist & screener cards. The analysis index drives the "есть анализ"
+  // flag + the in-place "open analysis" control.
+  const { data: analysisIndex } = useAnalysisIndex(refetch);
+  const index = analysisIndex?.tickers ?? {};
+  const [chartFor, setChartFor] = useState<{ ticker: string; levels: ChartLevels } | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
+  const openChart: OpenChart = (ticker, levels) =>
+    setChartFor({ ticker: ticker.toUpperCase(), levels });
 
   if (isLoading)
     return (
@@ -77,6 +124,7 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
             <span style={{ flex: 1 }} />
             <RefreshButton onClick={reloadIb} busy={isFetching} />
           </div>
+          <SyncFills />
           {s ? (
             <div className="stats">
               <Stat k="Чистая ликвидация" v={fmtMoney(s.net_liquidation)} />
@@ -119,7 +167,16 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
                   {positions.map((p) => (
                     <tr key={`${p.symbol}-${p.conid ?? ''}`}>
                       <td className="sym">
-                        <Link to={`/ticker/${p.symbol}`}>{p.symbol}</Link>
+                        <button
+                          type="button"
+                          className="ticker-btn"
+                          title={`График ${p.symbol}`}
+                          onClick={() =>
+                            openChart(p.symbol, { side: p.side ?? undefined, entry: p.avg_cost })
+                          }
+                        >
+                          {p.symbol}
+                        </button>
                       </td>
                       <td style={{ textAlign: 'left' }}>
                         {p.side ? (
@@ -147,7 +204,13 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
         </Card>
 
         <Card title="IB — Ордера">
-          <OrdersTable orders={orders} />
+          <OrdersTable
+            orders={orders}
+            onCancel={onCancelOrders}
+            onOpenChart={openChart}
+            busy={cancelOp.state === 'running'}
+          />
+          <OpLog op={cancelOp} collapsible />
         </Card>
       </div>
 
@@ -178,7 +241,16 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
                         {fmtTradeTime(t.trade_time)}
                       </td>
                       <td className="sym">
-                        <Link to={`/ticker/${t.symbol}`}>{t.symbol}</Link>
+                        <button
+                          type="button"
+                          className="ticker-btn"
+                          title={`График ${t.symbol}`}
+                          onClick={() =>
+                            openChart(t.symbol, { side: orderSideToSide(t.side), entry: t.price })
+                          }
+                        >
+                          {t.symbol}
+                        </button>
                       </td>
                       <td style={{ textAlign: 'left' }}>
                         <OrderSide side={t.side} />
@@ -195,6 +267,28 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
           )}
         </Card>
       </div>
+
+      {chartFor ? (
+        <Suspense fallback={null}>
+          <TickerChartModal
+            ticker={chartFor.ticker}
+            levels={chartFor.levels}
+            hasAnalysis={!!index[chartFor.ticker]}
+            onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.ticker;
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
+          />
+        </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <Suspense fallback={null}>
+          <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
+        </Suspense>
+      ) : null}
     </div>
   );
 }
@@ -204,11 +298,39 @@ export default function IbTab({ refetch }: { refetch: Refetch }) {
  * collapsed into a single row showing the entry pivot, take-profit (Лимит)
  * and protective stop (Стоп); click the row to expand its individual legs.
  */
-function OrdersTable({ orders }: { orders: IbOrder[] }) {
-  const rows = useMemo(() => groupIbOrders(orders), [orders]);
+type CancelHandler = (orderIds: string[], label: string) => void;
+
+/** Status is still working (cancellable) — not filled / cancelled / rejected. */
+function cancellable(status: string | null): boolean {
+  const t = (status ?? '').toLowerCase();
+  return !(t.includes('fill') || t.includes('cancel') || t.includes('reject'));
+}
+
+/** Terminal "dead" order — cancelled / rejected / inactive. These linger in the
+ * IB snapshot but are noise in the orders table, so they're filtered out. */
+function isDead(status: string | null): boolean {
+  const t = (status ?? '').toLowerCase();
+  return t.includes('cancel') || t.includes('reject') || t.includes('inactive');
+}
+
+function OrdersTable({
+  orders,
+  onCancel,
+  onOpenChart,
+  busy,
+}: {
+  orders: IbOrder[];
+  onCancel: CancelHandler;
+  onOpenChart: OpenChart;
+  busy: boolean;
+}) {
+  // Hide cancelled / rejected / inactive rows — IB keeps them in the snapshot
+  // after a cancel, but the orders table should show only working/filled ones.
+  const visible = useMemo(() => orders.filter((o) => !isDead(o.status)), [orders]);
+  const rows = useMemo(() => groupIbOrders(visible), [visible]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  if (orders.length === 0)
+  if (visible.length === 0)
     return (
       <p className="muted" style={{ marginTop: 4 }}>
         Активных ордеров нет.
@@ -230,18 +352,28 @@ function OrdersTable({ orders }: { orders: IbOrder[] }) {
             <th>Стоп</th>
             <th>TIF</th>
             <th style={{ textAlign: 'left' }}>Статус</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {rows.map((row) =>
             row.kind === 'single' ? (
-              <OrderRow key={row.key} o={row.order} />
+              <OrderRow
+                key={row.key}
+                o={row.order}
+                onCancel={onCancel}
+                onOpenChart={onOpenChart}
+                busy={busy}
+              />
             ) : (
               <BracketRows
                 key={row.key}
                 row={row}
                 open={!!expanded[row.key]}
                 onToggle={() => toggle(row.key)}
+                onCancel={onCancel}
+                onOpenChart={onOpenChart}
+                busy={busy}
               />
             ),
           )}
@@ -251,12 +383,64 @@ function OrdersTable({ orders }: { orders: IbOrder[] }) {
   );
 }
 
+/** ✕ button that cancels the given IB order id(s) at the broker. */
+function CancelBtn({
+  ids,
+  label,
+  onCancel,
+  busy,
+}: {
+  ids: (string | null | undefined)[];
+  label: string;
+  onCancel: CancelHandler;
+  busy: boolean;
+}) {
+  const clean = ids.filter((x): x is string => !!x);
+  if (!clean.length) return <span className="muted">—</span>;
+  return (
+    <button
+      className="link-btn"
+      style={{ color: 'var(--red)' }}
+      disabled={busy}
+      title="Отменить ордер в IB"
+      onClick={(e) => {
+        e.stopPropagation();
+        onCancel(clean, label);
+      }}
+    >
+      ✕ Отменить
+    </button>
+  );
+}
+
 /** A single standalone order (one row). */
-function OrderRow({ o }: { o: IbOrder }) {
+function OrderRow({
+  o,
+  onCancel,
+  onOpenChart,
+  busy,
+}: {
+  o: IbOrder;
+  onCancel: CancelHandler;
+  onOpenChart: OpenChart;
+  busy: boolean;
+}) {
   return (
     <tr>
       <td className="sym">
-        <Link to={`/ticker/${o.symbol}`}>{o.symbol}</Link>
+        <button
+          type="button"
+          className="ticker-btn"
+          title={`График ${o.symbol}`}
+          onClick={() =>
+            onOpenChart(o.symbol, {
+              side: orderSideToSide(o.side),
+              entry: o.limit_price ?? o.stop_price,
+            })
+          }
+        >
+          {o.symbol}
+        </button>
       </td>
       <td style={{ textAlign: 'left' }}>
         <OrderSide side={o.side} />
@@ -269,6 +453,11 @@ function OrderRow({ o }: { o: IbOrder }) {
       <td style={{ textAlign: 'left' }}>
         <OrderStatus status={o.status} />
       </td>
+      <td style={{ textAlign: 'right' }}>
+        {cancellable(o.status) ? (
+          <CancelBtn ids={[o.order_id]} label={`${o.symbol} ${o.order_type ?? ''}`} onCancel={onCancel} busy={busy} />
+        ) : null}
+      </td>
     </tr>
   );
 }
@@ -278,20 +467,36 @@ function BracketRows({
   row,
   open,
   onToggle,
+  onCancel,
+  onOpenChart,
+  busy,
 }: {
   row: BracketRow;
   open: boolean;
   onToggle: () => void;
+  onCancel: CancelHandler;
+  onOpenChart: OpenChart;
+  busy: boolean;
 }) {
+  const legIds = row.legs.map((l) => l.order_id);
+  const anyCancellable = row.legs.some((l) => cancellable(l.status));
   return (
     <>
       <tr className="bracket-row" onClick={onToggle} title="Нативный bracket-ордер — нажмите, чтобы раскрыть ноги">
         <td className="sym">
           <div className="bracket-sym">
             <span className="disc">{open ? '▾' : '▸'}</span>
-            <Link to={`/ticker/${row.symbol}`} onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="ticker-btn"
+              title={`График ${row.symbol}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenChart(row.symbol, levelsFromBracket(row));
+              }}
+            >
               {row.symbol}
-            </Link>
+            </button>
             <span className="pill">BRACKET</span>
           </div>
           {row.entryPrice != null && (
@@ -309,6 +514,11 @@ function BracketRows({
         <td style={{ textAlign: 'left' }}>
           <OrderStatus status={row.status} />
         </td>
+        <td style={{ textAlign: 'right' }}>
+          {anyCancellable ? (
+            <CancelBtn ids={legIds} label={`${row.symbol} bracket`} onCancel={onCancel} busy={busy} />
+          ) : null}
+        </td>
       </tr>
       {open &&
         row.legs.map((leg, i) => (
@@ -324,6 +534,11 @@ function BracketRows({
             <td>{leg.tif ?? '—'}</td>
             <td style={{ textAlign: 'left' }}>
               <OrderStatus status={leg.status} />
+            </td>
+            <td style={{ textAlign: 'right' }}>
+              {cancellable(leg.status) ? (
+                <CancelBtn ids={[leg.order_id]} label={`${row.symbol} ${legRole(leg, row)}`} onCancel={onCancel} busy={busy} />
+              ) : null}
             </td>
           </tr>
         ))}
@@ -341,6 +556,31 @@ function RefreshButton({ onClick, busy }: { onClick: () => void; busy: boolean }
     <button onClick={onClick} disabled={busy} title="Загрузить данные с IB Gateway">
       {busy ? '↻ Загрузка…' : '↻ Обновить'}
     </button>
+  );
+}
+
+/**
+ * "Сверить с тезисами" — runs the Telegram-free fill reconcile (sync): any IB
+ * entry order that has filled flips its thesis ENTRY_READY → ACTIVE. Read-only
+ * on IB; the only write is the thesis transition. Streams its log inline.
+ */
+function SyncFills() {
+  const op = useMemoryOp(undefined, ibBracketOp);
+  const running = op.state === 'running';
+  return (
+    <div className="field" style={{ marginBottom: 12 }}>
+      <div className="btn-row">
+        <button
+          className="secondary"
+          disabled={running}
+          onClick={() => void op.run({ op: 'sync-ib-fills' })}
+          title="Сверить исполнения IB с тезисами (ENTRY_READY → ACTIVE при филле входа)"
+        >
+          {running ? 'Сверка…' : '⟳ Сверить с тезисами'}
+        </button>
+      </div>
+      <OpLog op={op} collapsible />
+    </div>
   );
 }
 

@@ -441,6 +441,37 @@ export const analyzeTicker = (
   opts?: { createAlerts?: boolean; saveToNotes?: boolean },
 ) => postJSON<StartJobResponse>('/api/actions/analyze-ticker', { ticker, ...opts });
 
+/* ---- IB bracket actions (place / cancel / fill-sync) ---- */
+export const placeIbBracket = (body: Record<string, unknown>) =>
+  postJSON<StartJobResponse>('/api/actions/place-ib-bracket', body);
+
+export const cancelIbBracket = (body: Record<string, unknown>) =>
+  postJSON<StartJobResponse>('/api/actions/cancel-ib-bracket', body);
+
+export const syncIbFills = () => postJSON<StartJobResponse>('/api/actions/sync-ib-fills', {});
+
+export const cancelIbOrder = (orderIds: string[]) =>
+  postJSON<StartJobResponse>('/api/actions/cancel-ib-order', { orderIds });
+
+/**
+ * Dispatch an IB-bracket op to its endpoint by `op` — lets the generic OpRunner
+ * (which only knows how to call one submitter) drive place / cancel / sync.
+ */
+export const ibBracketOp = (body: Record<string, unknown>): Promise<StartJobResponse> => {
+  switch (body.op) {
+    case 'place-ib-bracket':
+      return placeIbBracket(body);
+    case 'cancel-ib-bracket':
+      return cancelIbBracket(body);
+    case 'sync-ib-fills':
+      return syncIbFills();
+    case 'cancel-ib-order':
+      return cancelIbOrder((body.orderIds as string[]) ?? []);
+    default:
+      return Promise.resolve({ ok: false, error: `unknown IB op: ${String(body.op)}` });
+  }
+};
+
 export const cancelJob = (id: string) =>
   postJSON<{ ok: boolean }>(`/api/actions/jobs/${id}/cancel`, {});
 

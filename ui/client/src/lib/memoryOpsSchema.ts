@@ -14,6 +14,10 @@ export interface OpField {
   required?: boolean;
   placeholder?: string;
   default?: string; // literal, or '@today' for the current date
+  // When set, the select's options are computed at render time from the open
+  // thesis's status instead of the static `options`. 'forwardStatus' → only
+  // states reachable forward (the thesis state machine is forward-only).
+  dynamicOptions?: 'forwardStatus';
 }
 
 export interface OpDef {
@@ -27,6 +31,21 @@ export interface OpDef {
 }
 
 const STATUSES = ['IDEA', 'ENTRY_READY', 'ACTIVE', 'PARTIALLY_CLOSED', 'CLOSED', 'INVALIDATED'];
+/** Forward-only state machine order (INVALIDATED is a terminal off-ramp, not in line). */
+export const STATUS_SEQUENCE = ['IDEA', 'ENTRY_READY', 'ACTIVE', 'PARTIALLY_CLOSED', 'CLOSED'];
+/**
+ * Plain forward status changes the `transition` op accepts — never backward.
+ * ACTIVE, PARTIALLY_CLOSED and the terminal states (CLOSED / INVALIDATED) are
+ * NOT reachable via transition(): they have dedicated ops (open-position / trim
+ * / close / terminate) and the CLI rejects them here. So the only valid plain
+ * transition is IDEA → ENTRY_READY; from ENTRY_READY onward this is empty (use
+ * the dedicated ops). Mirrors thesis_store.transition()'s guards.
+ */
+export function forwardStatuses(current: string): string[] {
+  const PLAIN_TARGETS = ['ENTRY_READY'];
+  const i = STATUS_SEQUENCE.indexOf(current);
+  return PLAIN_TARGETS.filter((s) => STATUS_SEQUENCE.indexOf(s) > i);
+}
 const EXIT_REASONS = ['stop_hit', 'target_hit', 'time_stop', 'invalidated', 'manual'];
 const THESIS_TYPES = [
   'dividend_income',
@@ -44,7 +63,7 @@ export const THESIS_OPS: OpDef[] = [
     label: 'Сменить статус',
     scope: 'thesis',
     fields: [
-      { name: 'newStatus', label: 'Новый статус', type: 'select', options: STATUSES, required: true, default: 'ENTRY_READY' },
+      { name: 'newStatus', label: 'Новый статус', type: 'select', options: STATUSES, dynamicOptions: 'forwardStatus', required: true, default: 'ENTRY_READY' },
       { name: 'reason', label: 'Причина', type: 'text', required: true },
       { name: 'eventDate', label: 'Дата события (опц.)', type: 'date' },
     ],
@@ -130,6 +149,10 @@ export const THESIS_OPS: OpDef[] = [
   { op: 'get', label: 'Показать YAML (get)', scope: 'thesis', fields: [] },
   { op: 'delete', label: 'Удалить', scope: 'thesis', danger: true, confirm: true, hint: 'Безвозвратное удаление файла и записи индекса.', fields: [] },
 ];
+
+/* IB bracket place/cancel is driven by the bespoke <IbBracketOps> panel
+ * (MemoryOps.tsx), not the generic schema — it prefills computed/live values
+ * and disables placement once an order exists, which the static schema can't. */
 
 /* ---------------- global (no thesisId) ---------------- */
 
