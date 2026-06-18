@@ -1,5 +1,6 @@
 # Memory Index
 
+- [TV scanner /symbol fundamentals](tv-scanner-symbol-fundamentals.md) — single-ticker profile+perf via public scanner; no description in scanner, but business blurb scrapeable from symbol-page JSON-LD; EN only
 - [Respond in Russian](respond-in-russian.md) — user wants all replies in Russian
 - [Commit on main, no branch](commit-on-main-no-branch.md) — commit directly to current branch; never create a branch for changes
 - [Save screener results to MyNotes](save-screener-results-to-mynotes.md) — file screener outputs into ~/Documents/MyNotes via save-note skill
