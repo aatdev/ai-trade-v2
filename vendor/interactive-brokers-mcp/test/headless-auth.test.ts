@@ -82,8 +82,12 @@ describe('HeadlessAuthenticator authenticate', () => {
       context: vi.fn(() => ({ cookies: vi.fn().mockResolvedValue(cookies) })),
       close: vi.fn().mockResolvedValue(undefined),
     };
-    const browser = {
+    const context = {
       newPage: vi.fn().mockResolvedValue(page),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const browser = {
+      newContext: vi.fn().mockResolvedValue(context),
       close: vi.fn().mockResolvedValue(undefined),
     };
     const launchSpy = vi
@@ -108,6 +112,10 @@ describe('HeadlessAuthenticator authenticate', () => {
       await vi.advanceTimersByTimeAsync(3000);
       const result = await authPromise;
 
+      // The local gateway's self-signed cert must be accepted at the
+      // context level (the --ignore-certificate-errors launch flag is a no-op
+      // in Playwright's Chromium).
+      expect(browser.newContext).toHaveBeenCalledWith({ ignoreHTTPSErrors: true });
       expect(ibClient.checkAuthenticationStatus).toHaveBeenCalled();
       expect(ibClient.setSessionCookies).toHaveBeenCalledWith(cookies);
       expect(ibClient.initializeBrokerageSession).toHaveBeenCalledTimes(1);

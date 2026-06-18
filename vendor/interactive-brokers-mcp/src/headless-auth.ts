@@ -1,7 +1,8 @@
-import { chromium, Browser, Page } from 'playwright-core';
+import { chromium, Browser, BrowserContext, Page } from 'playwright-core';
 import { Logger } from './logger.js';
 import { IBClient } from './ib-client.js';
 import { BrowserInstaller } from './browser-installer.js';
+import { isLocalHost } from './utils/tls-utils.js';
 
 export interface HeadlessAuthConfig {
   url: string;
@@ -30,6 +31,7 @@ interface AuthenticationFailureState {
 
 export class HeadlessAuthenticator {
   private browser: Browser | null = null;
+  private context: BrowserContext | null = null;
   private page: Page | null = null;
 
   private buildWaitingFor2FAResult(
@@ -64,7 +66,24 @@ export class HeadlessAuthenticator {
       Logger.info('🔧 Using local browser (Playwright default)');
       this.browser = await BrowserInstaller.launchLocalBrowser();
 
-      this.page = await this.browser.newPage();
+      // The local IB Gateway serves its SSO page over HTTPS with a self-signed
+      // certificate. Playwright's Chromium does NOT honour the
+      // `--ignore-certificate-errors` launch flag — the bypass only takes
+      // effect at the browser-context level — so set `ignoreHTTPSErrors` here.
+      // Scope it to local hosts, mirroring the REST client's TLS policy
+      // (utils/tls-utils): a remote gateway still gets its cert verified.
+      let authHost: string | null = null;
+      try {
+        authHost = new URL(authConfig.url).hostname;
+      } catch {
+        authHost = null;
+      }
+      const ignoreHTTPSErrors = isLocalHost(authHost);
+      if (ignoreHTTPSErrors) {
+        Logger.info(`🔓 Accepting the gateway's self-signed certificate (local host ${authHost ?? 'unknown'})`);
+      }
+      this.context = await this.browser.newContext({ ignoreHTTPSErrors });
+      this.page = await this.context.newPage();
 
       // Set a longer timeout for navigation - several minutes for full auth process
       this.page.setDefaultTimeout(authConfig.timeout || 300000); // 5 minutes default
@@ -538,6 +557,10 @@ export class HeadlessAuthenticator {
       if (this.page) {
         await this.page.close();
         this.page = null;
+      }
+      if (this.context) {
+        await this.context.close();
+        this.context = null;
       }
       if (this.browser) {
         await this.browser.close();
