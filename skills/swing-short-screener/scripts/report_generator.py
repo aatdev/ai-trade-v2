@@ -95,17 +95,20 @@ def generate_markdown_report(
     lines.append("## Ranked Candidates")
     lines.append("")
     lines.append(
-        "| Rank | Symbol | Grade | Score | Price | Entry | Stop | Target (2R) | Strongest Signal |"
+        "| Rank | Symbol | Sector | Grade | Score | Price | Entry | Stop | Target (2R) | "
+        "Strongest Signal |"
     )
     lines.append(
-        "|------|--------|-------|-------|-------|-------|------|-------------|------------------|"
+        "|------|--------|--------|-------|-------|-------|-------|------|-------------|"
+        "------------------|"
     )
     for i, r in enumerate(results, 1):
         tl = r["trade_levels"]
         cap = " ★" if r["state_cap_applied"] else ""
         lines.append(
-            f"| {i} | {r['symbol']} | {r['grade']}{cap} | {r['composite_score']} | "
-            f"{r['metrics']['price']} | {tl['entry']} | {tl['stop']} | {tl['target_2r']} | "
+            f"| {i} | {r['symbol']} | {r.get('sector') or '—'} | {r['grade']}{cap} | "
+            f"{r['composite_score']} | {r['metrics']['price']} | {tl['entry']} | {tl['stop']} | "
+            f"{tl['target_2r']} | "
             f"{COMPONENT_LABELS.get(r['strongest_signal'], r['strongest_signal'])} |"
         )
     lines.append("")
