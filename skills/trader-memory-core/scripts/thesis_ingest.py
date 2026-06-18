@@ -342,6 +342,8 @@ def ingest_signal(record: dict, input_file: str) -> dict:
         thesis_type = "pivot_breakout"
 
     t1 = record.get("t1")
+    t2 = record.get("t2")
+    t3 = record.get("t3")
     date = record.get("date")
     cmp_word = "above" if side == "long" else "below"
     statement = (
@@ -372,6 +374,12 @@ def ingest_signal(record: dict, input_file: str) -> dict:
     }
     if t1 is not None:
         thesis_data["exit"]["take_profit"] = t1
+    # T2/T3 become first-class scale-out targets (50/25/25 at order placement);
+    # they used to live only in origin.raw_provenance.
+    if t2 is not None:
+        thesis_data["exit"]["take_profit_2"] = t2
+    if t3 is not None:
+        thesis_data["exit"]["take_profit_3"] = t3
     if isinstance(date, str) and date:
         # Stamp the thesis_id / created_at / history at the signal date.
         thesis_data["_source_date"] = date[:10]

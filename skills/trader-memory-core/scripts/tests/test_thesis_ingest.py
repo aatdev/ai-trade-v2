@@ -973,8 +973,11 @@ def test_ingest_signal_long(tmp_path: Path):
     assert th["entry"]["conditions"] == ["close above $165"]
     assert th["exit"]["stop_loss"] == 140.0
     assert th["exit"]["take_profit"] == 168.0  # T1, the first/conservative target
+    # T2/T3 are now first-class scale-out targets (used for 50/25/25 brackets).
+    assert th["exit"]["take_profit_2"] == 182.0
+    assert th["exit"]["take_profit_3"] == 200.0
     assert th["origin"]["skill"] == "ticker-analysis"
-    # T2/T3 + entry range + report preserved in raw_provenance, not lost.
+    # T2/T3 + entry range + report also preserved in raw_provenance, not lost.
     prov = th["origin"]["raw_provenance"]
     assert prov["t2"] == 182.0 and prov["t3"] == 200.0
     assert prov["report"] == "trading-data/analysis/ALB/2026-06-16/report.md"

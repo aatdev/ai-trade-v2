@@ -132,6 +132,8 @@
         "stop_loss": {"type": ["number", "null"]},
         "stop_loss_pct": {"type": ["number", "null"]},
         "take_profit": {"type": ["number", "null"]},
+        "take_profit_2": {"type": ["number", "null"], "description": "Scale-out target T2"},
+        "take_profit_3": {"type": ["number", "null"], "description": "Scale-out target T3"},
         "take_profit_rr": {"type": ["number", "null"]},
         "time_stop_days": {"type": ["integer", "null"]},
         "actual_price": {"type": ["number", "null"]},
