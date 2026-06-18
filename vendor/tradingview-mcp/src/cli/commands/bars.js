@@ -6,11 +6,17 @@ register('bars', {
   options: {
     count: { type: 'string', short: 'n', description: 'Bars per symbol (default 400, max 500)' },
     timeframe: { type: 'string', short: 't', description: 'Timeframe (default D)' },
+    extended: {
+      type: 'boolean',
+      short: 'x',
+      description: 'Include extended-hours (pre/post-market) bars — intraday TFs only',
+    },
   },
   handler: (opts, positionals) =>
     getBarsBatch({
       symbols: positionals,
       count: opts.count ? Number(opts.count) : undefined,
       timeframe: opts.timeframe || 'D',
+      extended: !!opts.extended,
     }),
 });

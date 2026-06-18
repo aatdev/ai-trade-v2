@@ -52,3 +52,40 @@ describe('parseFundamentals description field', () => {
     expect(res.data?.description).toBeNull();
   });
 });
+
+describe('parseFundamentals extended-hours quote', () => {
+  it('maps premarket fields into the premarket quote', () => {
+    const res = parseFundamentals(
+      {
+        description: 'Apple Inc.',
+        close: 295.95,
+        premarket_close: 297.47,
+        premarket_change: 0.51,
+        premarket_volume: 65409,
+      },
+      'NASDAQ:AAPL',
+      'live',
+    );
+    expect(res.ok).toBe(true);
+    expect(res.premarket).toEqual({ price: 297.47, changePct: 0.51, volume: 65409 });
+    expect(res.postmarket).toBeNull();
+  });
+
+  it('maps postmarket fields when premarket is absent', () => {
+    const res = parseFundamentals(
+      { description: 'Apple Inc.', close: 295.95, postmarket_close: 296.1, postmarket_change: 0.05 },
+      'NASDAQ:AAPL',
+      'live',
+    );
+    expect(res.ok).toBe(true);
+    expect(res.premarket).toBeNull();
+    expect(res.postmarket).toEqual({ price: 296.1, changePct: 0.05, volume: null });
+  });
+
+  it('leaves both null when no extended price is present', () => {
+    const res = parseFundamentals({ description: 'Apple Inc.', close: 295.95 }, 'NASDAQ:AAPL', 'live');
+    expect(res.ok).toBe(true);
+    expect(res.premarket).toBeNull();
+    expect(res.postmarket).toBeNull();
+  });
+});

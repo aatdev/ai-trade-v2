@@ -430,6 +430,45 @@ button.analysis-link:hover { text-decoration: underline; border-color: transpare
 .chart-legend { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
 .legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .legend-item .swatch { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+/* Pre/post-market legend chip: a dimmed bar matching the shaded candles. */
+.legend-item .swatch--ext {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--muted) 0 2px,
+    transparent 2px 4px
+  );
+  opacity: 0.7;
+}
+/* Live pre/post-market price legend chip: a dotted line matching the chart's
+   yellow extended-hours reference line. */
+.legend-item .swatch--ext-line {
+  width: 12px;
+  height: 0;
+  border-radius: 0;
+  border-top: 2px dotted var(--yellow);
+}
+/* Live extended-hours quote pill in the chart title. */
+.ext-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+}
+.ext-pill-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+.ext-pill-price { color: var(--muted); }
 .chart-analysis-link { font-size: 13px; white-space: nowrap; }
 .chart-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .candle-chart-wrap { position: relative; flex: 1; min-height: 420px; width: 100%; }
@@ -450,6 +489,7 @@ button.analysis-link:hover { text-decoration: underline; border-color: transpare
 .candle-tooltip .t-date { color: var(--muted); margin-bottom: 3px; }
 .candle-tooltip .t-row { font-variant-numeric: tabular-nums; }
 .candle-tooltip .t-row + .t-row { margin-top: 2px; }
+.candle-tooltip .t-session { color: var(--accent); font-size: 11px; }
 
 /* ---------- login ---------- */
 .login-screen {

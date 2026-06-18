@@ -388,12 +388,13 @@ export const chartUrl = (symbol: string, date: string, tf: string) =>
   `/api/ticker/${encodeURIComponent(symbol)}/${date}/chart/${tf}`;
 
 /** Live OHLCV bars from the vendored `tv` CLI (TradingView Desktop). */
-export const useOhlcv = (symbol: string, tf: string, count = 300, enabled = true) =>
+export const useOhlcv = (symbol: string, tf: string, count = 300, enabled = true, extended = false) =>
   useQuery({
-    queryKey: ['ohlcv', symbol, tf, count],
+    queryKey: ['ohlcv', symbol, tf, count, extended],
     queryFn: () =>
       getJSON<OhlcvResponse>(
-        `/api/ohlcv/${encodeURIComponent(symbol)}?tf=${encodeURIComponent(tf)}&n=${count}`,
+        `/api/ohlcv/${encodeURIComponent(symbol)}?tf=${encodeURIComponent(tf)}&n=${count}` +
+          (extended ? '&ext=1' : ''),
       ),
     enabled: enabled && !!symbol,
     staleTime: 60_000,

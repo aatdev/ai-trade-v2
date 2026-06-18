@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type { CompanyFundamentals, FundamentalsResponse } from '@shared/types';
+import type { CompanyFundamentals, ExtendedQuote, FundamentalsResponse } from '@shared/types';
 
 /**
  * Fetches company profile + key metrics for the candle-chart modal.
@@ -60,6 +60,13 @@ const FIELDS = [
   'Perf.3M',
   'Perf.YTD',
   'Perf.Y',
+  // Live extended-hours quote for the chart header pill.
+  'premarket_close',
+  'premarket_change',
+  'premarket_volume',
+  'postmarket_close',
+  'postmarket_change',
+  'postmarket_volume',
 ];
 
 export function errorFundamentals(
@@ -67,11 +74,27 @@ export function errorFundamentals(
   error: string,
   source: 'live' | 'fixture' = 'live',
 ): FundamentalsResponse {
-  return { ok: false, symbol, data: null, error, source, generated_at: new Date().toISOString() };
+  return {
+    ok: false,
+    symbol,
+    data: null,
+    premarket: null,
+    postmarket: null,
+    error,
+    source,
+    generated_at: new Date().toISOString(),
+  };
 }
 
 function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** Build an extended-hours quote, or null when no extended price is present. */
+function extQuote(close: unknown, change: unknown, volume: unknown): ExtendedQuote | null {
+  const price = num(close);
+  if (price == null) return null;
+  return { price, changePct: num(change), volume: num(volume) };
 }
 
 function str(v: unknown): string | null {
@@ -123,7 +146,18 @@ export function parseFundamentals(
   if (!Object.values(data).some((v) => v != null)) {
     return errorFundamentals(symbol, 'TradingView returned an empty fundamentals payload', source);
   }
-  return { ok: true, symbol, data, error: null, source, generated_at: new Date().toISOString() };
+  const premarket = extQuote(r.premarket_close, r.premarket_change, r.premarket_volume);
+  const postmarket = extQuote(r.postmarket_close, r.postmarket_change, r.postmarket_volume);
+  return {
+    ok: true,
+    symbol,
+    data,
+    premarket,
+    postmarket,
+    error: null,
+    source,
+    generated_at: new Date().toISOString(),
+  };
 }
 
 function readFixture(file: string, symbol: string): FundamentalsResponse {

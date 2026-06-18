@@ -3,6 +3,7 @@ import {
   CandlestickSeries,
   ColorType,
   createChart,
+  createSeriesMarkers,
   CrosshairMode,
   HistogramSeries,
   LineSeries,
@@ -11,6 +12,7 @@ import {
   type HistogramData,
   type IChartApi,
   type LineData,
+  type SeriesMarker,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import type { OhlcvBar, Side } from '@shared/types';
@@ -26,6 +28,17 @@ export interface ChartLevels {
   t3?: number | null;
 }
 
+/**
+ * Current extended-hours quote, drawn as a horizontal reference line + axis
+ * label so the live pre/post-market price is visible against the candles (on
+ * every timeframe, not just the intraday ones that carry pre/post bars).
+ */
+export interface ExtQuoteLine {
+  price: number;
+  changePct: number | null;
+  kind: 'pre' | 'post';
+}
+
 /** Moving averages drawn over the candles. Colors are theme-independent. */
 export const MA_DEFS = [
   { period: 20, color: '#f5b301', label: 'MA20' },
@@ -37,6 +50,22 @@ export const MA_DEFS = [
 export function visibleMas(barCount: number) {
   return MA_DEFS.filter((m) => barCount >= m.period);
 }
+
+/** True when the series carries any pre/post-market bars (drives the legend). */
+export function hasExtendedBars(bars: OhlcvBar[]): boolean {
+  return bars.some((b) => b.session === 'pre' || b.session === 'post');
+}
+
+/** Pre/post-market bars are dimmed; hex alpha appended to the up/down color. */
+const EXT_BODY_ALPHA = '73'; // ~45%
+const EXT_VOL_ALPHA = '33'; // ~20%
+
+/** Human-readable session label for the hover tooltip. */
+const SESSION_LABEL: Record<NonNullable<OhlcvBar['session']>, string> = {
+  pre: 'Pre-market',
+  rth: 'Regular hours',
+  post: 'After-hours',
+};
 
 /** Simple moving average of close; emitted only once `period` bars exist. */
 function sma(bars: OhlcvBar[], period: number): LineData[] {
@@ -77,7 +106,7 @@ function fmtTime(time: number, intraday: boolean): string {
   return intraday ? `${iso.slice(0, 10)} ${iso.slice(11, 16)}` : iso.slice(0, 10);
 }
 
-const INTRADAY_TFS = new Set(['5', '15', '30', '60', '120', '240']);
+export const INTRADAY_TFS = new Set(['5', '15', '30', '60', '120', '240']);
 
 /**
  * Candlestick + volume + moving-average chart for one ticker, driven by OHLCV
@@ -87,11 +116,13 @@ const INTRADAY_TFS = new Set(['5', '15', '30', '60', '120', '240']);
 export default function CandleChart({
   bars,
   levels,
+  extQuote,
   theme,
   timeframe = 'D',
 }: {
   bars: OhlcvBar[];
   levels?: ChartLevels;
+  extQuote?: ExtQuoteLine | null;
   theme: string;
   timeframe?: string;
 }) {
@@ -110,6 +141,7 @@ export default function CandleChart({
     const up = cssVar('--green', '#3fb950');
     const down = cssVar('--red', '#f0506e');
     const accent = cssVar('--accent', '#4493f8');
+    const yellow = cssVar('--yellow', '#d6a930');
 
     const chart: IChartApi = createChart(el, {
       autoSize: true,
@@ -135,15 +167,24 @@ export default function CandleChart({
       borderVisible: false,
     });
     candle.setData(
-      bars.map(
-        (b): CandlestickData => ({
+      bars.map((b): CandlestickData => {
+        const bar: CandlestickData = {
           time: b.time as UTCTimestamp,
           open: b.open,
           high: b.high,
           low: b.low,
           close: b.close,
-        }),
-      ),
+        };
+        // Dim extended-hours candles so the regular session stands out, while
+        // keeping the up/down direction readable. RTH bars use series defaults.
+        if (b.session === 'pre' || b.session === 'post') {
+          const c = b.close >= b.open ? up : down;
+          bar.color = `${c}${EXT_BODY_ALPHA}`;
+          bar.wickColor = `${c}${EXT_BODY_ALPHA}`;
+          bar.borderColor = `${c}${EXT_BODY_ALPHA}`;
+        }
+        return bar;
+      }),
     );
 
     const volume = chart.addSeries(HistogramSeries, {
@@ -152,13 +193,15 @@ export default function CandleChart({
     });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
     volume.setData(
-      bars.map(
-        (b): HistogramData => ({
+      bars.map((b): HistogramData => {
+        const ext = b.session === 'pre' || b.session === 'post';
+        const c = b.close >= b.open ? up : down;
+        return {
           time: b.time as UTCTimestamp,
           value: b.volume,
-          color: b.close >= b.open ? `${up}66` : `${down}66`,
-        }),
-      ),
+          color: `${c}${ext ? EXT_VOL_ALPHA : '66'}`,
+        };
+      }),
     );
 
     for (const ma of MA_DEFS) {
@@ -194,6 +237,39 @@ export default function CandleChart({
       priceLine(levels.t3, up, 'T3');
     }
 
+    // Live pre/post-market price as a dotted reference line (yellow, distinct
+    // from the dashed trade levels). Shown on every timeframe so the current
+    // extended-hours quote is placed against the candles, not just in the pill.
+    if (extQuote && Number.isFinite(extQuote.price)) {
+      candle.createPriceLine({
+        price: extQuote.price,
+        color: yellow,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true,
+        title: extQuote.kind === 'pre' ? 'PRE' : 'POST',
+      });
+    }
+
+    // Mark the most recent regular-session open (the first RTH bar after a
+    // pre/overnight gap) so the premarket run-up is easy to place on intraday.
+    let lastOpen: UTCTimestamp | null = null;
+    for (let i = 1; i < bars.length; i++) {
+      if (bars[i].session === 'rth' && bars[i - 1].session !== 'rth') {
+        lastOpen = bars[i].time as UTCTimestamp;
+      }
+    }
+    if (lastOpen != null) {
+      const markers: SeriesMarker<UTCTimestamp>[] = [
+        { time: lastOpen, position: 'belowBar', color: accent, shape: 'arrowUp', text: 'RTH' },
+      ];
+      createSeriesMarkers(candle, markers);
+    }
+
+    // Session by bar time, for the hover tooltip.
+    const sessionByTime = new Map<number, NonNullable<OhlcvBar['session']>>();
+    for (const b of bars) if (b.session) sessionByTime.set(b.time, b.session);
+
     chart.timeScale().fitContent();
 
     // Floating tooltip: show the hovered bar's date, OHLC and volume.
@@ -213,12 +289,16 @@ export default function CandleChart({
       }
       const isUp = c ? c.close >= c.open : true;
       const volColor = isUp ? up : down;
+      const session = sessionByTime.get(param.time as number);
       tip.innerHTML =
         `<div class="t-date">${fmtTime(param.time as number, intraday)}</div>` +
         (c
           ? `<div class="t-row">O ${fmtPrice(c.open)}  H ${fmtPrice(c.high)}  L ${fmtPrice(c.low)}  C ${fmtPrice(c.close)}</div>`
           : '') +
-        `<div class="t-row">Vol <b style="color:${volColor}">${fmtVol(v?.value)}</b></div>`;
+        `<div class="t-row">Vol <b style="color:${volColor}">${fmtVol(v?.value)}</b></div>` +
+        (session && session !== 'rth'
+          ? `<div class="t-row t-session">${SESSION_LABEL[session]}</div>`
+          : '');
       tip.style.display = 'block';
 
       // Position next to the cursor, flipping/clamping to stay inside the chart.
@@ -236,7 +316,7 @@ export default function CandleChart({
     });
 
     return () => chart.remove();
-  }, [bars, levels, theme, timeframe]);
+  }, [bars, levels, extQuote, theme, timeframe]);
 
   return (
     <div className="candle-chart-wrap">

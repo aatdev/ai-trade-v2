@@ -48,6 +48,49 @@ function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+/** Timeframes whose bars carry an intraday time-of-day (so a session applies). */
+const INTRADAY_TFS = new Set(['5', '15', '30', '60', '120', '240']);
+
+// Reused formatter — wall-clock in New York, DST-aware, 24h. Bar `time` is the
+// bar's OPEN time, so a 5m bar stamped 09:30 ET is the first regular-session bar.
+const ET_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** Minutes since New-York midnight for a Unix-seconds timestamp. */
+function etMinutes(timeSec: number): number {
+  const parts = ET_FMT.formatToParts(new Date(timeSec * 1000));
+  const h = Number(parts.find((p) => p.type === 'hour')?.value);
+  const m = Number(parts.find((p) => p.type === 'minute')?.value);
+  return h * 60 + m;
+}
+
+/**
+ * Classify a bar into the US equity session by its New-York wall-clock time:
+ * pre 04:00–09:30, regular 09:30–16:00, post 16:00–20:00. Returns null outside
+ * those windows (overnight / non-US). Exported for unit testing.
+ */
+export function classifyBarSession(timeSec: number): 'pre' | 'rth' | 'post' | null {
+  const mins = etMinutes(timeSec);
+  if (mins >= 4 * 60 && mins < 9 * 60 + 30) return 'pre';
+  if (mins >= 9 * 60 + 30 && mins < 16 * 60) return 'rth';
+  if (mins >= 16 * 60 && mins < 20 * 60) return 'post';
+  return null;
+}
+
+/** Stamp each bar with its US session, but only for intraday timeframes. */
+function tagSessions(bars: OhlcvBar[], timeframe: string): OhlcvBar[] {
+  if (!INTRADAY_TFS.has(timeframe)) return bars;
+  for (const b of bars) {
+    const s = classifyBarSession(b.time);
+    if (s) b.session = s;
+  }
+  return bars;
+}
+
 /** Coerce one raw bar; returns null if any required field is missing. */
 function normalizeBar(value: unknown): OhlcvBar | null {
   if (!value || typeof value !== 'object') return null;
@@ -108,7 +151,7 @@ export function parseTvBars(
     symbol,
     resolved: typeof first.resolved === 'string' ? first.resolved : null,
     timeframe,
-    bars,
+    bars: tagSessions(bars, timeframe),
     error: null,
     source,
     generated_at: new Date().toISOString(),
@@ -155,7 +198,7 @@ export async function fetchOhlcv(
   symbol: string,
   timeframe: string,
   count: number,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; extended?: boolean } = {},
 ): Promise<OhlcvResponse> {
   const fixture = process.env.TRADING_UI_OHLCV_FIXTURE;
   if (fixture) return readFixture(fixture, symbol, timeframe);
@@ -163,6 +206,8 @@ export async function fetchOhlcv(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const bin = tvBin();
   const args = ['bars', symbol, '-n', String(count), '-t', timeframe];
+  // Extended hours (pre/post-market bars) — only meaningful for intraday TFs.
+  if (opts.extended) args.push('-x');
 
   return new Promise<OhlcvResponse>((resolve) => {
     let out = '';

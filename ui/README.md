@@ -119,12 +119,18 @@ Live (no `?date`): `/api/ohlcv/:symbol?tf=D&n=300` — read-only OHLCV bars from
 the live TradingView data layer. The server shells out to the vendored `tv`
 CLI (`tv bars … -t <tf>`), normalizes the envelope, and degrades to
 `{ ok: false, error }` when TradingView Desktop isn't running with CDP on :9222.
-`tf` ∈ `D/W/M/240/120/60/30/15/5`; `n` is clamped to 20–500. Clicking a ticker
-in the **Watchlist** opens a candlestick + volume + MA(20/50/200) modal chart
-with the row's entry/stop/target overlaid as price lines (lightweight-charts,
-lazy-loaded). The per-row link to the saved analysis report sits next to the
-**Analyze** button. Set `TRADING_UI_OHLCV_FIXTURE` to serve recorded bars
-without a live connection.
+`tf` ∈ `D/W/M/240/120/60/30/15/5`; `n` is clamped to 20–500. `ext=1` requests
+extended hours (`tv bars … -x`): on intraday timeframes the chart modal sets
+this so pre/post-market bars are included — the server flips the shared chart's
+session to `extended` for the fetch and restores it after, then tags each
+intraday bar `session: pre|rth|post` by its New-York wall-clock. Clicking a
+ticker in the **Watchlist** opens a candlestick + volume + MA(20/50/200) modal
+chart with the row's entry/stop/target overlaid as price lines; pre/post-market
+candles are dimmed, the most recent regular-session open is marked `RTH`, and a
+live premarket/after-hours quote pill (from `/api/fundamentals`) sits in the
+header (lightweight-charts, lazy-loaded). The per-row link to the saved analysis
+report sits next to the **Analyze** button. Set `TRADING_UI_OHLCV_FIXTURE` to
+serve recorded bars without a live connection.
 
 Watchlist reconcile: `GET /api/watchlist/reconcile/:ticker` previews how the
 analysis signal would change the candidate; `POST` applies it to the watchlist

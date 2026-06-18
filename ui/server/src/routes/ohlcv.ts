@@ -30,7 +30,8 @@ export function ohlcvRouter(): Router {
     if (!TIMEFRAMES.has(tf)) return res.status(400).json({ error: 'invalid timeframe' });
 
     const count = clampCount(req.query.n);
-    const snapshot = await fetchOhlcv(symbol, tf, count);
+    const extended = req.query.ext === '1' || req.query.ext === 'true';
+    const snapshot = await fetchOhlcv(symbol, tf, count, { extended });
     return res.json(snapshot);
   });
 

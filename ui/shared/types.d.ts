@@ -927,6 +927,14 @@ export interface OhlcvBar {
   low: number;
   close: number;
   volume: number;
+  /**
+   * US trading session the bar falls in, by its New-York wall-clock time:
+   * `pre` (04:00–09:30 ET), `rth` (09:30–16:00 ET), `post` (16:00–20:00 ET).
+   * Tagged server-side only for intraday timeframes when extended hours are
+   * requested; omitted on daily/weekly/monthly bars (the chart shades pre/post
+   * candles from this). US-equity windows — meaningless for other markets.
+   */
+  session?: 'pre' | 'rth' | 'post';
 }
 
 /**
@@ -989,10 +997,28 @@ export interface CompanyFundamentals {
  * Mirrors OhlcvResponse: always 200, `ok:false` (+ human `error`) on failure so
  * the UI degrades gracefully.
  */
+/**
+ * Live extended-hours quote for the chart header pill. `changePct` is the move
+ * from the prior regular-session close to the current extended-hours price
+ * (TradingView's `premarket_change` / `postmarket_change`).
+ */
+export interface ExtendedQuote {
+  price: number; // last extended-hours price (premarket_close / postmarket_close)
+  changePct: number | null; // % vs prior regular close
+  volume: number | null; // extended-hours volume so far
+}
+
 export interface FundamentalsResponse {
   ok: boolean;
   symbol: string; // as requested (exchange-qualified)
   data: CompanyFundamentals | null;
+  /**
+   * Pre-/post-market snapshot from the same scanner call (premarket_* /
+   * postmarket_* fields). Null outside the relevant session, or when the
+   * scanner omits it. The header shows premarket when present, else postmarket.
+   */
+  premarket: ExtendedQuote | null;
+  postmarket: ExtendedQuote | null;
   error: string | null;
   source: string | null; // "live" | "fixture"
   generated_at: string | null;
