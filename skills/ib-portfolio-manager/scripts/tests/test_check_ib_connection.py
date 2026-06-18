@@ -87,6 +87,15 @@ def test_candidate_runtime_dirs_priority(monkeypatch):
     assert any(str(d).endswith("ib-gateway/.runtime") for d in dirs)
 
 
+def test_candidate_runtime_dirs_includes_vendored_mcp(monkeypatch):
+    """The bundled IB Gateway writes its session under the vendored MCP package,
+    not cwd/home — that path must be a search candidate."""
+    monkeypatch.delenv("IB_GATEWAY_RUNTIME_DIR", raising=False)
+    repo_root = Path(cic.__file__).resolve().parents[3]
+    expected = repo_root / "vendor" / "interactive-brokers-mcp" / "ib-gateway" / ".runtime"
+    assert expected in cic.candidate_runtime_dirs(None)
+
+
 def test_candidate_runtime_dirs_env_override(monkeypatch):
     monkeypatch.setenv("IB_GATEWAY_RUNTIME_DIR", "/var/ibgw")
     dirs = cic.candidate_runtime_dirs(None)

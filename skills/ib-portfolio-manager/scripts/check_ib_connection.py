@@ -87,8 +87,10 @@ def describe_mode(config: dict[str, object]) -> str:
 def candidate_runtime_dirs(explicit: str | None = None) -> list[Path]:
     """Ordered list of directories to search for the Gateway runtime files.
 
-    Priority: explicit CLI/env override, the current working directory, and the
-    user's home directory. Each is joined with ``ib-gateway/.runtime``.
+    Priority: explicit CLI/env override; the vendored MCP package (where the
+    bundled IB Gateway actually writes its session); the current working
+    directory; and the user's home directory. All but the explicit/env override
+    are joined with ``ib-gateway/.runtime``.
     """
     roots: list[Path] = []
     if explicit:
@@ -96,6 +98,14 @@ def candidate_runtime_dirs(explicit: str | None = None) -> list[Path]:
     env_dir = os.environ.get("IB_GATEWAY_RUNTIME_DIR")
     if env_dir:
         roots.append(Path(env_dir).expanduser())
+    # The bundled IB Gateway (interactive-brokers-mcp) writes its session under
+    # the vendored package root, not the repo root or cwd. Resolve it relative
+    # to this script: scripts -> ib-portfolio-manager -> skills -> repo root.
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        roots.append(repo_root / "vendor" / "interactive-brokers-mcp" / RUNTIME_SUBPATH)
+    except IndexError:
+        pass
     roots.append(Path.cwd() / RUNTIME_SUBPATH)
     roots.append(Path.home() / RUNTIME_SUBPATH)
 
