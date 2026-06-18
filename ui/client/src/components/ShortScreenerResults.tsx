@@ -87,7 +87,7 @@ function Drilldown({ c }: { c: ScreenerCandidate }) {
   const note = oversoldNote(c);
   const sNote = sectorNote(c);
   return (
-    <div style={{ padding: '4px 2px 8px' }}>
+    <div className="drilldown" style={{ padding: '4px 2px 8px' }}>
       <div
         style={{
           display: 'grid',

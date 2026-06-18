@@ -78,7 +78,7 @@ function Drilldown({ c }: { c: BottomFlowCandidate }) {
     ['Perf 6м', fmtSignedPct(c.perf_6m, 0)],
   ];
   return (
-    <div style={{ padding: '4px 2px 8px' }}>
+    <div className="drilldown" style={{ padding: '4px 2px 8px' }}>
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 8 }}>
         <span style={{ color: c.fundamental_ok ? 'var(--green)' : 'var(--muted)' }}>
           {c.fundamental_ok ? '✓' : '·'} фундамент-поток
