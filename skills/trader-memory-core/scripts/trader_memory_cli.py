@@ -111,7 +111,13 @@ def main(argv: list[str]) -> int:
     if uv is not None:
         env = os.environ.copy()
         env[RECURSION_GUARD_ENV] = "1"
-        cmd = [uv, "run", "--project", str(repo_root), "python", str(target), *rest]
+        # Keep uv's own chatter out of the target script's output: `-q` plus a
+        # forced-quiet log level so an ambient UV_LOG_LEVEL/RUST_LOG=debug (which
+        # otherwise floods e.g. the UI job log with dependency-resolution DEBUG
+        # lines) can't leak through. The target script's stdout is unaffected.
+        env["UV_LOG_LEVEL"] = "off"
+        env.pop("RUST_LOG", None)
+        cmd = [uv, "run", "-q", "--project", str(repo_root), "python", str(target), *rest]
         return subprocess.call(cmd, env=env)
 
     # No uv (or inside guarded inner run): need jsonschema in this interpreter.
