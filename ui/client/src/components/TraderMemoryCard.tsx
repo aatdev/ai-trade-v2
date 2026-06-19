@@ -500,7 +500,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
             </div>
           ) : null}
 
-          <div className="scroll-x">
+          <div className="theses-table">
             <table className="rows-clickable">
               <thead>
                 <tr>

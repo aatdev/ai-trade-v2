@@ -79,6 +79,12 @@ export function useAnalyzeRun(date: string | null): AnalyzeRun {
         esRef.current = null;
         void qc.invalidateQueries({ queryKey: ['analysisIndex'] });
         void qc.invalidateQueries({ queryKey: ['tickerDates', ticker] });
+        // The run writes the signal into signals.md (Step 5) and its post-run
+        // reconcile can rewrite the watchlist candidate — refresh both feeds so
+        // the new signal/levels show without a manual reload. Without this the
+        // Signals Feed keeps a stale cache (refetchOnWindowFocus is off).
+        void qc.invalidateQueries({ queryKey: ['signals'] });
+        void qc.invalidateQueries({ queryKey: ['watchlist'] });
         // Attempt reconcile on any terminal status — claude can write signals.md
         // even when it exits non-zero, so don't gate on 'done' only.
         if (d.status !== 'busy') loadReconcile(ticker);

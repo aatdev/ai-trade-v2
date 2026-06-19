@@ -149,7 +149,7 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
       ) : null}
       {toThesis.error ? <div className="err" style={{ marginBottom: 8 }}>{toThesis.error}</div> : null}
 
-      <div className="scroll-x feed">
+      <div>
         <table className="rows-clickable">
           <thead>
             <tr>

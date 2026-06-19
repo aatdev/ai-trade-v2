@@ -355,6 +355,9 @@ tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3.5%, tran
 tbody tr:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 td.sym { font-weight: 600; }
 .scroll-x { overflow-x: auto; }
+/* Theses table opts out of the horizontal scroll on purpose — it expands to
+   whatever width its columns need instead of scrolling inside the card. */
+.theses-table { overflow-x: visible; }
 
 /* native IB bracket: one summary row, expandable to its legs */
 .bracket-row { cursor: pointer; }
