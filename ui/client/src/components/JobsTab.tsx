@@ -6,6 +6,13 @@ import { useJobLog } from '../lib/useJobLog';
 import { fmtClock, LANE_LABEL_RU } from '../lib/format';
 import AnalysisModal from './AnalysisModal';
 
+/** Job kinds hidden from the Задания tab (and its running-count badge). */
+const HIDDEN_JOB_KINDS = new Set(['bottom-flow-screener-run']);
+
+/** Whether a job should appear in the Задания tab. */
+export const isVisibleJob = (job: JobSummary): boolean =>
+  !HIDDEN_JOB_KINDS.has(String(job.meta?.kind));
+
 const STATUS: Record<JobStatus, { label: string; color: string }> = {
   running: { label: 'выполняется', color: 'var(--accent)' },
   done: { label: 'готово', color: 'var(--green)' },
@@ -47,7 +54,7 @@ export default function JobsTab({ onNavigateTab }: { onNavigateTab: (tab: string
   const [analysisTicker, setAnalysisTicker] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  const jobs = data?.jobs ?? [];
+  const jobs = (data?.jobs ?? []).filter(isVisibleJob);
   const running = jobs.filter((j) => j.status === 'running');
 
   // Tick the running-duration display once a second while anything is running.

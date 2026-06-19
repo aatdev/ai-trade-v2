@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { logout, useAuthStatus, useDates, useIbHealth, useJobs } from '../api';
 import ActionsPanel from '../components/ActionsPanel';
 import AnalysesTab from '../components/AnalysesTab';
-import JobsTab from '../components/JobsTab';
+import JobsTab, { isVisibleJob } from '../components/JobsTab';
 import AnalyzeDialog from '../components/AnalyzeDialog';
 import AutopilotCard from '../components/AutopilotCard';
 import ExposureBanner from '../components/ExposureBanner';
@@ -58,7 +58,8 @@ export default function Dashboard() {
   // Live count of running jobs for the "Задания" tab badge (polled app-wide so
   // it ticks even while another tab is open).
   const { data: jobsData } = useJobs(autoRefresh ? 5_000 : false);
-  const runningJobs = jobsData?.jobs.filter((j) => j.status === 'running').length ?? 0;
+  const runningJobs =
+    jobsData?.jobs.filter((j) => j.status === 'running' && isVisibleJob(j)).length ?? 0;
 
   return (
     <div className="app">
