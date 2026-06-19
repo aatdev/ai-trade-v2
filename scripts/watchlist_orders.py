@@ -566,10 +566,14 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
         return
 
     try:
-        # Idempotency: a live order already carrying this cOID (or any of its
-        # per-tranche sub-cOIDs `{coid}-t{i}`) means we placed it before
-        # (crash/restart) — don't double-place. Match the base coid as a PREFIX.
-        if any(ref.startswith(entry["coid"]) for ref in pib.live_order_refs(port)):
+        # Idempotency (date-agnostic): a live order carrying this thesis's
+        # `wl-<id>-` prefix — placed THIS run or an earlier session — means a
+        # bracket is already working, so don't double-place. GTC entries (the
+        # default) rest across days under `wl-<id>-<earlier-date>-…`, so match the
+        # thesis prefix, NOT the dated base coid (which would miss them and stack a
+        # duplicate). Also covers per-attempt nonce + per-tranche `…-t{i}` suffixes.
+        prefix = pib.coid_prefix(entry["thesis_id"])
+        if any(ref.startswith(prefix) for ref in pib.live_order_refs(port)):
             entry["status"] = "placed"
             _edit(
                 entry,
@@ -1150,9 +1154,12 @@ def _bracket_still_live(entry: dict, args) -> bool:
     A ledger entry can be left at "placed" while the bracket is actually gone at
     the broker — cancelled/cleared manually, or it never transmitted. Before
     treating "placed" as a no-op, re-validate read-only against IB: match the base
-    cOID as a PREFIX (sub-brackets are ``{coid}-t{i}``). On any gateway failure —
-    or a missing cOID — assume it IS still live: the conservative default never
-    silently re-places when we cannot confirm the broker is empty.
+    cOID as a PREFIX (sub-brackets are ``{coid}-t{i}``). This is a SAME-DAY check —
+    the ledger entry and its bracket carry the same dated coid — so the dated coid
+    is the right key here; cross-session dedup lives in ``handle_open`` (which
+    matches the date-agnostic ``coid_prefix``). On any gateway failure — or a
+    missing cOID — assume it IS still live: the conservative default never silently
+    re-places when we cannot confirm the broker is empty.
     """
     coid = entry.get("coid")
     if not coid:
@@ -1345,7 +1352,9 @@ def cmd_cancel(args) -> int:
     entry["status"] = "cancelled"
     entry["error"] = None if not errors else f"legs not cancelled: {','.join(errors)}"
     save_ledger(date_str, ledger)
-    _emit({"ok": not errors, "thesis_id": tid, "cancelled": cancelled, "gone": gone, "errors": errors})
+    _emit(
+        {"ok": not errors, "thesis_id": tid, "cancelled": cancelled, "gone": gone, "errors": errors}
+    )
     return 0
 
 

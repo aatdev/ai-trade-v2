@@ -479,6 +479,25 @@ def test_handle_open_idempotent_existing_coid(monkeypatch):
     assert entry["status"] == "placed"
 
 
+def test_handle_open_idempotent_across_sessions_gtc(monkeypatch):
+    # A GTC entry placed on an EARLIER day still rests at the broker under that
+    # day's coid (`wl-<id>-<older-date>-…`). Today's run builds a coid with today's
+    # date — date-agnostic prefix matching must still recognize the resting entry
+    # and refuse to stack a duplicate.
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
+    entry = _entry(coid="wl-th_nvda_pvt_20260612_aaaa-2026-06-19")  # today's anchor
+    prior_day_ref = "wl-th_nvda_pvt_20260612_aaaa-2026-06-12-ee0201860-t1"  # rests from 06-12
+    monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: {prior_day_ref})
+    monkeypatch.setattr(
+        wo.pib,
+        "submit_brackets",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no cross-day double place")),
+    )
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "placed"
+
+
 def test_handle_open_already_placed_noop(monkeypatch):
     monkeypatch.setattr(
         wo, "heat_ok_for", lambda e: (_ for _ in ()).throw(AssertionError("should not check"))
@@ -1389,7 +1408,9 @@ def test_open_now_noop_when_bracket_still_live(monkeypatch, patched):
     monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
     monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: {coid + "-t1"})
     monkeypatch.setattr(
-        wo, "handle_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-place"))
+        wo,
+        "handle_open",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-place")),
     )
     assert wo.cmd_open_now(_OpenArgs(live=True)) == 0
     assert wo.load_ledger("2026-06-15")["orders"][_TID]["status"] == "placed"

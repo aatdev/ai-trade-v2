@@ -16,11 +16,11 @@ def test_long_bracket_shape_and_wiring():
     assert len(orders) == 3
     parent, stop_leg, target_leg = orders
 
-    # Parent = BUY STP @ pivot, DAY, carries the cOID and no parentId.
+    # Parent = BUY STP @ pivot, GTC by default, carries the cOID and no parentId.
     assert parent["side"] == "BUY"
     assert parent["orderType"] == "STP"
     assert parent["price"] == 155.23  # CP carries the STP trigger in `price`
-    assert parent["tif"] == "DAY"
+    assert parent["tif"] == "GTC"
     assert parent["cOID"] == "wl-x-d"
     assert "parentId" not in parent
 
@@ -43,6 +43,23 @@ def test_short_bracket_is_mirrored():
     assert parent["side"] == "SELL" and parent["orderType"] == "STP"
     assert stop_leg["side"] == "BUY" and stop_leg["price"] == 53.0
     assert target_leg["side"] == "BUY" and target_leg["price"] == 44.0
+
+
+def test_entry_tif_defaults_gtc_and_day_is_honored():
+    """Entry rests GTC by default (survives the close); DAY still selectable."""
+    args = dict(side="long", conid=1, shares=10, pivot=100.0, stop=95.0, target=110.0)
+
+    parent_default = pib.build_bracket_orders(coid="c", **args)[0]
+    assert parent_default["tif"] == "GTC"
+
+    parent_day = pib.build_bracket_orders(coid="c", entry_tif="DAY", **args)[0]
+    assert parent_day["tif"] == "DAY"
+
+    # build_sub_brackets forwards the same default down to every tranche's entry.
+    sub_default = pib.build_sub_brackets(coid="c", **args)
+    assert sub_default[0][0]["tif"] == "GTC"
+    sub_day = pib.build_sub_brackets(coid="c", entry_tif="DAY", **args)
+    assert sub_day[0][0]["tif"] == "DAY"
 
 
 @pytest.mark.parametrize(
@@ -74,6 +91,18 @@ def test_coid_for_is_deterministic():
         pib.coid_for("th_nvda_pvt_20260612_abc1", "2026-06-15")
         == "wl-th_nvda_pvt_20260612_abc1-2026-06-15"
     )
+
+
+def test_coid_prefix_is_date_agnostic_and_anchors_coid_for():
+    tid = "th_nvda_pvt_20260612_abc1"
+    prefix = pib.coid_prefix(tid)
+    assert prefix == "wl-th_nvda_pvt_20260612_abc1-"
+    # coid_for for ANY date starts with the same prefix (so a GTC entry resting
+    # from an earlier session is still matched by prefix detection).
+    assert pib.coid_for(tid, "2026-06-12").startswith(prefix)
+    assert pib.coid_for(tid, "2026-06-19").startswith(prefix)
+    # The trailing "-" stops a shorter id from matching a longer sibling.
+    assert not pib.coid_for("th_nvda_pvt_20260612_abc12", "2026-06-19").startswith(prefix)
 
 
 # --------------------------------------------------------------------------- #
@@ -474,7 +503,9 @@ def test_build_sub_brackets_short_multi_target_mirrors():
     )
     assert len(brackets) == 3
     takes = [b[2] for b in brackets]
-    assert all(b[1]["side"] == "BUY" and b[2]["side"] == "BUY" for b in brackets)  # short exits = BUY
+    assert all(
+        b[1]["side"] == "BUY" and b[2]["side"] == "BUY" for b in brackets
+    )  # short exits = BUY
     assert [t["price"] for t in takes] == [90, 85, 80]  # T1>T2>T3 for a short
 
 

@@ -234,7 +234,7 @@ def build_bracket_orders(
     target: float,
     coid: str,
     *,
-    entry_tif: str = "DAY",
+    entry_tif: str = "GTC",
 ) -> list[dict]:
     """Build ONE native 3-leg bracket ``orders`` array (parent + stop + take).
 
@@ -246,7 +246,9 @@ def build_bracket_orders(
     explicit ``ocaGroup`` — that is what collapsed a multi-tranche scale-out into a
     single group and left it stuck "Pending Submit". A scale-out is instead built
     as several of these standalone brackets by ``build_sub_brackets``. Entry is a
-    plain STP (DAY) — a gap can fill past any chase band.
+    plain STP, GTC by default (rests across sessions until the breakdown/breakout
+    trigger fires — pass ``entry_tif="DAY"`` to expire it at the close instead) —
+    a gap can fill past any chase band.
     """
     _validate_geometry(side, shares, pivot, stop, target)
     side = side.lower()
@@ -312,7 +314,7 @@ def build_sub_brackets(
     *,
     target2: float | None = None,
     target3: float | None = None,
-    entry_tif: str = "DAY",
+    entry_tif: str = "GTC",
 ) -> list[list[dict]]:
     """Build N INDEPENDENT native brackets — one POST each — for a candidate.
 
@@ -389,16 +391,31 @@ def _validate_scale_targets(side: str, pivot: float, t1: float, t2: float, t3: f
             )
 
 
+def coid_prefix(thesis_id: str) -> str:
+    """Date-agnostic cOID prefix for a thesis — ``wl-<thesis_id>-``.
+
+    Live-order idempotency must span sessions. With GTC entries (the default) an
+    unfilled bracket placed on an earlier day keeps resting under
+    ``wl-<id>-<earlier-date>-…``; a same-day anchor (what ``coid_for`` builds)
+    would not match it and the next run would place a DUPLICATE. Detecting on this
+    date-stripped prefix catches the thesis's bracket regardless of which day it
+    was submitted. The trailing ``-`` stops one thesis id from matching a longer
+    sibling that shares its leading characters.
+    """
+    return f"wl-{thesis_id}-"
+
+
 def coid_for(thesis_id: str, date_str: str) -> str:
     """Deterministic client order id base — the idempotency anchor per (thesis, day).
 
-    This stays the stable PREFIX used to detect / dedupe a thesis's bracket
-    (``startswith`` in ``live_order_refs`` matching, ``includes(thesis.id)`` in the
-    UI). The actual cOIDs submitted to IB append a per-attempt nonce + tranche
-    suffix (see ``attempt_nonce`` / ``sub_coid``) so a re-place never reuses a
-    cancelled order's Local order ID.
+    Built as ``coid_prefix(thesis_id) + date_str``. The actual cOIDs submitted to
+    IB append a per-attempt nonce + tranche suffix (see ``attempt_nonce`` /
+    ``sub_coid``) so a re-place never reuses a cancelled order's Local order ID.
+    Detection / dedupe matches the date-agnostic ``coid_prefix`` (so a GTC entry
+    resting from an earlier session is still recognized); ``includes(thesis.id)``
+    is used in the UI.
     """
-    return f"wl-{thesis_id}-{date_str}"
+    return f"{coid_prefix(thesis_id)}{date_str}"
 
 
 def attempt_nonce() -> str:
