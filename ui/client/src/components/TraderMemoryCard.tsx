@@ -1,10 +1,11 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AnalysisIndexEntry, IbOrder, MemoryThesis } from '@shared/types';
+import type { AnalysisIndexEntry, IbOrder, MemoryThesis, TradingProfile } from '@shared/types';
 import {
   useAnalysisIndex,
   useIbSnapshot,
   useMemory,
+  useProfile,
   deleteTheses,
   syncThesisAlerts,
   type Refetch,
@@ -52,6 +53,35 @@ function levelsFromThesis(t: MemoryThesis): ChartLevels {
     t2: num(prov.t2),
     t3: num(prov.t3),
   };
+}
+
+/** Position notional ($) for a thesis: the attached `position_value` once a
+ *  position exists, else the *planned* size computed exactly like
+ *  position_sizer.py — risk $ (account_size × risk_pct) ÷ stop distance, capped
+ *  by max_position_pct — for theses still being opened. `planned: true` marks
+ *  the figure as a pre-entry estimate rather than a real open position. */
+function positionNotional(
+  t: MemoryThesis,
+  profile: TradingProfile | null | undefined,
+): { value: number | null; planned: boolean } {
+  const pos = rec(t.raw.position);
+  const actual = num(pos.position_value);
+  if (actual != null) return { value: actual, planned: false };
+  if (!profile) return { value: null, planned: false };
+  if (!['IDEA', 'ENTRY_READY', 'ACTIVE', 'PARTIALLY_CLOSED'].includes(t.status))
+    return { value: null, planned: false };
+  const entryRec = rec(t.entry);
+  const exitRec = rec(t.exit);
+  const entry = num(entryRec.actual_price) ?? num(entryRec.target_price);
+  const stop = num(exitRec.stop_loss);
+  if (entry == null || stop == null || entry <= 0) return { value: null, planned: false };
+  const distance = Math.abs(entry - stop);
+  if (distance <= 0) return { value: null, planned: false };
+  const riskShares = Math.floor((profile.account_size * profile.risk_pct) / 100 / distance);
+  const capShares = Math.floor((profile.account_size * profile.max_position_pct) / 100 / entry);
+  const shares = Math.min(riskShares, capShares);
+  if (shares <= 0) return { value: null, planned: false };
+  return { value: shares * entry, planned: true };
 }
 
 /** IB order status for a thesis, derived from the live snapshot: a working
@@ -301,6 +331,7 @@ function ThesisDetailModal({ t, onClose }: { t: MemoryThesis; onClose: () => voi
 
 export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useMemory(refetch);
+  const { data: profile } = useProfile();
   const { data: analysisIndex } = useAnalysisIndex(refetch);
   const index: Index = analysisIndex?.tickers ?? {};
   // Live IB order status per thesis (shared React Query key with the IB tab).
@@ -529,6 +560,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                   <th>Вход</th>
                   <th>Стоп</th>
                   <th>Тейк</th>
+                  <th>Объём</th>
                   <th>P&L</th>
                   <th>Ревью</th>
                 </tr>
@@ -539,6 +571,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                   const exit = rec(t.exit);
                   const out = rec(t.outcome);
                   const pnl = num(out.pnl_dollars);
+                  const vol = positionNotional(t, profile);
                   return (
                     <tr key={t.id} onClick={() => setSel(t)}>
                       <td onClick={(e) => e.stopPropagation()} style={{ textAlign: 'center' }}>
@@ -588,6 +621,23 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
                       <td>{fmtNum(num(entry.actual_price) ?? num(entry.target_price))}</td>
                       <td>{fmtNum(num(exit.stop_loss))}</td>
                       <td>{fmtNum(num(exit.take_profit))}</td>
+                      <td
+                        title={
+                          vol.value == null
+                            ? undefined
+                            : vol.planned
+                              ? 'Расчётный объём открываемой позиции (риск ÷ стоп, потолок max_position_pct — из профиля)'
+                              : 'Объём открытой позиции'
+                        }
+                      >
+                        {vol.value == null ? (
+                          '—'
+                        ) : vol.planned ? (
+                          <span className="muted">~{fmtMoney(vol.value)}</span>
+                        ) : (
+                          fmtMoney(vol.value)
+                        )}
+                      </td>
                       <td style={{ color: pnl == null ? undefined : pnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
                         {pnl == null ? '—' : fmtSignedPct(num(out.pnl_pct))}
                       </td>
