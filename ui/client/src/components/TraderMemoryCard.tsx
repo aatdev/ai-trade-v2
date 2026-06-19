@@ -661,6 +661,7 @@ export default function TraderMemoryCard({ refetch }: { refetch: Refetch }) {
             ticker={chartFor.ticker.toUpperCase()}
             levels={levelsFromThesis(chartFor)}
             hasAnalysis={!!index[chartFor.ticker.toUpperCase()]}
+            thesisId={chartFor.id}
             onClose={() => setChartFor(null)}
             onOpenAnalysis={() => {
               const t = chartFor.ticker.toUpperCase();

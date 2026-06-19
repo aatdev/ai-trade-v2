@@ -712,6 +712,9 @@ a.analysis-link { color: var(--accent); }
   color: var(--muted);
 }
 .ext-pill-price { color: var(--muted); }
+/* Live IB order pill in the chart title — same chrome as .ext-pill, but allows
+   its status/side/price segments to wrap instead of widening the title row. */
+.order-pill { flex-wrap: wrap; max-width: 100%; }
 .chart-analysis-link { font-size: 13px; white-space: nowrap; }
 .chart-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .candle-chart-wrap { position: relative; flex: 1; min-height: 420px; width: 100%; }

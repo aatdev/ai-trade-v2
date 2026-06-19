@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { FundamentalsResponse } from '@shared/types';
-import { useFundamentals, useOhlcv } from '../api';
+import type { FundamentalsResponse, IbSnapshot } from '@shared/types';
+import { useFundamentals, useIbSnapshot, useOhlcv } from '../api';
+import { isDeadOrder, isLimit, isStop, rowsForThesis } from '../lib/ibBrackets';
 import { fmtNum, fmtSignedPct } from '../lib/format';
 import CandleChart, {
   type ChartLevels,
@@ -66,6 +67,98 @@ function ExtHoursPill({ quote }: { quote: ExtQuoteLine | null }) {
   );
 }
 
+/** Live IB order summary for a thesis, surfaced as a pill next to the price. */
+interface OrderSummary {
+  label: string; // Выставлен / Исполнен
+  color: string;
+  side: string | null; // BUY / SELL
+  qty: number | null;
+  entryPrice: number | null; // parent pivot (limit/stop) while working
+  stopPrice: number | null; // protective stop leg
+  targetPrice: number | null; // take-profit leg
+  filledPrice: number | null; // avg entry from the matching position once filled
+}
+
+/**
+ * Resolve the live IB bracket/order for a thesis into a flat summary. Mirrors the
+ * Память table's order status (a working, unfilled leg → "Выставлен"; only filled
+ * legs → "Исполнен"). The fill price comes from the matching position's avg_cost —
+ * IbOrder carries no average fill price of its own. Returns null when there is no
+ * live order for the thesis (or IB is unavailable).
+ */
+function orderSummaryFor(
+  ib: IbSnapshot | undefined,
+  thesisId: string | undefined,
+  ticker: string,
+): OrderSummary | null {
+  if (!thesisId || !ib?.orders?.length) return null;
+  const rows = rowsForThesis(ib.orders, thesisId);
+  if (!rows.length) return null;
+  const row = rows[0];
+  const legs = row.kind === 'bracket' ? row.legs : [row.order];
+  const working = legs.some(
+    (l) => !isDeadOrder(l.status) && !(l.status ?? '').toLowerCase().includes('fill'),
+  );
+
+  let side: string | null;
+  let qty: number | null;
+  let entryPrice: number | null;
+  let stopPrice: number | null;
+  let targetPrice: number | null;
+  if (row.kind === 'bracket') {
+    side = row.side;
+    qty = row.quantity;
+    entryPrice = row.entryPrice;
+    stopPrice = row.stop?.stop_price ?? null;
+    targetPrice = row.target?.limit_price ?? null;
+  } else {
+    const o = row.order;
+    side = o.side;
+    qty = o.total_quantity;
+    entryPrice = isStop(o) ? o.stop_price : o.limit_price;
+    stopPrice = isStop(o) ? o.stop_price : null;
+    targetPrice = isLimit(o) && !isStop(o) ? o.limit_price : null;
+  }
+
+  // Once the entry has filled, the open position's average cost is the realized
+  // entry price (the parent leg drops off the order snapshot at that point).
+  const filledPrice = working
+    ? null
+    : (ib.positions?.find((p) => p.symbol?.toUpperCase() === ticker.toUpperCase())?.avg_cost ??
+      null);
+
+  return {
+    label: working ? 'Выставлен' : 'Исполнен',
+    color: working ? 'var(--accent)' : 'var(--green)',
+    side,
+    qty,
+    entryPrice,
+    stopPrice,
+    targetPrice,
+    filledPrice,
+  };
+}
+
+/** Live IB order rendered as a pill in the chart title, beside the price. */
+function OrderPill({ s }: { s: OrderSummary }) {
+  const sideQty = [s.side?.toUpperCase(), s.qty != null ? `${fmtNum(s.qty, 0)} шт` : null]
+    .filter(Boolean)
+    .join(' ');
+  return (
+    <span className="ext-pill order-pill" title="Живой ордер IB по тезису">
+      <span className="ext-pill-tag" style={{ color: s.color }}>
+        ОРДЕР
+      </span>
+      <span style={{ color: s.color, fontWeight: 600 }}>{s.label}</span>
+      {sideQty ? <span>{sideQty}</span> : null}
+      {s.filledPrice != null ? <span className="ext-pill-price">@ {fmtNum(s.filledPrice)}</span> : null}
+      {s.entryPrice != null ? <span className="ext-pill-price">вход {fmtNum(s.entryPrice)}</span> : null}
+      {s.stopPrice != null ? <span className="ext-pill-price">стоп {fmtNum(s.stopPrice)}</span> : null}
+      {s.targetPrice != null ? <span className="ext-pill-price">тейк {fmtNum(s.targetPrice)}</span> : null}
+    </span>
+  );
+}
+
 /**
  * Modal candlestick chart for a ticker: live candles + volume + MAs from the
  * TradingView data layer, with the caller's entry/stop/target overlaid. Driven
@@ -76,12 +169,16 @@ export default function TickerChartModal({
   ticker: tickerProp,
   levels,
   hasAnalysis,
+  thesisId,
   onClose,
   onOpenAnalysis,
 }: {
   ticker: string;
   levels: ChartLevels;
   hasAnalysis: boolean;
+  /** When set (opened from a thesis), surface that thesis's live IB order as a
+   *  pill next to the price. Omitted for screener/watchlist callers. */
+  thesisId?: string;
   onClose: () => void;
   /** When set, the "Open analysis" control opens the analysis modal in place
    *  instead of navigating to the standalone ticker page. */
@@ -106,6 +203,12 @@ export default function TickerChartModal({
   // keeps the chart effect from rebuilding on unrelated re-renders.
   const extQuote = useMemo(() => pickExtQuote(funda), [funda]);
 
+  // Live IB order for this thesis (shared ['ib'] query key with the IB tab /
+  // Память card — no extra fetch when those are mounted). Only when opened from
+  // a thesis; screener/watchlist callers pass no thesisId.
+  const { data: ib } = useIbSnapshot();
+  const orderSummary = useMemo(() => orderSummaryFor(ib, thesisId, ticker), [ib, thesisId, ticker]);
+
   const title = (
     <span className="chart-title">
       {ticker} <SideBadge side={levels.side} />
@@ -116,6 +219,7 @@ export default function TickerChartModal({
       ) : null}
       {bars.length ? <ChangePill bars={bars} /> : null}
       <ExtHoursPill quote={extQuote} />
+      {orderSummary ? <OrderPill s={orderSummary} /> : null}
     </span>
   );
 
