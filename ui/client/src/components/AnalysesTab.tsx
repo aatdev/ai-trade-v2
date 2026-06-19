@@ -1,13 +1,17 @@
-import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useAnalysisIndex, type Refetch } from '../api';
 import AnalysisModal from './AnalysisModal';
 import { Card, Empty, ErrorNote, Loading } from './ui';
 
+// Code-split the charting library (lightweight-charts) — only loaded once a
+// ticker is clicked, keeping the analyses tab's initial bundle lean.
+const TickerChartModal = lazy(() => import('./TickerChartModal'));
+
 export default function AnalysesTab({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useAnalysisIndex(refetch);
   const [filter, setFilter] = useState('');
-  const [sel, setSel] = useState<{ symbol: string; date: string } | null>(null);
+  const [sel, setSel] = useState<{ symbol: string; date?: string } | null>(null);
+  const [chartFor, setChartFor] = useState<string | null>(null);
 
   const entries = useMemo(() => {
     const all = Object.entries(data?.tickers ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -55,7 +59,14 @@ export default function AnalysesTab({ refetch }: { refetch: Refetch }) {
             {entries.map(([sym, e]) => (
               <div className="analysis-row" key={sym}>
                 <div className="analysis-sym">
-                  <Link to={`/ticker/${sym}`}>{sym}</Link>
+                  <button
+                    type="button"
+                    className="ticker-btn"
+                    title={`Открыть график ${sym}`}
+                    onClick={() => setChartFor(sym)}
+                  >
+                    {sym}
+                  </button>
                   <span className="muted"> · {e.count}</span>
                 </div>
                 <div className="analysis-dates">
@@ -77,9 +88,25 @@ export default function AnalysesTab({ refetch }: { refetch: Refetch }) {
         </>
       )}
 
+      {chartFor ? (
+        <Suspense fallback={null}>
+          <TickerChartModal
+            ticker={chartFor}
+            levels={{}}
+            hasAnalysis
+            onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor;
+              setChartFor(null);
+              setSel({ symbol: t });
+            }}
+          />
+        </Suspense>
+      ) : null}
+
       {sel ? (
         <AnalysisModal
-          key={`${sel.symbol}/${sel.date}`}
+          key={`${sel.symbol}/${sel.date ?? 'latest'}`}
           symbol={sel.symbol}
           date={sel.date}
           onClose={() => setSel(null)}

@@ -1,12 +1,17 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router-dom';
-import type { SignalBlock } from '@shared/types';
-import { deleteSignal, useSignals, type Refetch } from '../api';
+import type { Side, SignalBlock } from '@shared/types';
+import { deleteSignal, useAnalysisIndex, useSignals, type Refetch } from '../api';
 import { useMemoryOp } from '../lib/useMemoryOp';
+import AnalysisModal from './AnalysisModal';
 import { Card, Empty, ErrorNote, Loading, Modal } from './ui';
+
+// Code-split the charting library (lightweight-charts) — only loaded once a
+// ticker is clicked, keeping the signals feed's initial bundle lean.
+const TickerChartModal = lazy(() => import('./TickerChartModal'));
 
 const REPORT_LINK_RE = /\.?\/?([A-Za-z0-9.\-]+)\/(\d{4}-\d{2}-\d{2})\//;
 
@@ -34,11 +39,25 @@ function signalColor(status: string | null): string {
   return 'var(--muted)';
 }
 
+/** Derive the chart's side badge from the signal status (no parsed levels on a
+ * SignalBlock — only status + raw markdown), so the chart at least labels the
+ * intended direction. */
+function sideFromStatus(status: string | null): Side | undefined {
+  const s = (status || '').toUpperCase();
+  if (/\b(SHORT|SELL)\b/.test(s) || /🔴/.test(status || '')) return 'short';
+  if (/\b(BUY|LONG)\b/.test(s) || /🟢/.test(status || '')) return 'long';
+  return undefined;
+}
+
 export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
   const { data, isLoading, error } = useSignals(refetch);
+  const { data: analysisIndex } = useAnalysisIndex(refetch);
+  const index = analysisIndex?.tickers ?? {};
   const qc = useQueryClient();
   const [filter, setFilter] = useState<string>('');
   const [active, setActive] = useState<SignalBlock | null>(null);
+  const [chartFor, setChartFor] = useState<SignalBlock | null>(null);
+  const [analysisFor, setAnalysisFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [delError, setDelError] = useState<string | null>(null);
   const toThesis = useMemoryOp();
@@ -145,9 +164,14 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
               <tr key={s.id} onClick={() => setActive(s)}>
                 <td className="muted">{s.date}</td>
                 <td className="sym">
-                  <Link to={`/ticker/${s.ticker}`} onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    className="ticker-btn"
+                    title={`Открыть график ${s.ticker}`}
+                    onClick={(e) => (e.stopPropagation(), setChartFor(s))}
+                  >
                     {s.ticker}
-                  </Link>
+                  </button>
                 </td>
                 <td style={{ textAlign: 'left', color: signalColor(s.status) }} title={s.status ?? ''}>
                   <span className="signal-status">{s.status ?? s.heading}</span>
@@ -156,6 +180,15 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
                   <button className="link-btn" onClick={(e) => (e.stopPropagation(), setActive(s))}>
                     view
                   </button>
+                  {index[s.ticker.toUpperCase()] ? (
+                    <button
+                      className="link-btn"
+                      title={`Открыть результаты анализа ${s.ticker}`}
+                      onClick={(e) => (e.stopPropagation(), setAnalysisFor(s.ticker.toUpperCase()))}
+                    >
+                      📄 анализ
+                    </button>
+                  ) : null}
                   {isActionable(s.status) ? (
                     <button
                       className="link-btn"
@@ -208,6 +241,26 @@ export default function SignalsFeed({ refetch }: { refetch: Refetch }) {
             </Markdown>
           </div>
         </Modal>
+      ) : null}
+
+      {chartFor ? (
+        <Suspense fallback={null}>
+          <TickerChartModal
+            ticker={chartFor.ticker.toUpperCase()}
+            levels={{ side: sideFromStatus(chartFor.status) }}
+            hasAnalysis={!!index[chartFor.ticker.toUpperCase()]}
+            onClose={() => setChartFor(null)}
+            onOpenAnalysis={() => {
+              const t = chartFor.ticker.toUpperCase();
+              setChartFor(null);
+              setAnalysisFor(t);
+            }}
+          />
+        </Suspense>
+      ) : null}
+
+      {analysisFor ? (
+        <AnalysisModal symbol={analysisFor} onClose={() => setAnalysisFor(null)} />
       ) : null}
     </Card>
   );
