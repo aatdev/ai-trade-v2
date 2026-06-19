@@ -746,6 +746,18 @@ def transition(
 
     now = _now_iso()
     history_at = _coerce_dt(event_date) or now
+    # A bare --event-date is widened to midnight UTC (see _coerce_dt). If the
+    # thesis was registered later the same day (status_history[0].at is a real
+    # "now" timestamp), that midnight precedes it and would trip the monotonic
+    # status_history invariant on save. Clamp forward to the last entry so a
+    # same-day promote records at/after creation — the date intent of a bare
+    # event_date is preserved, only its midnight time-of-day is nudged. A
+    # genuine forward backdate (event_date after the prior entry) is untouched.
+    prior = thesis["status_history"]
+    if prior:
+        prev_at = prior[-1].get("at")
+        if prev_at and _parse_dt(history_at) < _parse_dt(prev_at):
+            history_at = prev_at
     thesis["status"] = new_status
     thesis["status_history"].append({"status": new_status, "at": history_at, "reason": reason})
     thesis["updated_at"] = now

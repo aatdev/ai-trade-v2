@@ -143,6 +143,39 @@ def test_transition_forward_path(tmp_path: Path):
     assert thesis["status_history"][2]["status"] == "ACTIVE"
 
 
+def test_transition_same_day_bare_event_date_clamps_forward(tmp_path: Path):
+    """A bare --event-date of *today* widens to midnight UTC, which precedes a
+    thesis registered later the same day. The transition must still succeed
+    (clamped forward to the prior entry) instead of tripping the monotonic
+    status_history check on save."""
+    from datetime import datetime, timezone
+
+    tid, before = _register_and_get(tmp_path)  # status_history[0].at == now
+    created_at = before["status_history"][0]["at"]
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "ok", event_date=today)
+
+    thesis = thesis_store.get(tmp_path, tid)
+    assert thesis["status"] == "ENTRY_READY"
+    entry = thesis["status_history"][1]
+    assert entry["status"] == "ENTRY_READY"
+    # Clamped to creation, not the bare midnight that would sort "before" it.
+    assert thesis_store._parse_dt(entry["at"]) >= thesis_store._parse_dt(created_at)
+
+
+def test_transition_forward_backdate_preserved(tmp_path: Path):
+    """A genuine forward backdate (event_date after a backdated register) is
+    left intact — the clamp only kicks in when it would go backward."""
+    data = _make_thesis_data(_source_date="2026-02-10")  # IDEA backdated
+    tid = thesis_store.register(tmp_path, data)
+
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "ok", event_date="2026-02-12")
+
+    thesis = thesis_store.get(tmp_path, tid)
+    assert thesis["status_history"][1]["at"].startswith("2026-02-12")
+
+
 def test_transition_backward_raises(tmp_path: Path):
     """ACTIVE → IDEA should raise ValueError."""
     tid, _ = _register_and_get(tmp_path)
