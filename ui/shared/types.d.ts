@@ -1029,6 +1029,18 @@ export interface FundamentalsResponse {
 export type SchedulerSlot = 'premarket' | 'evening-prep' | 'intraday' | 'weekly' | 'monthly';
 export type JobStatus = 'running' | 'done' | 'error' | 'busy';
 
+/**
+ * Resource lane a job contends for. Jobs sharing a lane are serialized (a second
+ * start while one runs returns `busy`); jobs on different lanes run concurrently.
+ * A job with no lane (memory / delete-theses — guarded by their own `_index.lock`)
+ * never locks and is never blocked.
+ *   - scheduler: run-slot, recalc-profile (the Python scheduler's single-run lock)
+ *   - tradingview: analyze-ticker, sync-alerts, sync-thesis-alerts, delete-alerts (one TradingView Desktop / CDP :9222)
+ *   - ib: place/cancel bracket, cancel order, sync fills (one IB Gateway session)
+ *   - screener: VCP/short/bottom-flow run, plan, save-watchlist (shared staging files)
+ */
+export type JobLane = 'scheduler' | 'tradingview' | 'ib' | 'screener';
+
 export interface JobLogLine {
   t: number;
   stream: 'stdout' | 'stderr' | 'system';
@@ -1042,6 +1054,7 @@ export interface JobSummary {
   startedAt: number;
   endedAt: number | null;
   exitCode: number | null;
+  lane?: JobLane;
   meta?: Record<string, unknown>;
 }
 
@@ -1056,7 +1069,16 @@ export interface StartJobResponse {
   job?: JobSummary;
   busy?: boolean;
   activeJobId?: string;
+  /** When `busy`, the lane that is occupied (so the UI can name it). */
+  lane?: JobLane;
   error?: string;
+}
+
+/** GET /api/actions/jobs — all recent jobs + which lanes are currently held. */
+export interface JobsListResponse {
+  jobs: JobSummary[];
+  /** lane → id of the job currently holding it. */
+  activeLanes: Record<string, string>;
 }
 
 /** GET /api/trading-plan */

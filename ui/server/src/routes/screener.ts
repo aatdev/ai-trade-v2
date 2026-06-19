@@ -309,6 +309,7 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       args: [SCREEN_SCRIPT, ...built.args],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, TV_NO_CACHE: '1' },
+      lane: 'screener',
       meta: { kind: 'screener-run' },
     });
   });
@@ -347,6 +348,7 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       args,
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, TV_NO_CACHE: '1' },
+      lane: 'screener',
       meta: { kind: 'screener-plan' },
     });
   });
@@ -413,6 +415,7 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       args,
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'screener',
       meta: { kind: 'screener-save', mode },
     });
   });
@@ -433,6 +436,7 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       args: [SHORT_SCREEN_SCRIPT, ...built.args],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, TV_NO_CACHE: '1' },
+      lane: 'screener',
       meta: { kind: 'short-screener-run' },
     });
   });
@@ -468,6 +472,7 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
       args: [BOTTOM_FLOW_SCREEN_SCRIPT, ...built.args],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir },
+      lane: 'screener',
       meta: { kind: 'bottom-flow-screener-run' },
     });
   });

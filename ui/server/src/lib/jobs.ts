@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { JobDetail, JobLogLine, JobStatus, JobSummary } from '@shared/types';
+import type { JobDetail, JobLane, JobLogLine, JobStatus, JobSummary } from '@shared/types';
 
 const MAX_LINES = 2000; // ring buffer cap per job
 const MAX_JOBS = 25; // keep the most recent N jobs in memory
@@ -17,14 +17,14 @@ export interface StartOptions {
   /** Arbitrary metadata surfaced in the jobs list (e.g. { kind, ticker }). */
   meta?: Record<string, unknown>;
   /**
-   * Whether this job participates in the single-job mutex. Default `true`
-   * (mirrors the scheduler's single-run lock for slots / ticker analysis / IB
-   * order placement / TradingView-CDP alert sync — operations that contend for
-   * an external resource and must serialize). Set `false` for fast, local
-   * ledger writes (the trader-memory CLI guards its own `_index.lock`), so they
-   * neither wait behind nor block a long-running exclusive job.
+   * Resource lane this job contends for. Jobs sharing a lane serialize (a second
+   * start while one runs returns `busy`); jobs on different lanes run concurrently.
+   * Omit for fast local ledger writes (the trader-memory CLI guards its own
+   * `_index.lock`) — a lane-less job never locks and is never blocked, so a thesis
+   * status change can't be spuriously refused `busy` behind a long-running job
+   * (e.g. a 30-min ticker analysis on the `tradingview` lane).
    */
-  exclusive?: boolean;
+  lane?: JobLane;
 }
 
 interface InternalJob {
@@ -38,6 +38,7 @@ interface InternalJob {
   exitCode: number | null;
   lines: JobLogLine[];
   proc: ChildProcess | null;
+  lane?: JobLane;
   meta?: Record<string, unknown>;
 }
 
@@ -48,18 +49,26 @@ export class JobManager {
   private jobs = new Map<string, InternalJob>();
   private order: string[] = [];
   private counter = 0;
-  private activeJobId: string | null = null;
+  /** lane → id of the job currently holding it (resource-scoped lock). */
+  private laneHolders = new Map<JobLane, string>();
   private subs = new Map<string, Set<Subscriber>>();
   private endSubs = new Map<string, Set<EndSubscriber>>();
 
-  /** Is a job currently running? (server-side mutex, mirrors the scheduler lock) */
-  get active(): string | null {
-    return this.activeJobId;
+  /** Snapshot of which lanes are currently held (lane → running job id). */
+  get activeLanes(): Record<string, string> {
+    return Object.fromEntries(this.laneHolders);
   }
 
-  start(opts: StartOptions): { busy: true; activeJobId: string } | { busy: false; job: InternalJob } {
-    const exclusive = opts.exclusive !== false; // default true
-    if (exclusive && this.activeJobId) return { busy: true, activeJobId: this.activeJobId };
+  start(
+    opts: StartOptions,
+  ):
+    | { busy: true; activeJobId: string; lane: JobLane }
+    | { busy: false; job: InternalJob } {
+    const lane = opts.lane;
+    if (lane) {
+      const holder = this.laneHolders.get(lane);
+      if (holder) return { busy: true, activeJobId: holder, lane };
+    }
 
     this.counter += 1;
     const id = `job-${Date.now().toString(36)}-${this.counter}`;
@@ -74,11 +83,12 @@ export class JobManager {
       exitCode: null,
       lines: [],
       proc: null,
+      lane,
       meta: opts.meta,
     };
     this.jobs.set(id, job);
     this.order.push(id);
-    if (exclusive) this.activeJobId = id;
+    if (lane) this.laneHolders.set(lane, id);
     this.trim();
 
     const spawnCmd = opts.shell ? 'bash' : opts.cmd;
@@ -149,7 +159,7 @@ export class JobManager {
       this.append(job, 'system', 'scheduler is already running (exit 75) — try again later');
     } else job.status = 'error';
     this.append(job, 'system', `exited with code ${code} (${job.status})`);
-    if (this.activeJobId === job.id) this.activeJobId = null;
+    if (job.lane && this.laneHolders.get(job.lane) === job.id) this.laneHolders.delete(job.lane);
     const summary = this.toSummary(job);
     const set = this.endSubs.get(job.id);
     if (set) for (const fn of set) fn(summary);
@@ -158,7 +168,9 @@ export class JobManager {
   private trim(): void {
     while (this.order.length > MAX_JOBS) {
       const id = this.order.shift();
-      if (id && id !== this.activeJobId) {
+      const job = id ? this.jobs.get(id) : undefined;
+      // Never evict a job still holding a lane (i.e. still running).
+      if (id && !(job?.lane && this.laneHolders.get(job.lane) === id)) {
         this.jobs.delete(id);
         this.subs.delete(id);
         this.endSubs.delete(id);
@@ -194,6 +206,7 @@ export class JobManager {
       startedAt: job.startedAt,
       endedAt: job.endedAt,
       exitCode: job.exitCode,
+      lane: job.lane,
       meta: job.meta,
     };
   }

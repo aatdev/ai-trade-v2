@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { JobLogLine, JobStatus, StartJobResponse } from '@shared/types';
 import { memoryOp } from '../api';
+import { busyMessage } from './format';
 
 type Submit = (body: Record<string, unknown>) => Promise<StartJobResponse>;
 
@@ -42,7 +43,7 @@ export function useMemoryOp(
       const res = await submit(body);
       if (!res.ok) {
         setState(res.busy ? 'busy' : 'error');
-        setError(res.busy ? `another job is running (${res.activeJobId})` : res.error || 'failed');
+        setError(res.busy ? busyMessage(res.lane, res.activeJobId) : res.error || 'failed');
         return;
       }
       const es = new EventSource(`/api/actions/jobs/${res.job!.id}/stream`);

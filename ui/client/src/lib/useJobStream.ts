@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JobLogLine, JobStatus, StartJobResponse } from '@shared/types';
 import { cancelJob } from '../api';
+import { busyMessage } from './format';
 
 export type RunState = 'idle' | 'running' | JobStatus;
 
@@ -61,7 +62,7 @@ export function useJobStream(opts: JobStreamOptions = {}): JobStream {
         setState(res.busy ? 'busy' : 'error');
         setError(
           res.busy
-            ? `другая задача уже выполняется (${res.activeJobId ?? '?'})`
+            ? busyMessage(res.lane, res.activeJobId)
             : res.error || 'не удалось запустить задачу',
         );
         return;

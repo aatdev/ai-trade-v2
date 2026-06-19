@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { logout, useAuthStatus, useDates, useIbHealth } from '../api';
+import { logout, useAuthStatus, useDates, useIbHealth, useJobs } from '../api';
 import ActionsPanel from '../components/ActionsPanel';
 import AnalysesTab from '../components/AnalysesTab';
+import JobsTab from '../components/JobsTab';
 import AnalyzeDialog from '../components/AnalyzeDialog';
 import AutopilotCard from '../components/AutopilotCard';
 import ExposureBanner from '../components/ExposureBanner';
@@ -18,7 +19,7 @@ import DocsModal from '../components/DocsModal';
 import TraderMemoryCard from '../components/TraderMemoryCard';
 import WatchlistCard from '../components/WatchlistCard';
 
-type Tab = 'overview' | 'screener' | 'signals' | 'analyses' | 'memory' | 'ib' | 'profile';
+type Tab = 'overview' | 'screener' | 'signals' | 'analyses' | 'jobs' | 'memory' | 'ib' | 'profile';
 
 const TABS: { key: Tab; label: string }[] = [
   { key: 'overview', label: 'Обзор' },
@@ -28,6 +29,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'memory', label: 'Память' },
   { key: 'ib', label: 'Счёт IB' },
   { key: 'profile', label: 'Профиль' },
+  { key: 'jobs', label: 'Задания' },
 ];
 
 export default function Dashboard() {
@@ -52,6 +54,11 @@ export default function Dashboard() {
   // tab) so the "Счёт IB" tab turns red whenever the Gateway is down/logged out.
   const { data: ibHealth } = useIbHealth(autoRefresh ? 30_000 : false);
   const ibDown = ibHealth ? !ibHealth.ok : false;
+
+  // Live count of running jobs for the "Задания" tab badge (polled app-wide so
+  // it ticks even while another tab is open).
+  const { data: jobsData } = useJobs(autoRefresh ? 5_000 : false);
+  const runningJobs = jobsData?.jobs.filter((j) => j.status === 'running').length ?? 0;
 
   return (
     <div className="app">
@@ -94,6 +101,7 @@ export default function Dashboard() {
       <div className="tabs" style={{ marginBottom: 16 }}>
         {TABS.map((t) => {
           const down = t.key === 'ib' && ibDown;
+          const jobsBadge = t.key === 'jobs' && runningJobs > 0;
           return (
             <button
               key={t.key}
@@ -103,6 +111,7 @@ export default function Dashboard() {
             >
               {t.label}
               {down ? ' ●' : ''}
+              {jobsBadge ? <span className="tab-count">{runningJobs}</span> : ''}
             </button>
           );
         })}
@@ -132,6 +141,12 @@ export default function Dashboard() {
       {tab === 'analyses' ? (
         <div className="grid">
           <AnalysesTab refetch={refetch} />
+        </div>
+      ) : null}
+
+      {tab === 'jobs' ? (
+        <div className="grid">
+          <JobsTab onNavigateTab={(t) => setTab(t as Tab)} />
         </div>
       ) : null}
 

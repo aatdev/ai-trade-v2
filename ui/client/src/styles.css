@@ -474,6 +474,45 @@ table.rows-clickable tbody tr { cursor: pointer; }
 .field-inline > span { font-size: 11px; letter-spacing: 0.02em; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
+/* ---------- jobs tab ---------- */
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.jobs-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.job-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--bg-elev);
+}
+.job-row .job-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 200px; }
+.job-row .job-label { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.job-row .job-status {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  border: 1.5px solid currentColor;
+  white-space: nowrap;
+}
+.job-row .job-meta { display: flex; gap: 6px; font-size: 12px; flex-wrap: wrap; }
+.job-row .job-actions { flex-shrink: 0; }
+
 /* ---------- screener param form ---------- */
 .screener-form { display: flex; flex-direction: column; gap: 16px; margin-bottom: 14px; }
 .screener-form-row { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }

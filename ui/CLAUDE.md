@@ -84,16 +84,26 @@ under `server/test/fixture/` + a test.
 All process-spawning and real mutations go through `routes/actions.ts` +
 `routes/screener.ts`, backed by **`lib/jobs.ts` (`JobManager`)**:
 
-- **Single-job mutex** (server-side, mirrors the scheduler's single-run lock): a second
-  start while one runs returns `{ busy: true }`. Exit code **75** = scheduler busy
-  (`SCHEDULER_BUSY_CODE`) → job status `busy`. The mutex only covers **exclusive** jobs
-  (the default) — slots, ticker analysis, IB order placement, TradingView-CDP alert sync:
-  things that contend for one external resource. Pass `exclusive: false` to `start()` for
-  fast local ledger writes (`/actions/memory`, `/actions/delete-theses` → the trader-memory
-  CLI, which guards its own cross-process `_index.lock`); those neither wait behind nor block
-  a long-running exclusive job, so a thesis status change can't be spuriously refused `busy`.
+- **Resource-lane locking** (server-side): each job declares a `lane?: JobLane` it
+  contends for. Jobs sharing a lane **serialize** — a second start while one holds the
+  lane returns `{ busy: true, activeJobId, lane }` (HTTP 409); jobs on **different** lanes
+  run **concurrently** (so a ticker analysis, a VCP screener, a slot, and a memory write
+  all run at once). The lanes:
+  - `scheduler` — `run-slot`, `recalc-profile` (the Python scheduler's single-run lock;
+    exit code **75** = busy, `SCHEDULER_BUSY_CODE` → job status `busy`).
+  - `tradingview` — `analyze-ticker`, `sync-alerts`, `sync-thesis-alerts`, `delete-alerts`
+    (one TradingView Desktop instance over CDP :9222).
+  - `ib` — `place`/`cancel`-bracket, `cancel-ib-order`, `sync-ib-fills` (one IB Gateway session).
+  - `screener` — VCP / short / bottom-flow run, plan, save-watchlist (shared staging files).
+  - **no lane** — `/actions/memory`, `/actions/delete-theses` (the trader-memory CLI guards
+    its own cross-process `_index.lock`): lane-less jobs never lock and are never blocked,
+    so a thesis status change can't be spuriously refused `busy` behind a long lane job.
+  `JobManager.activeLanes` (`Record<lane, jobId>`) is surfaced by `GET /actions/jobs`.
 - Log output is a per-job ring buffer (2000 lines), streamed to the client over **SSE**
   (`GET /actions/jobs/:id/stream`): replay buffered lines, then live; `end` event on close.
+  The **Задания** client tab (`components/JobsTab.tsx`) polls `GET /actions/jobs` and is the
+  central monitor — list all jobs, view any job's log (`lib/useJobLog.ts`), jump to a finished
+  job's result, or cancel a running one. Per-panel run buttons stay where they are.
 - Commands are a **strict whitelist**. Shelling out goes through canonical launchers
   (`scripts/run_trading_schedule.sh` for slots, `scripts/run_watchlist_orders.sh` for IB
   brackets) that load `.env` / fix PATH / pick the repo `.venv` — never invoke the

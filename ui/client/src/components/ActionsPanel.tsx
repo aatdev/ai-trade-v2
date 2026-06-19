@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JobLogLine, SchedulerSlot, StartJobResponse } from '@shared/types';
 import { deleteAlerts, runSlot, syncAlerts } from '../api';
-import { fmtClock } from '../lib/format';
+import { busyMessage, fmtClock } from '../lib/format';
 
 const SLOTS: SchedulerSlot[] = ['premarket', 'evening-prep', 'intraday', 'weekly', 'monthly'];
 
@@ -44,7 +44,7 @@ export default function ActionsPanel({ onClose }: { onClose: () => void }) {
     try {
       const res = await fn();
       if (!res.ok) {
-        setError(res.busy ? `Another job is running (${res.activeJobId}).` : res.error || 'Failed to start.');
+        setError(res.busy ? busyMessage(res.lane, res.activeJobId) : res.error || 'Failed to start.');
         return;
       }
       setJobId(res.job!.id);

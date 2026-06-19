@@ -2,6 +2,7 @@ import path from 'node:path';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../app';
+import { JobManager } from '../lib/jobs';
 import { buildMemoryArgs, buildDeleteThesesArgs } from '../lib/memoryOps';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
@@ -262,9 +263,66 @@ describe('ticker routes guard against traversal', () => {
 });
 
 describe('GET /api/actions/jobs', () => {
-  it('starts empty with no active job', async () => {
+  it('starts empty with no active lanes', async () => {
     const res = await request(app).get('/api/actions/jobs');
     expect(res.body.jobs).toEqual([]);
-    expect(res.body.active).toBeNull();
+    expect(res.body.activeLanes).toEqual({});
+  });
+});
+
+/**
+ * Lane WIRING: each whitelisted action must request the correct resource lane
+ * so cross-type jobs run concurrently while same-resource jobs serialize. A
+ * recording JobManager captures `start()` opts and never spawns — the lane
+ * LOCKING semantics themselves live in lib/jobs.test.ts.
+ */
+describe('action → lane wiring', () => {
+  class RecordingJobs extends JobManager {
+    calls: Array<Parameters<JobManager['start']>[0]> = [];
+    start(opts: Parameters<JobManager['start']>[0]) {
+      this.calls.push(opts);
+      const job = {
+        id: 'job-rec',
+        label: opts.label,
+        cmd: opts.cmd,
+        args: opts.args,
+        status: 'running',
+        startedAt: 0,
+        endedAt: null,
+        exitCode: null,
+        lines: [],
+        proc: null,
+        lane: opts.lane,
+        meta: opts.meta,
+      };
+      return { busy: false, job } as unknown as ReturnType<JobManager['start']>;
+    }
+  }
+
+  async function laneFor(send: (a: ReturnType<typeof request>) => request.Test): Promise<unknown> {
+    const jobs = new RecordingJobs();
+    const a = createApp({ dataDir: FIXTURE, projectRoot: path.resolve(process.cwd()), jobs });
+    const res = await send(request(a));
+    expect(res.status).toBe(200);
+    return jobs.calls.at(-1)?.lane;
+  }
+
+  it('run-slot → scheduler', async () => {
+    expect(await laneFor((r) => r.post('/api/actions/run-slot').send({ slot: 'premarket' }))).toBe('scheduler');
+  });
+  it('analyze-ticker → tradingview', async () => {
+    expect(await laneFor((r) => r.post('/api/actions/analyze-ticker').send({ ticker: 'AAPL' }))).toBe('tradingview');
+  });
+  it('sync-alerts → tradingview', async () => {
+    expect(await laneFor((r) => r.post('/api/actions/sync-alerts').send({}))).toBe('tradingview');
+  });
+  it('sync-ib-fills → ib', async () => {
+    expect(await laneFor((r) => r.post('/api/actions/sync-ib-fills').send({}))).toBe('ib');
+  });
+  it('memory op is lane-less (never blocks)', async () => {
+    expect(await laneFor((r) => r.post('/api/actions/memory').send({ op: 'list' }))).toBeUndefined();
+  });
+  it('screener run → screener', async () => {
+    expect(await laneFor((r) => r.post('/api/screener/run').send({ universe: 'sp500' }))).toBe('screener');
   });
 });

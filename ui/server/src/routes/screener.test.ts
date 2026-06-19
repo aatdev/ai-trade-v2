@@ -139,13 +139,13 @@ describe('POST /api/screener/run', () => {
   it('rejects a missing/invalid universe before spawning', async () => {
     const res = await request(app).post('/api/screener/run').send({});
     expect(res.status).toBe(400);
-    expect((await jobsList()).active).toBeNull();
+    expect((await jobsList()).activeLanes).toEqual({});
   });
 
   it('rejects out-of-range tuning before spawning', async () => {
     const res = await request(app).post('/api/screener/run').send({ universe: 'sp500', minContractions: 9 });
     expect(res.status).toBe(400);
-    expect((await jobsList()).active).toBeNull();
+    expect((await jobsList()).activeLanes).toEqual({});
   });
 
   it('rejects wide when the universe file is absent (cwd has none)', async () => {
@@ -188,13 +188,13 @@ describe('POST /api/screener/shorts/run', () => {
   it('rejects a missing/invalid universe before spawning', async () => {
     const res = await request(app).post('/api/screener/shorts/run').send({});
     expect(res.status).toBe(400);
-    expect((await jobsList()).active).toBeNull();
+    expect((await jobsList()).activeLanes).toEqual({});
   });
 
   it('rejects an invalid grade before spawning', async () => {
     const res = await request(app).post('/api/screener/shorts/run').send({ universe: 'sp500', minGrade: 'Z' });
     expect(res.status).toBe(400);
-    expect((await jobsList()).active).toBeNull();
+    expect((await jobsList()).activeLanes).toEqual({});
   });
 
   it('rejects wide when the universe file is absent (cwd has none)', async () => {

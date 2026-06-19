@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { JobLogLine, JobStatus, ReconcileResult } from '@shared/types';
 import { analyzeTicker, cancelJob, fetchReconcile } from '../api';
 import { summarizeClaudeEvent } from './claudeEvents';
+import { busyMessage } from './format';
 
 export type RunState = 'idle' | 'running' | JobStatus;
 
@@ -60,7 +61,7 @@ export function useAnalyzeRun(date: string | null): AnalyzeRun {
       const res = await analyzeTicker(ticker, opts);
       if (!res.ok) {
         setState(res.busy ? 'busy' : 'error');
-        setError(res.busy ? `another job is running (${res.activeJobId})` : res.error || 'failed');
+        setError(res.busy ? busyMessage(res.lane, res.activeJobId) : res.error || 'failed');
         return;
       }
       const id = res.job!.id;

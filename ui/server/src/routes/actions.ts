@@ -7,7 +7,7 @@ import { buildAnalyzeTickerArgs } from '../lib/analyzeTicker';
 import { resolvePythonBin, startAndRespond as startJob } from '../lib/jobActions';
 import { getTheses, getThesisDetail, getWatchlist } from '../lib/mappers';
 import type { JobManager } from '../lib/jobs';
-import type { SchedulerSlot, StartJobResponse } from '@shared/types';
+import type { JobsListResponse, SchedulerSlot, StartJobResponse } from '@shared/types';
 
 const SLOTS = new Set<SchedulerSlot>(['premarket', 'evening-prep', 'intraday', 'weekly', 'monthly']);
 const TICKER_RE = /^[A-Z0-9.\-]{1,10}$/;
@@ -57,6 +57,8 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cmd: 'bash',
       args,
       cwd: projectRoot,
+      lane: 'scheduler',
+      meta: { kind: 'run-slot', slot },
     });
   });
 
@@ -81,6 +83,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args,
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot, TV_NO_CACHE: '1' },
+      lane: 'scheduler',
       meta: { kind: 'recalc-profile' },
     });
   });
@@ -101,6 +104,8 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [],
       cwd: projectRoot,
       shell: true,
+      lane: 'tradingview',
+      meta: { kind: 'sync-alerts' },
     });
   });
 
@@ -116,6 +121,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [SYNC_THESIS_ALERTS_SCRIPT],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'tradingview',
       meta: { kind: 'sync-thesis-alerts' },
     });
   });
@@ -138,6 +144,8 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
         '--message-not-contains', '[WL]',
       ],
       cwd: projectRoot,
+      lane: 'tradingview',
+      meta: { kind: 'delete-alerts', tickers: clean },
     });
   });
 
@@ -168,6 +176,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args,
       cwd: projectRoot,
       env: { TV_NO_CACHE: '1' },
+      lane: 'tradingview',
       meta: { kind: 'analyze-ticker', ticker, model: ANALYZE_MODEL, createAlerts, saveToNotes },
     });
   });
@@ -186,12 +195,11 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'memory', op: String((req.body as Record<string, unknown>)?.op ?? '') },
-      // Fast local ledger write (transition / close / ingest / heat / …): the
-      // trader-memory store guards its own cross-process `_index.lock`, so it
-      // must not be serialized behind a long exclusive job (e.g. a 30-min
-      // ticker analysis) — that was surfacing as a spurious `busy` on a simple
-      // thesis status change.
-      exclusive: false,
+      // No lane: fast local ledger write (transition / close / ingest / heat / …).
+      // The trader-memory store guards its own cross-process `_index.lock`, so it
+      // must not be serialized behind a long lane job (e.g. a 30-min ticker
+      // analysis) — that was surfacing as a spurious `busy` on a simple thesis
+      // status change.
     });
   });
 
@@ -214,7 +222,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
       meta: { kind: 'delete-theses' },
-      exclusive: false, // local index-locked store delete — see /actions/memory
+      // No lane: local index-locked store delete — see /actions/memory.
     });
   });
 
@@ -259,6 +267,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [WATCHLIST_ORDERS_LAUNCHER, ...built.args],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'ib',
       meta: { kind: 'place-ib-bracket', thesisId: id, ticker: detail.ticker },
     });
   });
@@ -277,6 +286,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [WATCHLIST_ORDERS_LAUNCHER, ...built.args],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'ib',
       meta: {
         kind: 'cancel-ib-bracket',
         thesisId: String((req.body as Record<string, unknown>)?.thesisId ?? ''),
@@ -301,6 +311,7 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [WATCHLIST_ORDERS_LAUNCHER, 'cancel-orders', '--order-ids', clean.join(',')],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'ib',
       meta: { kind: 'cancel-ib-order', count: clean.length },
     });
   });
@@ -315,12 +326,14 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       args: [WATCHLIST_ORDERS_LAUNCHER, 'sync'],
       cwd: projectRoot,
       env: { TRADING_DATE_DIR: dataDir, CLAUDE_TRADING_SKILLS_REPO: projectRoot },
+      lane: 'ib',
       meta: { kind: 'sync-ib-fills' },
     });
   });
 
   r.get('/actions/jobs', (_req, res) => {
-    res.json({ jobs: jobs.list(), active: jobs.active });
+    const body: JobsListResponse = { jobs: jobs.list(), activeLanes: jobs.activeLanes };
+    res.json(body);
   });
 
   r.post('/actions/jobs/:id/cancel', (req, res) => {

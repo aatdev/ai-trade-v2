@@ -16,7 +16,7 @@ import type {
   IbHealth,
   IbSnapshot,
   JobDetail,
-  JobSummary,
+  JobsListResponse,
   MarketResponse,
   MemoryResponse,
   OhlcvResponse,
@@ -487,8 +487,16 @@ export const applyReconcile = (ticker: string, date: string | null) =>
 export const deleteAlerts = (tickers: string[]) =>
   postJSON<StartJobResponse>('/api/actions/delete-alerts', { tickers });
 
-export const fetchJobs = () =>
-  getJSON<{ jobs: JobSummary[]; active: string | null }>('/api/actions/jobs');
+export const fetchJobs = () => getJSON<JobsListResponse>('/api/actions/jobs');
+
+/** Live registry of all recent jobs + which resource lanes are currently held. */
+export const useJobs = (refetchInterval: Refetch = false) =>
+  useQuery({
+    queryKey: ['jobs'],
+    queryFn: fetchJobs,
+    refetchInterval,
+    staleTime: 1_000,
+  });
 
 export const fetchJob = (id: string) => getJSON<JobDetail>(`/api/actions/jobs/${id}`);
 

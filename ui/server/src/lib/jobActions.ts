@@ -9,8 +9,8 @@ export function resolvePythonBin(): string {
 
 /**
  * Start a job through the shared JobManager and write the canonical response:
- * 409 + `busy` when another job holds the single-run mutex, else 200 + the new
- * job summary. Shared by the actions and screener routers.
+ * 409 + `busy` when another job already holds the requested resource lane, else
+ * 200 + the new job summary. Shared by the actions and screener routers.
  */
 export function startAndRespond(
   res: Response,
@@ -19,7 +19,12 @@ export function startAndRespond(
 ): void {
   const result = jobs.start(opts);
   if (result.busy) {
-    const body: StartJobResponse = { ok: false, busy: true, activeJobId: result.activeJobId };
+    const body: StartJobResponse = {
+      ok: false,
+      busy: true,
+      activeJobId: result.activeJobId,
+      lane: result.lane,
+    };
     res.status(409).json(body);
     return;
   }

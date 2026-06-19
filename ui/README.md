@@ -179,7 +179,8 @@ Signal) with a **ticker filter**; clicking a row opens a modal with the full
 rendered block, and each row / the modal has a 🗑 delete button (with
 confirmation).
 
-Actions (whitelisted, single-job mutex, SSE log stream):
+Actions (whitelisted, resource-lane locking, SSE log stream — jobs on different
+lanes run concurrently, same-lane jobs serialize; see the **Задания** tab below):
 `POST /api/actions/run-slot`, `/sync-alerts`, `/sync-thesis-alerts`
 (brings TradingView `[TH]` alerts in line with the OPEN trader-memory theses —
 Trigger/Stop/T1 from each thesis's levels; every delete is scoped
@@ -192,6 +193,22 @@ screener → watchlist → non-active theses, see the **Профиль** tab),
 buttons on an ENTRY_READY thesis + the **Счёт IB** "Сверить с тезисами" button —
 see the IB write-path note below);
 `GET /api/actions/jobs[/:id[/stream]]`, `POST /api/actions/jobs/:id/cancel`.
+
+### Задания tab (central job monitor)
+
+The **Задания** tab lists every recent job (newest first) — its label, resource
+lane, status, start time and duration — and is the one place to **watch all jobs
+at once**. Because jobs are locked **per resource lane** rather than by a single
+global mutex, different job types run concurrently: a ticker analysis
+(`tradingview`), a VCP screener (`screener`), a scheduler slot (`scheduler`) and a
+memory write (lane-less) can all be in flight together. A second job on an
+**already-held** lane is refused `busy` (one TradingView Desktop / one IB Gateway /
+the scheduler's single-run lock). Per row: **Лог** (replay + live SSE), **Результат**
+(opens the finished job's result in place — an `AnalysisModal` for a ticker analysis,
+or switches to the Скринер tab for a screener), and **Отменить** (SIGTERM a running
+job). The tab label shows a live
+count of running jobs. The existing per-panel run buttons and the ⚡ Actions modal
+stay where they are — Задания only monitors.
 
 ### Скринер tab (VCP longs + swing-short + bottom-flow)
 
