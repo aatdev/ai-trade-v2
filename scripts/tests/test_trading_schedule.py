@@ -145,6 +145,111 @@ def test_run_claude_kill_ppid_mode_does_not_use_print_flag(monkeypatch):
     assert "-p" not in captured["cmd"]
 
 
+# --------------------------------------------------------------------------- #
+# Wrapper wall-time cap (claude-p --timeout defaults to 300s)
+# --------------------------------------------------------------------------- #
+class TestWrapperTimeoutFlags:
+    """``claude-p``/``claude-pee`` cap their own wall-time at 300s by default;
+    the scheduler must forward the per-step budget or long workflows die with
+    ``StopTimeout`` (rc=2) -> fail-safe RESTRICT gate."""
+
+    def test_forwards_for_claude_p(self):
+        assert ts._wrapper_timeout_flags("claude-p", 1800, []) == [
+            "--timeout",
+            str(1800 - ts.WRAPPER_TIMEOUT_GRACE_S),
+        ]
+
+    def test_forwards_for_claude_pee_full_path(self):
+        assert ts._wrapper_timeout_flags("/usr/local/bin/claude-pee", 900, []) == [
+            "--timeout",
+            str(900 - ts.WRAPPER_TIMEOUT_GRACE_S),
+        ]
+
+    def test_noop_for_plain_claude(self):
+        # A plain claude (via $CLAUDE_BIN) has no --timeout flag.
+        assert ts._wrapper_timeout_flags("/opt/custom/claude", 1800, []) == []
+        assert ts._wrapper_timeout_flags("claude", 1800, []) == []
+
+    def test_noop_when_operator_pinned(self):
+        # An explicit --timeout via TRADING_SCHEDULE_CLAUDE_FLAGS wins.
+        assert ts._wrapper_timeout_flags("claude-p", 1800, ["--timeout", "600"]) == []
+
+    def test_cap_never_below_one(self):
+        # A tiny budget must never yield a negative/zero cap.
+        assert ts._wrapper_timeout_flags("claude-p", 5, []) == ["--timeout", "1"]
+
+
+def test_run_claude_forwards_timeout_to_wrapper(monkeypatch):
+    """End-to-end: the wrapper cap lands in the executed command, before the
+    positional prompt."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800) is True
+    cmd = captured["cmd"]
+    assert "--timeout" in cmd
+    assert cmd[cmd.index("--timeout") + 1] == str(1800 - ts.WRAPPER_TIMEOUT_GRACE_S)
+    assert cmd.index("--timeout") < cmd.index("do the thing")
+
+
+def test_run_claude_kill_ppid_also_forwards_timeout(monkeypatch):
+    """The kill-ppid path builds its own command; it must forward the cap too."""
+    monkeypatch.setenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "kill-ppid")
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800)
+    assert "--timeout" in captured["cmd"]
+    assert captured["cmd"][captured["cmd"].index("--timeout") + 1] == str(
+        1800 - ts.WRAPPER_TIMEOUT_GRACE_S
+    )
+
+
+def test_run_claude_does_not_forward_timeout_to_plain_claude(monkeypatch):
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "/opt/custom/claude")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800) is True
+    assert "--timeout" not in captured["cmd"]
+
+
+def test_run_claude_respects_operator_pinned_timeout(monkeypatch):
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.setenv("TRADING_SCHEDULE_CLAUDE_FLAGS", "--timeout 600")
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800) is True
+    cmd = captured["cmd"]
+    assert cmd.count("--timeout") == 1
+    assert cmd[cmd.index("--timeout") + 1] == "600"
+
+
 def test_run_claude_strips_nested_session_env(monkeypatch):
     """The child claude must NOT inherit the parent Claude Code session markers
     (CLAUDECODE / CLAUDE_CODE_*), which make a nested claude-pee no-op; auth via

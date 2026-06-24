@@ -329,6 +329,35 @@ def resolve_claude_bin() -> str:
     return CBIN  # let run_claude surface the launch error
 
 
+# claude-p / claude-pee wrap the inner ``claude`` with their OWN wall-time cap
+# (the wrapper's ``--timeout`` flag), which DEFAULTS TO 300s. The scheduler's
+# per-step ``timeout`` only bounds the *outer* subprocess; unless we forward it,
+# the wrapper kills any workflow running past ~5 min with ``StopTimeout`` (rc=2),
+# which then silently fail-safes the exposure gate to RESTRICT. Forward the
+# budget (minus a small grace, so the wrapper trips just before the outer
+# subprocess would hard-kill) so a slot's real timeout is honored.
+WRAPPER_TIMEOUT_GRACE_S = 30
+
+
+def _is_claude_p_wrapper(claude_bin: str) -> bool:
+    """True for the claude-p / claude-pee wrappers (which accept ``--timeout``),
+    false for a plain ``claude`` pointed at via $CLAUDE_BIN (which does not)."""
+    return Path(claude_bin).name.startswith("claude-p")
+
+
+def _wrapper_timeout_flags(claude_bin: str, timeout: int, extra: list[str]) -> list[str]:
+    """``["--timeout", "<seconds>"]`` forwarding the per-step budget to a
+    claude-p/claude-pee wrapper, or ``[]`` when it does not apply.
+
+    No-op when the binary is not a wrapper or the operator already pinned
+    ``--timeout`` via TRADING_SCHEDULE_CLAUDE_FLAGS.
+    """
+    if "--timeout" in extra or not _is_claude_p_wrapper(claude_bin):
+        return []
+    cap = max(timeout - WRAPPER_TIMEOUT_GRACE_S, 1)
+    return ["--timeout", str(cap)]
+
+
 def _child_claude_env() -> dict:
     """Environment for the child ``claude``/``claude-pee`` process.
 
@@ -640,6 +669,8 @@ def run_claude(
     claude_bin = resolve_claude_bin()
     perm_mode = os.environ.get("TRADING_SCHEDULE_PERMISSION_MODE", "bypassPermissions")
     extra = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "").split()
+    # Raise the wrapper's 300s default cap to the per-step budget (both paths).
+    extra = [*extra, *_wrapper_timeout_flags(claude_bin, timeout, extra)]
     exit_mode = os.environ.get("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "normal").strip().lower()
 
     if exit_mode == "kill-ppid":
@@ -1422,7 +1453,9 @@ def _premarket_gap_block(date_str: str, wl_file, wl_data: dict, dec: dict, args)
     if not tickers:
         return ""
     if args.dry_run:
-        log(f"(dry-run) premarket gap-gate: запросил бы премаркет-котировки для {', '.join(tickers)}")
+        log(
+            f"(dry-run) premarket gap-gate: запросил бы премаркет-котировки для {', '.join(tickers)}"
+        )
         return ""
     try:
         quotes = tsig.fetch_quotes(tickers, premarket=True)
