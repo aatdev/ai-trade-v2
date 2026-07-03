@@ -250,6 +250,90 @@ def test_run_claude_respects_operator_pinned_timeout(monkeypatch):
     assert cmd[cmd.index("--timeout") + 1] == "600"
 
 
+# --------------------------------------------------------------------------- #
+# Empty MCP allowlist (ambient .mcp.json / interactive-brokers cold-boot hang)
+# --------------------------------------------------------------------------- #
+class TestMcpDisableFlags:
+    """Workflow claude steps call no IB tool, so they must run with an EMPTY MCP
+    allowlist -- otherwise the ambient interactive-brokers server's IB Gateway
+    cold-boot / 2FA handshake can hang the FIRST claude step of a slot for the
+    whole budget -> ``StopTimeout`` (rc=2) -> fail-safe RESTRICT gate."""
+
+    def test_disables_by_default(self):
+        assert ts._mcp_disable_flags([]) == ["--strict-mcp-config"]
+        # Composes with the wrapper-timeout flag (order-independent detection).
+        assert ts._mcp_disable_flags(["--timeout", "1770"]) == ["--strict-mcp-config"]
+
+    def test_noop_when_caller_supplied_mcp_config(self):
+        # ticker-analysis opts into the TradingView MCP; do not force it off.
+        assert (
+            ts._mcp_disable_flags(["--mcp-config", "/tmp/tv.json", "--strict-mcp-config"]) == []
+        )
+        assert ts._mcp_disable_flags(["--mcp-config", "/tmp/tv.json"]) == []
+
+    def test_noop_when_operator_already_strict(self):
+        assert ts._mcp_disable_flags(["--strict-mcp-config"]) == []
+
+
+def test_run_claude_disables_project_mcp_by_default(monkeypatch):
+    """A plain workflow step (regime / chart-validation / weekly / monthly) runs
+    with ``--strict-mcp-config`` and NO ``--mcp-config`` (=> zero MCP servers),
+    before the positional prompt."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800) is True
+    cmd = captured["cmd"]
+    assert "--strict-mcp-config" in cmd
+    assert "--mcp-config" not in cmd
+    assert cmd.index("--strict-mcp-config") < cmd.index("do the thing")
+
+
+def test_run_claude_keeps_caller_mcp_config(monkeypatch):
+    """When the caller declares a server set (ticker-analysis' TradingView opt-in
+    via TRADING_SCHEDULE_CLAUDE_FLAGS), the default disable is suppressed and the
+    explicit ``--mcp-config`` is preserved (exactly one ``--strict-mcp-config``)."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.setenv(
+        "TRADING_SCHEDULE_CLAUDE_FLAGS", "--mcp-config /tmp/tv.json --strict-mcp-config"
+    )
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="done", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800) is True
+    cmd = captured["cmd"]
+    assert cmd.count("--strict-mcp-config") == 1
+    assert "/tmp/tv.json" in cmd
+
+
+def test_run_claude_kill_ppid_also_disables_project_mcp(monkeypatch):
+    """The kill-ppid path builds its own command; it must disable ambient MCP too."""
+    monkeypatch.setenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "kill-ppid")
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    monkeypatch.setattr(ts, "resolve_claude_bin", lambda: "claude-p")
+    captured = {}
+
+    def fake_subprocess_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    ts.run_claude("do the thing", label="t", dry_run=False, timeout=1800)
+    assert "--strict-mcp-config" in captured["cmd"]
+
+
 def test_run_claude_strips_nested_session_env(monkeypatch):
     """The child claude must NOT inherit the parent Claude Code session markers
     (CLAUDECODE / CLAUDE_CODE_*), which make a nested claude-pee no-op; auth via

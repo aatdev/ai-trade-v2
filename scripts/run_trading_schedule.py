@@ -358,6 +358,28 @@ def _wrapper_timeout_flags(claude_bin: str, timeout: int, extra: list[str]) -> l
     return ["--timeout", str(cap)]
 
 
+# The ambient project config (``.mcp.json``) declares the interactive-brokers MCP
+# server, whose cold start boots the bundled IB Gateway and (headless) can block
+# on the SSO / 2FA handshake. NONE of the workflow claude steps -- regime gate,
+# chart validation, weekly/monthly synthesis -- call an IB tool; they run local
+# scripts + WebSearch. So spawning that server is pure startup latency and, worse,
+# a hang risk: whichever claude step runs FIRST in a slot eats the gateway
+# cold-boot and can burn the whole budget, dying with ``StopTimeout`` (rc=2),
+# which fail-safes the exposure gate to RESTRICT. Default every step to an EMPTY
+# MCP allowlist (``--strict-mcp-config`` with no ``--mcp-config`` => zero servers).
+# The ticker-analysis path, which genuinely needs the TradingView MCP, opts back
+# in by passing its own ``--mcp-config`` (see ``_run_ticker_analysis``), which
+# suppresses this default.
+def _mcp_disable_flags(extra: list[str]) -> list[str]:
+    """``["--strict-mcp-config"]`` to run with NO project MCP servers, or ``[]``
+    when the caller already declared MCP intent via ``--mcp-config`` /
+    ``--strict-mcp-config`` in ``extra`` (ticker-analysis TradingView opt-in or an
+    operator override through TRADING_SCHEDULE_CLAUDE_FLAGS)."""
+    if "--mcp-config" in extra or "--strict-mcp-config" in extra:
+        return []
+    return ["--strict-mcp-config"]
+
+
 def _child_claude_env() -> dict:
     """Environment for the child ``claude``/``claude-pee`` process.
 
@@ -671,6 +693,10 @@ def run_claude(
     extra = os.environ.get("TRADING_SCHEDULE_CLAUDE_FLAGS", "").split()
     # Raise the wrapper's 300s default cap to the per-step budget (both paths).
     extra = [*extra, *_wrapper_timeout_flags(claude_bin, timeout, extra)]
+    # Run with an empty MCP allowlist unless the caller opted into a specific
+    # server set -- keeps the ambient interactive-brokers server (IB Gateway
+    # cold-boot / 2FA hang) out of every workflow step. See _mcp_disable_flags.
+    extra = [*extra, *_mcp_disable_flags(extra)]
     exit_mode = os.environ.get("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", "normal").strip().lower()
 
     if exit_mode == "kill-ppid":

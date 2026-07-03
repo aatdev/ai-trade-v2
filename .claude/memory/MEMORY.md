@@ -19,6 +19,8 @@
 - [Autopilot cron env gotchas](autopilot-cron-env-gotchas.md) — cron-запуск autopilot: PATH чинит ensure_runtime_path(), Claude login требует CLAUDE_CODE_OAUTH_TOKEN в .env (keychain недоступен)
 - [claude-pee breaks nested in a Claude session](claude-pee-nested-session-breaks.md) — слэш-команды слотов (/weekly и т.д.) запускаются вложенно → claude-шаг молча no-op (rc=0, пусто), слот рапортует успех
 - [claude-p wrapper semantics](claude-p-wrapper-semantics.md) — headless claude -p эмулятор: промпт позиционно, отвергает -p, дефолтный --timeout 300с; конвенция CLAUDE_BIN > claude-p
+- [claude config dir headless auth](claude-config-dir-headless-auth.md) — UI/headless claude-p даёт 401 "Please run /login": сервер без CLAUDE_CONFIG_DIR уходит в разлогиненный ~/.claude; рабочий логин в /Users/alex/Etc/ClaudeSpitch; токен в .env не спасает
 - [IB Gateway probe gotchas](ib-gateway-probe-gotchas.md) — session-файл в vendor/interactive-brokers-mcp/.../.runtime; Node-пробинг без User-Agent → 403, host=localhost
 - [IB headless autologin](ib-headless-autologin.md) — логин в IB = вызвать authenticate MCP-тул; IB_HEADLESS_MODE в .mcp.json, IB_PASSWORD фолбэк, ленивый логин при первом вызове, может требовать mobile-approval
 - [Thesis IDEA→ENTRY_READY ручной гейт](thesis-idea-entryready-manual-gate.md) — ingest даёт IDEA; повышение до ENTRY_READY ручное (CLI/UI), автопромоушна нет; карточки/кнопка Шага 2 требуют ENTRY_READY
+- [Scheduler claude steps ambient IB MCP hang](scheduler-claude-steps-ambient-ib-mcp-hang.md) — regime/chart/weekly шаги грузили .mcp.json (interactive-brokers); IB Gateway cold-boot на ПЕРВОМ шаге слота виснет → StopTimeout (rc=2, полный бюджет, нет транскрипта) → fail-safe RESTRICT; фикс — дефолтный --strict-mcp-config
