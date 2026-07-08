@@ -1,0 +1,29 @@
+# Trading UI dashboard as a systemd service (Linux server deployment).
+#
+# Install on the box (paths assume the repo is deployed at /opt/trade):
+#   sudo cp systemd/trading-ui.service /etc/systemd/system/trading-ui.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now trading-ui
+#   systemctl status trading-ui        # state
+#   journalctl -u trading-ui -f        # logs
+#
+# Serves http://127.0.0.1:4000 (localhost only). ExecStart runs scripts/run_ui.sh,
+# which installs npm deps / builds on first run, points PYTHON_BIN at the project
+# venv, then exec's `npm start`.
+[Unit]
+Description=Trading UI dashboard (visualizes trading-data/)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/trade/ui
+ExecStart=/opt/trade/scripts/run_ui.sh
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
