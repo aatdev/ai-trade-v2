@@ -23,11 +23,18 @@ const THESIS_ID_RE = /^th_[a-z0-9_]+$/i;
 const ORDER_ID_RE = /^[A-Za-z0-9._-]{1,64}$/; // IB order ids: numeric or uuid-ish
 
 function resolveClaudeBin(): string {
-  // claude-p: a drop-in `claude -p` emulator that takes the prompt as a
-  // positional arg and survives being launched from within a Claude Code
-  // session (a nested plain `claude -p` silently no-ops). Same convention as
-  // the scheduler's resolve_claude_bin (CLAUDE_BIN override > claude-p).
-  return process.env.CLAUDE_BIN || 'claude-p';
+  // Default to a plain `claude` (headless via -p). Set CLAUDE_BIN=claude-p to
+  // opt into the claude-p/claude-pee wrapper (a drop-in `claude -p` emulator
+  // that takes the prompt as a positional and survives being launched from
+  // within a Claude Code session, where a nested plain `claude -p` no-ops).
+  // Same convention as the scheduler's resolve_claude_bin (CLAUDE_BIN > claude).
+  return process.env.CLAUDE_BIN || 'claude';
+}
+
+/** True for a claude-p / claude-pee wrapper (rejects -p, accepts --timeout). */
+function isClaudePWrapper(bin: string): boolean {
+  const base = bin.split('/').pop() || bin;
+  return base.startsWith('claude-p');
 }
 
 export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobManager): Router {
@@ -158,8 +165,11 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
     const perm = process.env.TRADING_SCHEDULE_PERMISSION_MODE || 'bypassPermissions';
     const createAlerts = req.body?.createAlerts === true;
     const saveToNotes = req.body?.saveToNotes === true;
-    // Run on the configured model via claude-p (prompt is the trailing
-    // positional, no `-p`); stream events so the UI shows live progress.
+    // Run on the configured model; stream events so the UI shows live progress.
+    // Plain `claude -p` by default (see resolveClaudeBin); the arg shape adapts
+    // to whether the binary is a claude-p wrapper.
+    const bin = resolveClaudeBin();
+    const usesClaudeP = isClaudePWrapper(bin);
     const args = buildAnalyzeTickerArgs({
       ticker,
       createAlerts,
@@ -168,15 +178,19 @@ export function actionsRouter(projectRoot: string, dataDir: string, jobs: JobMan
       model: ANALYZE_MODEL,
       mcpConfig: resolveMcpConfigPath(projectRoot),
       timeoutSec: ANALYZE_TIMEOUT_SEC,
+      usesClaudeP,
     });
 
     return startAndRespond(res, {
       label: `analyze ${ticker} (${ANALYZE_MODEL})`,
-      cmd: resolveClaudeBin(),
+      cmd: bin,
       args,
       cwd: projectRoot,
       env: { TV_NO_CACHE: '1' },
       lane: 'tradingview',
+      // Plain `claude` has no --timeout; enforce the wall-time cap here so a
+      // stuck run can't hold the tradingview lane forever.
+      timeoutMs: ANALYZE_TIMEOUT_SEC * 1000,
       meta: { kind: 'analyze-ticker', ticker, model: ANALYZE_MODEL, createAlerts, saveToNotes },
     });
   });

@@ -25,6 +25,12 @@ export interface StartOptions {
    * (e.g. a 30-min ticker analysis on the `tradingview` lane).
    */
   lane?: JobLane;
+  /**
+   * Optional wall-time cap in ms. When set, the job is SIGKILLed after this long
+   * and marked errored. Needed for a plain `claude -p` run (no built-in
+   * `--timeout`); a claude-p wrapper caps itself via its own `--timeout` flag.
+   */
+  timeoutMs?: number;
 }
 
 interface InternalJob {
@@ -112,10 +118,27 @@ export class JobManager {
     this.pipe(job, proc, 'stdout');
     this.pipe(job, proc, 'stderr');
 
+    // Wall-time cap (plain `claude -p` has no --timeout): SIGKILL on expiry.
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    if (opts.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (job.status === 'running' && job.proc) {
+          this.append(
+            job,
+            'system',
+            `timed out after ${Math.round(opts.timeoutMs! / 1000)}s — killing (SIGKILL)`,
+          );
+          job.proc.kill('SIGKILL');
+        }
+      }, opts.timeoutMs);
+      timer.unref?.();
+    }
+
     proc.on('error', (err) => {
       this.append(job, 'system', `process error: ${err.message}`);
     });
     proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
       this.finish(job, code);
     });
 

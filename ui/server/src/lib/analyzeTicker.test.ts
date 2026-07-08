@@ -9,13 +9,19 @@ const BASE = {
   model: 'claude-opus-4-8',
   mcpConfig: '/tmp/tv-mcp.json',
   timeoutSec: 1800,
+  usesClaudeP: false, // default: plain `claude -p`
 };
 
-describe('buildAnalyzeTickerArgs (claude-p convention)', () => {
-  it('never uses -p/--print (claude-p rejects them)', () => {
+describe('buildAnalyzeTickerArgs (plain claude -p, default)', () => {
+  it('adds -p (plain claude needs it) before the prompt', () => {
     const args = buildAnalyzeTickerArgs(BASE);
-    expect(args).not.toContain('-p');
-    expect(args).not.toContain('--print');
+    expect(args[0]).toBe('-p');
+    expect(args.indexOf('-p')).toBeLessThan(args.length - 1);
+  });
+
+  it('omits --timeout (plain claude has no such flag)', () => {
+    const args = buildAnalyzeTickerArgs(BASE);
+    expect(args).not.toContain('--timeout');
   });
 
   it('passes the prompt as the trailing positional, not after a flag', () => {
@@ -23,11 +29,10 @@ describe('buildAnalyzeTickerArgs (claude-p convention)', () => {
     const prompt = args[args.length - 1];
     expect(prompt).toContain('AAPL');
     expect(prompt).toContain('ticker-analysis');
-    // The token before the prompt must be a flag (or its value), never `-p`.
     expect(args[args.length - 2]).toBe('--strict-mcp-config');
   });
 
-  it('streams events and carries permission-mode, model and timeout', () => {
+  it('streams events and carries permission-mode + model', () => {
     const args = buildAnalyzeTickerArgs(BASE);
     expect(args).toEqual(
       expect.arrayContaining([
@@ -38,8 +43,6 @@ describe('buildAnalyzeTickerArgs (claude-p convention)', () => {
         '--output-format',
         'stream-json',
         '--verbose',
-        '--timeout',
-        '1800',
       ]),
     );
   });
@@ -60,6 +63,27 @@ describe('buildAnalyzeTickerArgs (claude-p convention)', () => {
     expect(args).not.toContain('--mcp-config');
     expect(args).not.toContain('--strict-mcp-config');
     expect(args[args.length - 1]).toContain('AAPL'); // prompt still last
+  });
+});
+
+describe('buildAnalyzeTickerArgs (claude-p wrapper convention)', () => {
+  const CP = { ...BASE, usesClaudeP: true };
+
+  it('never uses -p/--print (claude-p rejects them)', () => {
+    const args = buildAnalyzeTickerArgs(CP);
+    expect(args).not.toContain('-p');
+    expect(args).not.toContain('--print');
+  });
+
+  it('carries the claude-p --timeout wall-time cap', () => {
+    const args = buildAnalyzeTickerArgs(CP);
+    expect(args).toEqual(expect.arrayContaining(['--timeout', '1800']));
+  });
+
+  it('still passes the prompt as the trailing positional after --strict-mcp-config', () => {
+    const args = buildAnalyzeTickerArgs(CP);
+    expect(args[args.length - 2]).toBe('--strict-mcp-config');
+    expect(args[args.length - 1]).toContain('AAPL');
   });
 });
 

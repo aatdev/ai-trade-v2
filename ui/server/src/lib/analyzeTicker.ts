@@ -1,15 +1,17 @@
 /**
- * Builds the prompt + argv for a headless ticker-analysis run driven by the
- * `claude-p` wrapper (a drop-in `claude -p` emulator).
+ * Builds the prompt + argv for a headless ticker-analysis run.
  *
- * `claude-p` differs from `claude` in two ways that matter here:
- *   1. It REJECTS `-p`/`--print` (it emulates that mode itself).
- *   2. It takes the prompt as a trailing POSITIONAL argument, not after `-p`.
+ * Two calling conventions, selected by `usesClaudeP`:
+ *   - plain `claude` (default): needs `-p`/`--print` to run headless, and has no
+ *     `--timeout` flag (the wall-time cap is enforced by the JobManager timer).
+ *   - `claude-p`/`claude-pee` wrapper: REJECTS `-p` (emulates that mode itself)
+ *     and instead accepts `--timeout`. It takes the prompt as a trailing
+ *     positional either way.
  *
- * The argv therefore mirrors the proven scheduler pattern in
- * `scripts/run_trading_schedule.py` (`_run_ticker_analysis`): all flags first,
- * `--mcp-config <path> --strict-mcp-config` (the boolean flag terminates the
- * variadic `--mcp-config`), then the prompt LAST as the positional `PROMPT`.
+ * The argv mirrors the scheduler pattern in `scripts/run_trading_schedule.py`
+ * (`run_claude` + `_print_flags`): print flag (plain claude only), then all
+ * flags, `--mcp-config <path> --strict-mcp-config` (the boolean flag terminates
+ * the variadic `--mcp-config`), then the prompt LAST as the positional `PROMPT`.
  *
  * Kept pure (no process spawn, no env reads) so the command shape is unit
  * testable, matching the `buildMemoryArgs` pattern.
@@ -26,8 +28,13 @@ export interface AnalyzeTickerOpts {
   model: string;
   /** Resolved --mcp-config path, or null to skip MCP wiring. */
   mcpConfig: string | null;
-  /** claude-p --timeout wall-time cap, in seconds. */
+  /** claude-p --timeout wall-time cap, in seconds (only emitted for a wrapper). */
   timeoutSec: number;
+  /**
+   * True when the resolved binary is a claude-p/claude-pee wrapper (rejects `-p`,
+   * accepts `--timeout`); false → a plain `claude -p` invocation (the default).
+   */
+  usesClaudeP: boolean;
 }
 
 /** Compose the Russian ticker-analysis prompt sent to the `ticker-analysis` skill. */
@@ -58,8 +65,12 @@ export function buildAnalyzeTickerPrompt(
  */
 export function buildAnalyzeTickerArgs(opts: AnalyzeTickerOpts): string[] {
   const prompt = buildAnalyzeTickerPrompt(opts.ticker, opts.createAlerts, opts.saveToNotes);
+  const args: string[] = [];
+  // Plain `claude` needs -p/--print to run headless; a claude-p wrapper emulates
+  // that mode itself and REJECTS -p. Print flag goes first (before the prompt).
+  if (!opts.usesClaudeP) args.push('-p');
   // Run on the configured model; stream events so the UI shows live progress.
-  const args = [
+  args.push(
     '--permission-mode',
     opts.permissionMode,
     '--model',
@@ -67,10 +78,11 @@ export function buildAnalyzeTickerArgs(opts: AnalyzeTickerOpts): string[] {
     '--output-format',
     'stream-json',
     '--verbose',
-    // claude-p's own wall-time cap (default 300s is too short for a full run).
-    '--timeout',
-    String(opts.timeoutSec),
-  ];
+  );
+  // --timeout is a claude-p wrapper flag (its 300s default is too short for a
+  // full run); plain claude has no such flag, so the JobManager timer enforces
+  // the wall-time cap instead.
+  if (opts.usesClaudeP) args.push('--timeout', String(opts.timeoutSec));
   // Load the vendored TradingView MCP server so the skill gets mcp__tradingview__*.
   // --strict-mcp-config => only this server (deterministic; ignores whatever
   // other MCP servers the user has configured). Built-in tools/skills are

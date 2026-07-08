@@ -308,7 +308,7 @@ def _rel(p: Path) -> str:
         return str(p)
 
 
-CBIN = "claude-p"
+CBIN = "claude"
 
 # Probed in order when ``claude`` is not on PATH (cron PATH is /usr/bin:/bin).
 CLAUDE_FALLBACK_PATHS = [
@@ -345,6 +345,14 @@ def _is_claude_p_wrapper(claude_bin: str) -> bool:
     """True for the claude-p / claude-pee wrappers (which accept ``--timeout``),
     false for a plain ``claude`` pointed at via $CLAUDE_BIN (which does not)."""
     return Path(claude_bin).name.startswith("claude-p")
+
+
+def _print_flags(claude_bin: str) -> list[str]:
+    """``["-p"]`` for a plain ``claude`` (headless print mode) or ``[]`` for a
+    claude-p / claude-pee wrapper, which emulates ``-p`` itself and REJECTS the
+    flag (it takes the prompt as a trailing positional). Without ``-p`` a plain
+    ``claude`` launches its interactive UI and blocks forever headlessly."""
+    return [] if _is_claude_p_wrapper(claude_bin) else ["-p"]
 
 
 def _wrapper_timeout_flags(claude_bin: str, timeout: int, extra: list[str]) -> list[str]:
@@ -739,11 +747,13 @@ def run_claude(
             extra=extra,
         )
 
-    cmd = [claude_bin, "--permission-mode", perm_mode, *extra, prompt]
+    print_flags = _print_flags(claude_bin)
+    cmd = [claude_bin, *print_flags, "--permission-mode", perm_mode, *extra, prompt]
 
     log(f"--- claude workflow START: {label} (timeout={timeout}s, perm={perm_mode}) ---")
     log(
-        f"command: {claude_bin} -p <prompt {len(prompt)} chars> --permission-mode {perm_mode}  {' '.join(extra)}",
+        f"command: {claude_bin} {' '.join(print_flags)} <prompt {len(prompt)} chars> "
+        f"--permission-mode {perm_mode}  {' '.join(extra)}",
         logging.INFO,
     )
     if dry_run:

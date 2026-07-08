@@ -81,3 +81,41 @@ describe('JobManager lane locking', () => {
     expect(jm.activeLanes.ib).toBe(first.busy ? undefined : first.job.id);
   });
 });
+
+describe('JobManager wall-time timeout', () => {
+  it('SIGKILLs a job that outlives timeoutMs and marks it errored', async () => {
+    const jm = new JobManager();
+    const r = jm.start({
+      label: 'slow',
+      cmd: 'sleep',
+      args: ['30'],
+      cwd: process.cwd(),
+      timeoutMs: 150,
+    });
+    expect(r.busy).toBe(false);
+    if (r.busy) return;
+    const id = r.job.id;
+    // Wait for the timer to fire + the process 'close' to propagate.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const detail = jm.get(id);
+    expect(detail?.status).toBe('error');
+    expect(detail?.lines.some((l) => l.line.includes('timed out'))).toBe(true);
+  });
+
+  it('does not fire the timeout for a fast job', async () => {
+    const jm = new JobManager();
+    const r = jm.start({
+      label: 'fast',
+      cmd: 'true',
+      args: [],
+      cwd: process.cwd(),
+      timeoutMs: 5000,
+    });
+    expect(r.busy).toBe(false);
+    if (r.busy) return;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const detail = jm.get(r.job.id);
+    expect(detail?.status).toBe('done');
+    expect(detail?.lines.some((l) => l.line.includes('timed out'))).toBe(false);
+  });
+});
