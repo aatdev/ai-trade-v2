@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { classifyBarSession, parseTvBars } from './ohlcv';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { classifyBarSession, parseTvBars, resolveTvCli } from './ohlcv';
 
 /** Unix seconds for a given UTC wall-clock. */
 const utc = (y: number, mo: number, d: number, h: number, mi = 0) =>
@@ -21,6 +22,40 @@ describe('classifyBarSession', () => {
     expect(classifyBarSession(utc(2026, 1, 15, 13, 0))).toBe('pre'); // 08:00 ET
     expect(classifyBarSession(utc(2026, 1, 15, 14, 30))).toBe('rth'); // 09:30 ET
     expect(classifyBarSession(utc(2026, 1, 15, 21, 30))).toBe('post'); // 16:30 ET
+  });
+});
+
+describe('resolveTvCli', () => {
+  const orig = { bin: process.env.TRADING_UI_TV_BIN, cli: process.env.TV_CLI, pathEnv: process.env.PATH };
+  afterEach(() => {
+    process.env.TRADING_UI_TV_BIN = orig.bin;
+    process.env.TV_CLI = orig.cli;
+    process.env.PATH = orig.pathEnv;
+    if (orig.bin === undefined) delete process.env.TRADING_UI_TV_BIN;
+    if (orig.cli === undefined) delete process.env.TV_CLI;
+  });
+
+  it('honors the TRADING_UI_TV_BIN override verbatim', () => {
+    process.env.TRADING_UI_TV_BIN = '/custom/tv';
+    expect(resolveTvCli('/repo')).toEqual({ cmd: '/custom/tv', prefixArgs: [] });
+  });
+
+  it('falls back to the vendored node CLI when tv is not on PATH', () => {
+    delete process.env.TRADING_UI_TV_BIN;
+    delete process.env.TV_CLI;
+    process.env.PATH = ''; // no `tv` discoverable
+    // Resolves against the real repo root so vendor/tradingview-mcp/src/cli/index.js exists.
+    const cli = resolveTvCli();
+    expect(cli).not.toBeNull();
+    expect(cli?.cmd).toBe(process.execPath);
+    expect(cli?.prefixArgs[0]).toContain(path.join('vendor', 'tradingview-mcp', 'src', 'cli', 'index.js'));
+  });
+
+  it('returns null when nothing resolves (no override, no PATH tv, no vendored entry)', () => {
+    delete process.env.TRADING_UI_TV_BIN;
+    delete process.env.TV_CLI;
+    process.env.PATH = '';
+    expect(resolveTvCli('/nonexistent-repo-root')).toBeNull();
   });
 });
 

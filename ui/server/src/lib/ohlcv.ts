@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { OhlcvBar, OhlcvResponse } from '@shared/types';
+import { PROJECT_ROOT } from '../config';
 
 /**
  * Fetches live OHLCV bars for the candle-chart modal.
@@ -21,9 +23,49 @@ import type { OhlcvBar, OhlcvResponse } from '@shared/types';
 
 const DEFAULT_TIMEOUT_MS = 25_000;
 
-/** The `tv` CLI; overridable for tests / non-standard installs. */
-function tvBin(): string {
-  return process.env.TRADING_UI_TV_BIN || 'tv';
+/** Find an executable named `name` on PATH, or null. Node has no built-in `which`. */
+function findOnPath(name: string): string | null {
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+  const exts = process.platform === 'win32' ? (process.env.PATHEXT || '.EXE').split(';') : [''];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const full = path.join(dir, name + ext);
+      try {
+        fs.accessSync(full, fs.constants.X_OK);
+        return full;
+      } catch {
+        // not executable here — keep looking
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolve how to invoke the vendored `tv` CLI. Mirrors _resolve_cli() in
+ * scripts/lib/tv_client_base.py so the Node server behaves like the Python
+ * clients instead of assuming a bare `tv` is always on PATH (the cause of
+ * `spawn tv ENOENT`). Order:
+ *   1. explicit override (TRADING_UI_TV_BIN or TV_CLI) — used as the command verbatim
+ *   2. a `tv` executable found on PATH
+ *   3. `node <repo>/vendor/tradingview-mcp/src/cli/index.js` — the vendored entry
+ *      (the package declares a `tv` bin but is not npm-linked onto PATH by default)
+ * Returns { cmd, prefixArgs } to spawn, or null when nothing resolves.
+ */
+export function resolveTvCli(
+  projectRoot: string = PROJECT_ROOT,
+): { cmd: string; prefixArgs: string[] } | null {
+  const override = process.env.TRADING_UI_TV_BIN || process.env.TV_CLI;
+  if (override) return { cmd: override, prefixArgs: [] };
+
+  const onPath = findOnPath('tv');
+  if (onPath) return { cmd: onPath, prefixArgs: [] };
+
+  const nodeCli = path.join(projectRoot, 'vendor', 'tradingview-mcp', 'src', 'cli', 'index.js');
+  if (fs.existsSync(nodeCli)) return { cmd: process.execPath, prefixArgs: [nodeCli] };
+
+  return null;
 }
 
 export function errorOhlcv(
@@ -204,8 +246,15 @@ export async function fetchOhlcv(
   if (fixture) return readFixture(fixture, symbol, timeframe);
 
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const bin = tvBin();
-  const args = ['bars', symbol, '-n', String(count), '-t', timeframe];
+  const cli = resolveTvCli();
+  if (!cli) {
+    return errorOhlcv(
+      symbol,
+      timeframe,
+      'tv CLI not found: run `npm install` in vendor/tradingview-mcp, or set TRADING_UI_TV_BIN / TV_CLI.',
+    );
+  }
+  const args = [...cli.prefixArgs, 'bars', symbol, '-n', String(count), '-t', timeframe];
   // Extended hours (pre/post-market bars) — only meaningful for intraday TFs.
   if (opts.extended) args.push('-x');
 
@@ -220,7 +269,7 @@ export async function fetchOhlcv(
       resolve(res);
     };
 
-    const child = spawn(bin, args, { env: { ...process.env } });
+    const child = spawn(cli.cmd, args, { env: { ...process.env } });
 
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
@@ -230,7 +279,7 @@ export async function fetchOhlcv(
     child.stdout.on('data', (d) => (out += d.toString()));
     child.stderr.on('data', (d) => (err += d.toString()));
     child.on('error', (e) =>
-      finish(errorOhlcv(symbol, timeframe, `Failed to run tv CLI (${bin}): ${e.message}`)),
+      finish(errorOhlcv(symbol, timeframe, `Failed to run tv CLI (${cli.cmd}): ${e.message}`)),
     );
     child.on('close', () => {
       const res = parseStdout(out, symbol, timeframe);
