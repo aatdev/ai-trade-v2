@@ -450,6 +450,53 @@ def test_close_non_active_raises(tmp_path: Path):
         thesis_store.close(state_dir, tid, "manual", 160.0, "2026-04-01T00:00:00+00:00")
 
 
+def test_close_rejects_implausible_exit_price(tmp_path: Path):
+    """A sentinel exit price (entry 150 -> 'closed' at 1.0) must be refused."""
+    state_dir = tmp_path / "theses"
+    tid, _ = _register_and_get(state_dir)
+    thesis_store.transition(state_dir, tid, "ENTRY_READY", "validated")
+    thesis_store.open_position(state_dir, tid, 150.00, "2026-03-01T10:00:00+00:00")
+
+    with pytest.raises(ValueError, match="implausible"):
+        thesis_store.close(
+            state_dir, tid, "manual", 1.0, "2026-04-01T10:00:00+00:00"
+        )
+    # Thesis must be untouched (still ACTIVE, no exit recorded).
+    reloaded = thesis_store.get(state_dir, tid)
+    assert reloaded["status"] == "ACTIVE"
+    assert reloaded["exit"]["actual_price"] is None
+
+
+def test_close_force_price_overrides_sanity_check(tmp_path: Path):
+    """force=True lets a genuinely far-off exit through (e.g. a real crash)."""
+    state_dir = tmp_path / "theses"
+    tid, _ = _register_and_get(state_dir)
+    thesis_store.transition(state_dir, tid, "ENTRY_READY", "validated")
+    thesis_store.open_position(state_dir, tid, 150.00, "2026-03-01T10:00:00+00:00")
+
+    thesis = thesis_store.close(
+        state_dir, tid, "manual", 1.0, "2026-04-01T10:00:00+00:00", force=True
+    )
+    assert thesis["status"] == "CLOSED"
+    assert thesis["exit"]["actual_price"] == 1.0
+
+
+def test_doctor_flags_implausible_closed_exit(tmp_path: Path):
+    """validate_state surfaces a CLOSED thesis whose exit is wildly off."""
+    state_dir = tmp_path / "theses"
+    tid, _ = _register_and_get(state_dir)
+    thesis_store.transition(state_dir, tid, "ENTRY_READY", "validated")
+    thesis_store.open_position(state_dir, tid, 150.00, "2026-03-01T10:00:00+00:00")
+    thesis_store.close(
+        state_dir, tid, "manual", 1.0, "2026-04-01T10:00:00+00:00", force=True
+    )
+
+    result = thesis_store.validate_state(state_dir)
+    assert result["ok"] is False
+    flagged = [e["thesis_id"] for e in result["implausible_exits"]]
+    assert tid in flagged
+
+
 # -- Tests: schema validation --------------------------------------------------
 
 

@@ -343,6 +343,7 @@ def test_run_claude_strips_nested_session_env(monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "abc-123")
     monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-keepme")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/cfg")
     captured = {}
 
@@ -358,6 +359,8 @@ def test_run_claude_strips_nested_session_env(monkeypatch):
     assert "CLAUDE_CODE_SESSION_ID" not in env
     assert "CLAUDE_CODE_CHILD_SESSION" not in env
     assert env.get("CLAUDE_CONFIG_DIR") == "/tmp/cfg"
+    # Auth token must survive the CLAUDE_CODE_* strip or the child deauthenticates.
+    assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "tok-keepme"
 
 
 def test_run_claude_empty_stdout_is_failure(monkeypatch):

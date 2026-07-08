@@ -75,21 +75,27 @@ export function deleteSignal(dataDir: string, ticker: string, date: string): Del
 
 /* ---------------- signal level parsing (mirrors parse_signals.mjs) ---------------- */
 
+// Price token with optional thousands separators; commas stripped before
+// parseFloat. Kept in sync with signals_md.py / run_trading_schedule.py — without
+// it, "$3,960" parses as 3 (the match stops at the comma).
+const NUM = String.raw`\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?`;
+const toNum = (raw: string): number => parseFloat(raw.replace(/,/g, ''));
+
 function firstDollar(s: string): number | null {
-  const m = s.match(/\$\s*(\d+(?:\.\d+)?)/);
-  if (m) return parseFloat(m[1]);
-  const n = s.match(/(\d+(?:\.\d+)?)/);
-  return n ? parseFloat(n[1]) : null;
+  const m = s.match(new RegExp(`\\$\\s*(${NUM})`));
+  if (m) return toNum(m[1]);
+  const n = s.match(new RegExp(`(${NUM})`));
+  return n ? toNum(n[1]) : null;
 }
 
 function allDollars(s: string): number[] {
   const out: number[] = [];
-  const re = /\$\s*(\d+(?:\.\d+)?)/g;
+  const re = new RegExp(`\\$\\s*(${NUM})`, 'g');
   let m: RegExpExecArray | null;
-  while ((m = re.exec(s))) out.push(parseFloat(m[1]));
+  while ((m = re.exec(s))) out.push(toNum(m[1]));
   if (out.length === 0) {
-    const re2 = /(\d+(?:\.\d+)?)/g;
-    while ((m = re2.exec(s))) out.push(parseFloat(m[1]));
+    const re2 = new RegExp(`(${NUM})`, 'g');
+    while ((m = re2.exec(s))) out.push(toNum(m[1]));
   }
   return out;
 }

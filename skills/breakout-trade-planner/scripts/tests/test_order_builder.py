@@ -34,7 +34,29 @@ class TestBuildPrePlaceTemplate:
         assert order["order_class"] == "bracket"
         assert order["take_profit"]["limit_price"] == 717.57
         assert order["stop_loss"]["stop_price"] == 516.81
+        # Resting pre-breakout entry must not expire at the close.
+        assert order["time_in_force"] == "gtc"
+
+    def test_day_tif_still_selectable(self):
+        order = build_pre_place_template(
+            symbol="PWR", qty=10, signal_entry=583.32, worst_entry=595.40,
+            stop_loss=516.81, take_profit=717.57, time_in_force="day",
+        )
         assert order["time_in_force"] == "day"
+
+    def test_client_order_id_stamped_when_given(self):
+        order = build_pre_place_template(
+            symbol="PWR", qty=10, signal_entry=583.32, worst_entry=595.40,
+            stop_loss=516.81, take_profit=717.57, client_order_id="bp-PWR-2026-07-07",
+        )
+        assert order["client_order_id"] == "bp-PWR-2026-07-07"
+
+    def test_client_order_id_absent_by_default(self):
+        order = build_pre_place_template(
+            symbol="PWR", qty=10, signal_entry=583.32, worst_entry=595.40,
+            stop_loss=516.81, take_profit=717.57,
+        )
+        assert "client_order_id" not in order
 
     def test_qty_zero_raises(self):
         with pytest.raises(ValueError, match="qty must be positive"):
@@ -157,7 +179,8 @@ class TestBuildIbPrePlaceTemplate:
         assert entry["orderType"] == "STP"
         assert entry["stopPrice"] == 583.32
         assert entry["quantity"] == 10
-        assert entry["tif"] == "DAY"
+        # Resting pre-breakout entry defaults to GTC (must not expire at close).
+        assert entry["tif"] == "GTC"
         # MCP place_order has no stop-limit: no limit/price field on a STP entry.
         assert "price" not in entry
 
@@ -182,7 +205,10 @@ class TestBuildIbPrePlaceTemplate:
             symbol="X", qty=5, signal_entry=100.0, worst_entry=102.0,
             stop_loss=95.0, take_profit=110.0,
         )
-        allowed = {"role", "symbol", "action", "orderType", "quantity", "tif", "price", "stopPrice"}
+        allowed = {
+            "role", "symbol", "action", "orderType", "quantity", "tif",
+            "price", "stopPrice", "cOID",
+        }
         for leg in t["legs"]:
             assert {"symbol", "action", "orderType", "quantity"} <= set(leg)
             assert set(leg) <= allowed
@@ -192,6 +218,19 @@ class TestBuildIbPrePlaceTemplate:
                 assert "price" in leg and "stopPrice" not in leg
             if leg["orderType"] == "STP":
                 assert "stopPrice" in leg and "price" not in leg
+
+    def test_client_order_id_stamps_unique_coid_per_leg(self):
+        t = build_ib_pre_place_template(
+            symbol="X", qty=5, signal_entry=100.0, worst_entry=102.0,
+            stop_loss=95.0, take_profit=110.0, client_order_id="bp-X-2026-07-07",
+        )
+        legs = _legs_by_role(t)
+        assert legs["entry"]["cOID"] == "bp-X-2026-07-07-entry"
+        assert legs["stop_loss"]["cOID"] == "bp-X-2026-07-07-sl"
+        assert legs["take_profit"]["cOID"] == "bp-X-2026-07-07-tp"
+        # Ids must be distinct or IB rejects the duplicate cOID.
+        coids = [leg["cOID"] for leg in t["legs"]]
+        assert len(set(coids)) == len(coids)
 
     def test_tif_normalized_uppercase(self):
         t = build_ib_pre_place_template(

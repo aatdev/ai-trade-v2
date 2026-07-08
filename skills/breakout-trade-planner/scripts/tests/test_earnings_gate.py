@@ -91,6 +91,25 @@ class TestFetchEarningsMap:
         result = fetch_earnings_map(["AAPL", "MSFT"], today=MON, fetcher=fake)
         assert result == {"AAPL": "2026-06-20", "MSFT": "2026-06-25"}
 
+    def test_default_today_uses_us_eastern_not_host_tz(self, monkeypatch):
+        # 2026-06-08 02:00 CET == 2026-06-07 20:00 ET: on a host in CET the naive
+        # local date is June 8, but the gate must anchor "today" to the ET date
+        # (June 7) so a stock reporting June 7 (AMC) is not treated as past.
+        import earnings_gate as eg
+
+        instant = datetime(2026, 6, 8, 0, 0, tzinfo=timezone.utc)  # 20:00 ET Jun 7
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant.astimezone(tz) if tz else instant
+
+        monkeypatch.setattr(eg, "datetime", _FrozenDatetime)
+        # A report on 2026-06-07 must still be in the map (not dropped as past).
+        fake, _ = self._fetcher(_response([_row("AAPL", _ts("2026-06-07"))]))
+        result = fetch_earnings_map(["AAPL"], fetcher=fake)
+        assert result == {"AAPL": "2026-06-07"}
+
     def test_amc_timestamp_maps_to_us_trading_date(self):
         # After-market-close release: 2026-06-12 21:00 ET == 2026-06-13 01:00 UTC.
         # The gate must see June 12 (the US trading date), not June 13.

@@ -176,8 +176,58 @@ class TestCalculatePositionSize:
             base_risk_pct=0.5,
             sizing_multiplier=1.75,
             max_position_pct=100.0,
+            risk_multiplier_cap=1.75,
         )
         assert textbook["shares"] > base["shares"]
+
+    def test_multiplier_capped_at_base_risk_by_default(self):
+        # Default cap 1.0: a textbook 1.75x band must NOT exceed the profile's
+        # per-trade risk budget.
+        capped = calculate_position_size(
+            worst_entry=100.0,
+            stop_loss=92.0,
+            account_size=150_000,
+            base_risk_pct=0.33,
+            sizing_multiplier=1.75,
+            max_position_pct=100.0,
+        )
+        baseline = calculate_position_size(
+            worst_entry=100.0,
+            stop_loss=92.0,
+            account_size=150_000,
+            base_risk_pct=0.33,
+            sizing_multiplier=1.0,
+            max_position_pct=100.0,
+        )
+        assert capped["shares"] == baseline["shares"]
+        assert capped["effective_risk_pct"] == 0.33
+        assert capped["sizing_multiplier_applied"] == 1.0
+        assert capped["risk_dollars"] <= 150_000 * 0.33 / 100
+
+    def test_multiplier_cap_opt_in_allows_boost(self):
+        boosted = calculate_position_size(
+            worst_entry=100.0,
+            stop_loss=92.0,
+            account_size=150_000,
+            base_risk_pct=0.33,
+            sizing_multiplier=1.75,
+            max_position_pct=100.0,
+            risk_multiplier_cap=1.75,
+        )
+        assert boosted["effective_risk_pct"] == round(0.33 * 1.75, 4)
+        assert boosted["sizing_multiplier_applied"] == 1.75
+
+    def test_sub_one_multiplier_still_reduces_risk(self):
+        good = calculate_position_size(
+            worst_entry=100.0,
+            stop_loss=92.0,
+            account_size=150_000,
+            base_risk_pct=0.33,
+            sizing_multiplier=0.75,
+            max_position_pct=100.0,
+        )
+        assert good["effective_risk_pct"] == round(0.33 * 0.75, 4)
+        assert good["sizing_multiplier_applied"] == 0.75
 
     def test_zero_multiplier_returns_zero_shares(self):
         result = calculate_position_size(

@@ -895,6 +895,48 @@ def _pnl_per_share(thesis: dict, exit_price: float, entry_price: float) -> float
     return exit_price - entry_price
 
 
+def _reference_prices(thesis: dict) -> list[float]:
+    """Known good price anchors for an exit-price plausibility check."""
+    entry = thesis.get("entry") or {}
+    exit_ = thesis.get("exit") or {}
+    refs: list[float] = []
+    for v in (
+        entry.get("actual_price"),
+        entry.get("target_price"),
+        exit_.get("stop_loss"),
+        exit_.get("take_profit"),
+    ):
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            refs.append(float(v))
+    return refs
+
+
+def _check_exit_price_sanity(
+    thesis: dict, price: float, *, force: bool = False, label: str = "exit"
+) -> None:
+    """Reject an exit/trim price wildly off the thesis's own reference prices.
+
+    Production accumulated shorts "closed" at a 1.0 sentinel (a 604→1.0 close
+    reported as a +99% win, poisoning win-rate/expectancy stats). A real exit
+    lands within a sane band of the entry/target/stop/take-profit; anything
+    beyond ±50% of ALL of them is refused unless ``force`` is set.
+    """
+    if force:
+        return
+    if not isinstance(price, (int, float)) or isinstance(price, bool) or price <= 0:
+        raise ValueError(f"{label} price must be a positive number, got {price!r}")
+    refs = _reference_prices(thesis)
+    if not refs:
+        return  # nothing to compare against — cannot judge
+    if any(abs(price - r) <= 0.5 * r for r in refs):
+        return
+    raise ValueError(
+        f"{label} price {price} is implausible vs thesis reference prices "
+        f"{sorted(set(refs))} (>50% from every one); pass force=True "
+        "(--force-price) to override"
+    )
+
+
 def _finalize_outcome(
     thesis: dict,
     *,
@@ -963,6 +1005,7 @@ def close(
     actual_price: float,
     actual_date: str,
     event_date: str | None = None,
+    force: bool = False,
 ) -> dict:
     """Close an ACTIVE or PARTIALLY_CLOSED thesis and compute outcome.
 
@@ -996,6 +1039,8 @@ def close(
 
     if entry_price is None:
         raise ValueError("Cannot close thesis: entry.actual_price is not set")
+
+    _check_exit_price_sanity(thesis, actual_price, force=force, label="exit")
 
     # Set exit data
     thesis["exit"]["actual_price"] = actual_price
@@ -1061,6 +1106,7 @@ def trim(
     reason: str = "position trimmed",
     exit_reason: str | None = None,
     event_date: str | None = None,
+    force: bool = False,
 ) -> dict:
     """Partially close (trim) an ACTIVE / PARTIALLY_CLOSED position.
 
@@ -1094,6 +1140,8 @@ def trim(
     position = thesis.get("position")
     if not position or position.get("shares") is None:
         raise ValueError("trim requires a recorded position — run open-position --shares first")
+
+    _check_exit_price_sanity(thesis, price, force=force, label="trim")
 
     original = position["shares"]
     remaining = position.get("shares_remaining", original)  # legacy default
@@ -1233,6 +1281,7 @@ def terminate(
     actual_price: float | None = None,
     actual_date: str | None = None,
     event_date: str | None = None,
+    force: bool = False,
 ) -> dict:
     """Move thesis to a terminal state (CLOSED or INVALIDATED).
 
@@ -1242,6 +1291,7 @@ def terminate(
 
     Args:
         event_date: Optional ISO timestamp for status_history.at (for backfilling).
+        force: Skip the exit-price plausibility check (see close()).
 
     Raises:
         ValueError: If terminal_status is invalid or thesis is already terminal.
@@ -1250,7 +1300,13 @@ def terminate(
         if actual_price is None or actual_date is None:
             raise ValueError("CLOSED requires actual_price and actual_date")
         return close(
-            state_dir, thesis_id, exit_reason, actual_price, actual_date, event_date=event_date
+            state_dir,
+            thesis_id,
+            exit_reason,
+            actual_price,
+            actual_date,
+            event_date=event_date,
+            force=force,
         )
 
     if terminal_status != "INVALIDATED":
@@ -1260,6 +1316,9 @@ def terminate(
 
     if thesis["status"] in _TERMINAL_STATUSES:
         raise ValueError(f"Cannot terminate: already in terminal status {thesis['status']}")
+
+    if actual_price is not None:
+        _check_exit_price_sanity(thesis, actual_price, force=force, label="exit")
 
     now = _now_iso()
 
@@ -1481,7 +1540,8 @@ def validate_state(state_dir: Path) -> dict:
 
     Returns:
         {"ok": bool, "missing_in_index": [...], "orphaned_in_index": [...],
-         "field_mismatches": [...], "schema_errors": [...]}
+         "field_mismatches": [...], "schema_errors": [...],
+         "implausible_exits": [...]}
     """
     index = _load_index(state_dir)
     index_ids = set(index.get("theses", {}).keys())
@@ -1496,6 +1556,7 @@ def validate_state(state_dir: Path) -> dict:
 
     field_mismatches = []
     schema_errors = []
+    implausible_exits = []
     for tid in file_ids & index_ids:
         try:
             thesis = _load_thesis(state_dir, tid)
@@ -1508,6 +1569,26 @@ def validate_state(state_dir: Path) -> dict:
         except (ValueError, Exception) as e:
             schema_errors.append({"thesis_id": tid, "error": str(e)})
             continue
+
+        # Flag CLOSED theses whose exit price is wildly off the entry/target/
+        # stop — the sentinel-price corruption that reported losers as +99% wins.
+        if thesis.get("status") == "CLOSED":
+            exit_price = (thesis.get("exit") or {}).get("actual_price")
+            refs = _reference_prices(thesis)
+            if (
+                isinstance(exit_price, (int, float))
+                and not isinstance(exit_price, bool)
+                and refs
+                and not any(abs(exit_price - r) <= 0.5 * r for r in refs)
+            ):
+                implausible_exits.append(
+                    {
+                        "thesis_id": tid,
+                        "exit_price": exit_price,
+                        "reference_prices": sorted(set(refs)),
+                        "pnl_pct": (thesis.get("outcome") or {}).get("pnl_pct"),
+                    }
+                )
 
         idx_entry = index["theses"][tid]
         expected = _project_index_fields(thesis)
@@ -1527,6 +1608,7 @@ def validate_state(state_dir: Path) -> dict:
         and not orphaned_in_index
         and not field_mismatches
         and not schema_errors
+        and not implausible_exits
     )
     return {
         "ok": ok,
@@ -1534,6 +1616,7 @@ def validate_state(state_dir: Path) -> dict:
         "orphaned_in_index": sorted(orphaned_in_index),
         "field_mismatches": field_mismatches,
         "schema_errors": schema_errors,
+        "implausible_exits": implausible_exits,
     }
 
 
@@ -1625,6 +1708,11 @@ def main(argv: list[str] | None = None) -> int:
     cl_p.add_argument("--actual-price", type=float, required=True, help="Exit price")
     cl_p.add_argument("--actual-date", required=True, help="Exit date (YYYY-MM-DD or ISO)")
     cl_p.add_argument("--event-date", default=None, help="Backdate status_history.at")
+    cl_p.add_argument(
+        "--force-price",
+        action="store_true",
+        help="Skip the exit-price plausibility check (accept a far-off price)",
+    )
 
     # trim (partial close: ACTIVE/PARTIALLY_CLOSED → PARTIALLY_CLOSED or CLOSED)
     tr2_p = sub.add_parser("trim", help="Partially close (trim) a position")
@@ -1640,6 +1728,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Only used if the trim fully closes the position (default manual)",
     )
     tr2_p.add_argument("--event-date", default=None, help="Override ledger timestamp")
+    tr2_p.add_argument(
+        "--force-price",
+        action="store_true",
+        help="Skip the trim-price plausibility check (accept a far-off price)",
+    )
 
     # terminate (→ CLOSED or INVALIDATED)
     del_p = sub.add_parser("delete", help="Hard-delete one or more theses (file + index entry)")
@@ -1652,6 +1745,11 @@ def main(argv: list[str] | None = None) -> int:
     tm_p.add_argument("--actual-price", type=float, default=None, help="Exit price (optional)")
     tm_p.add_argument("--actual-date", default=None, help="Exit date (optional)")
     tm_p.add_argument("--event-date", default=None, help="Backdate status_history.at")
+    tm_p.add_argument(
+        "--force-price",
+        action="store_true",
+        help="Skip the exit-price plausibility check (accept a far-off price)",
+    )
 
     # update-stop: trail the stop without hand-editing YAML (the heat ledger
     # reads exit.stop_loss — a stale stop means stale portfolio risk).
@@ -1738,6 +1836,7 @@ def main(argv: list[str] | None = None) -> int:
             args.actual_price,
             _coerce_dt(args.actual_date),
             event_date=_coerce_dt(args.event_date),
+            force=args.force_price,
         )
         out = t.get("outcome") or {}
         print(
@@ -1753,6 +1852,7 @@ def main(argv: list[str] | None = None) -> int:
             reason=args.reason,
             exit_reason=args.exit_reason,
             event_date=_coerce_dt(args.event_date),
+            force=args.force_price,
         )
         rem = (t.get("position") or {}).get("shares_remaining")
         print(
@@ -1768,6 +1868,7 @@ def main(argv: list[str] | None = None) -> int:
             actual_price=args.actual_price,
             actual_date=_coerce_dt(args.actual_date),
             event_date=_coerce_dt(args.event_date),
+            force=args.force_price,
         )
         print(f"{args.thesis_id} → {t['status']} ({args.exit_reason})")
     elif args.command == "update-stop":

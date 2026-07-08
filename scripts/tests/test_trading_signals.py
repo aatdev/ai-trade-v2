@@ -203,8 +203,48 @@ class TestBuildWatchlist:
         assert nflx["pivot"] == 245.0
         assert nflx["stop"] == 260.0
         assert nflx["target"] == 215.0
-        # 1% of 150k = 1500 / (260-245) = 100 shares
+        # Default fallback 1% of 150k = 1500 / (260-245) = 100 shares
         assert nflx["shares"] == 100
+
+    def test_short_risk_pct_follows_profile_budget(self):
+        # Profile risk 0.33% must size shorts at the same budget as longs, not
+        # the module's 1% fallback: 0.33% of 150k = $495 / (260-245) = 33 shares.
+        wl = sig.build_watchlist(
+            "2026-06-11",
+            "restrict",
+            None,
+            make_short_candidates(),
+            None,
+            account_size=150000,
+            short_risk_pct=0.33,
+        )
+        nflx = wl["candidates"][0]
+        assert nflx["shares"] == 33
+        assert nflx["risk_dollars"] == round(33 * (260.0 - 245.0), 2)
+        assert nflx["risk_dollars"] <= 150000 * 0.33 / 100
+
+    def test_short_max_position_pct_from_profile_caps_shares(self):
+        # A tight stop would otherwise size a huge notional; the position cap
+        # (threaded from the profile) must bind.
+        wl = sig.build_watchlist(
+            "2026-06-11",
+            "restrict",
+            None,
+            [
+                {
+                    "symbol": "TGT",
+                    "grade": "A",
+                    "trade_levels": {"entry": 200.0, "stop": 201.0, "target_2r": 194.0},
+                }
+            ],
+            None,
+            account_size=150000,
+            short_risk_pct=0.33,
+            short_max_position_pct=25.0,
+        )
+        tgt = wl["candidates"][0]
+        # 25% of 150k / 200 = 187 shares cap binds before the risk-based count.
+        assert tgt["shares"] == 187
 
     def test_validation_reject_drops_candidate(self):
         validation = {
@@ -333,6 +373,30 @@ class TestOpenSignals:
         heat = make_heat(positions=[long_position()])
         signals = sig.evaluate_signals(wl, heat, {"AAPL": {"price": 156.0}}, "allow", set())
         assert ("AAPL", "OPEN_LONG") not in _types(signals)
+
+    def test_suppress_opens_blocks_open_long(self):
+        # A degraded gate must not arm new longs even when the gate reads "allow".
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NVDA": {"price": 156.0}}, "allow", set(), suppress_opens=True
+        )
+        assert signals == []
+
+    def test_suppress_opens_blocks_open_short(self):
+        wl = make_watchlist([short_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NFLX": {"price": 244.0}}, "restrict", set(), suppress_opens=True
+        )
+        assert signals == []
+
+    def test_suppress_opens_still_manages_open_positions(self):
+        # STOP_HIT on an open position must still fire under a degraded gate.
+        wl = make_watchlist([long_candidate(ticker="AAPL")])
+        heat = make_heat(positions=[long_position()])
+        signals = sig.evaluate_signals(
+            wl, heat, {"AAPL": {"price": 94.5}}, "restrict", set(), suppress_opens=True
+        )
+        assert _types(signals) == [("AAPL", "STOP_HIT")]
 
     def test_missing_quote_is_silent(self):
         wl = make_watchlist([long_candidate()])

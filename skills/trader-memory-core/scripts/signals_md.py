@@ -25,18 +25,28 @@ _SIGNAL_HEADING_RE = re.compile(
 )
 
 
+# Price token with optional thousands separators: "3,960", "1,030.00", "45.50",
+# "98". Without this, a four-figure price like "$3,960" parses as 3.0 (the regex
+# stops at the comma), silently arming a thesis/alert at trigger $3 / stop $4.
+_NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+
+
+def _to_float(raw: str) -> float:
+    return float(raw.replace(",", ""))
+
+
 def _first_dollar(s: str) -> float | None:
     """First $-prefixed number in a line; bare number as fallback."""
-    m = re.search(r"\$\s*(\d+(?:\.\d+)?)", s)
+    m = re.search(rf"\$\s*({_NUM})", s)
     if not m:
-        m = re.search(r"(\d+(?:\.\d+)?)", s)
-    return float(m.group(1)) if m else None
+        m = re.search(rf"({_NUM})", s)
+    return _to_float(m.group(1)) if m else None
 
 
 def _all_dollars(s: str) -> list[float]:
-    out = [float(x) for x in re.findall(r"\$\s*(\d+(?:\.\d+)?)", s)]
+    out = [_to_float(x) for x in re.findall(rf"\$\s*({_NUM})", s)]
     if not out:
-        out = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", s)]
+        out = [_to_float(x) for x in re.findall(rf"({_NUM})", s)]
     return out
 
 

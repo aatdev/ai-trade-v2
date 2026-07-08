@@ -359,6 +359,20 @@ class TestValidation:
         with pytest.raises(ValueError, match="entry_price must be positive"):
             validate_parameters(params)
 
+    def test_stop_and_atr_together_error(self):
+        """Both --stop and --atr defines two conflicting stops -> ValueError
+        (sizing used one while risk was reported against the other)."""
+        params = SizingParameters(
+            account_size=150_000,
+            entry_price=100.0,
+            stop_price=90.0,
+            atr=1.0,
+            atr_multiplier=2.0,
+            risk_pct=0.33,
+        )
+        with pytest.raises(ValueError, match="either --stop .* or --atr"):
+            validate_parameters(params)
+
     def test_risk_pct_and_kelly_mutual_exclusive(self):
         """Both risk_pct and win_rate via CLI -> SystemExit (argparse error)."""
         script = "skills/position-sizer/scripts/position_sizer.py"

@@ -380,23 +380,33 @@ def _mcp_disable_flags(extra: list[str]) -> list[str]:
     return ["--strict-mcp-config"]
 
 
+# CLAUDE_CODE_* keys that carry auth/config rather than nested-session state and
+# must survive the child-env strip (see _child_claude_env).
+CLAUDE_CODE_ENV_PRESERVE = frozenset({"CLAUDE_CODE_OAUTH_TOKEN"})
+
+
 def _child_claude_env() -> dict:
     """Environment for the child ``claude``/``claude-pee`` process.
 
     When the scheduler runs *inside* an active Claude Code session (e.g. a
     ``/weekly`` slash command spawns ``run_trading_schedule.sh`` as a child),
-    the inherited ``CLAUDECODE`` / ``CLAUDE_CODE_*`` markers make the nested
-    ``claude`` skip producing the transcript that ``claude-pee`` polls for --
-    it then exits rc=0 with empty output and the slot silently no-ops. Strip
-    those markers so the child starts a clean session; keep ``CLAUDE_CONFIG_DIR``
-    and ``CLAUDE_BIN`` (auth / binary location) which do not match the prefix.
+    the inherited ``CLAUDECODE`` / ``CLAUDE_CODE_*`` session markers make the
+    nested ``claude`` skip producing the transcript that ``claude-pee`` polls
+    for -- it then exits rc=0 with empty output and the slot silently no-ops.
+    Strip those markers so the child starts a clean session.
+
+    ``CLAUDE_CODE_ENV_PRESERVE`` names keys that must survive the strip:
+    ``CLAUDE_CODE_OAUTH_TOKEN`` matches the ``CLAUDE_CODE_`` prefix but carries
+    the headless login, so blindly dropping the prefix would deauthenticate the
+    child in cron/UI contexts. ``CLAUDE_CONFIG_DIR`` / ``CLAUDE_BIN`` do not
+    match the prefix and pass through untouched.
     """
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
-    # for key in [k for k in env if k.startswith("CLAUDE_CODE_")]:
-    #     del env[key]
-    env["RUST_LOG"] = "debug"
-    log(f"ENVIRONMENT: {' '.join(f'{k}={v!r}' for k, v in env.items())}", logging.INFO)
+    for key in [
+        k for k in env if k.startswith("CLAUDE_CODE_") and k not in CLAUDE_CODE_ENV_PRESERVE
+    ]:
+        del env[key]
     return env
 
 
@@ -1692,18 +1702,24 @@ _SIGNAL_HEADING_RE = re.compile(
 )
 
 
+# Price token with optional thousands separators; commas stripped before float.
+# Kept in sync with skills/trader-memory-core/scripts/signals_md.py and
+# ui/server/src/lib/signals.ts — without it, "$3,960" parses as 3.0.
+_SIGNAL_NUM = r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"
+
+
 def _first_dollar(s: str) -> float | None:
     """First $-prefixed number in a line; bare number as fallback."""
-    m = re.search(r"\$\s*(\d+(?:\.\d+)?)", s)
+    m = re.search(rf"\$\s*({_SIGNAL_NUM})", s)
     if not m:
-        m = re.search(r"(\d+(?:\.\d+)?)", s)
-    return float(m.group(1)) if m else None
+        m = re.search(rf"({_SIGNAL_NUM})", s)
+    return float(m.group(1).replace(",", "")) if m else None
 
 
 def _all_dollars(s: str) -> list[float]:
-    out = [float(x) for x in re.findall(r"\$\s*(\d+(?:\.\d+)?)", s)]
+    out = [float(x.replace(",", "")) for x in re.findall(rf"\$\s*({_SIGNAL_NUM})", s)]
     if not out:
-        out = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)", s)]
+        out = [float(x.replace(",", "")) for x in re.findall(rf"({_SIGNAL_NUM})", s)]
     return out
 
 
@@ -2939,6 +2955,13 @@ def _evening_short_branch(
     ]
     validation = _run_chart_validation(date_str, val_candidates, args)
     profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    # Shorts follow the profile's per-trade risk budget (0.33% for the primary
+    # user), not the module's 1% fallback — an explicit short_risk_pct key wins
+    # if the user wants shorts sized differently from longs.
+    short_risk_pct = float(
+        profile.get("short_risk_pct") or profile.get("risk_pct") or tsig.SHORT_RISK_PCT
+    )
+    short_max_position_pct = float(profile.get("max_position_pct") or tsig.SHORT_MAX_POSITION_PCT)
     wl = tsig.build_watchlist(
         date_str,
         dec["decision"],
@@ -2946,6 +2969,8 @@ def _evening_short_branch(
         shorts,
         validation,
         account_size=profile.get("account_size"),
+        short_risk_pct=short_risk_pct,
+        short_max_position_pct=short_max_position_pct,
         notes=reason,
         source_plan=_rel(short_path) if short_path else None,
     )
@@ -2998,6 +3023,22 @@ def slot_evening_prep(date_str: str, args) -> int:
     _reconcile_ib_closes(date_str, args)
 
     if dec["decision"] != "allow":
+        if dec.get("degraded"):
+            # A fail-safe RESTRICT from a FAILED/missing regime step is not a
+            # genuine bearish read — do NOT screen/ingest/arm new shorts on an
+            # unknown regime. Run only the gate-independent hygiene above and
+            # send a no-new-risk digest.
+            msg = (
+                f"⚠️ {date_str}: режим-гейт деградировал (fail-safe RESTRICT). "
+                "Новый риск не открываем НИ в лонг, НИ в шорт — шорт-скрин "
+                "пропущен. Проверь market-regime вручную (claude-шаг/данные)."
+            )
+            offside_note = _offside_note(terminated_offside)
+            if offside_note:
+                msg += f"\n\n{offside_note}"
+            msg += _care_block(args)
+            notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
+            return 0
         return _evening_short_branch(
             date_str, dec, args, regime_ok=ok, terminated_offside=terminated_offside
         )
@@ -3105,6 +3146,9 @@ def slot_intraday(date_str: str, args) -> int:
         dec["decision"],
         set(state.get("sent") or {}),
         armed_tickers=armed_order_tickers(date_str),
+        # A degraded/fail-safe gate (regime step failed or file missing) is not a
+        # real regime read — manage open positions, but arm no new OPEN either side.
+        suppress_opens=bool(dec.get("degraded")),
     )
     if not signals:
         log(f"intraday: {len(tickers)} тикеров проверено — новых сигналов нет")

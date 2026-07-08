@@ -127,10 +127,11 @@ def test_no_promote_leaves_canonical_dirs_empty(tmp_path):
     assert _read_wl(data_dir)["source_plan"] is None
 
 
-def test_gate_defaults_allow_when_missing(tmp_path):
+def test_gate_defaults_restrict_when_missing(tmp_path):
+    # Fail-safe: a missing exposure_decision file must NOT arm long risk.
     data_dir, vcp, plan_path = _setup(tmp_path, gate=None)
     assert _run(data_dir, vcp, plan_path) == 0
-    assert _read_wl(data_dir)["exposure_decision"] == "allow"
+    assert _read_wl(data_dir)["exposure_decision"] == "restrict"
 
 
 def test_no_plan_writes_empty_watchlist(tmp_path):

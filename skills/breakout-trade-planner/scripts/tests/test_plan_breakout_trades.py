@@ -11,12 +11,28 @@ from datetime import date, datetime, timedelta
 import pytest
 from plan_breakout_trades import (
     generate_plans,
+    load_exposure,
     load_input,
     load_profile,
     main,
     process_candidate,
     validate_result,
 )
+
+
+class TestLoadExposure:
+    def test_none_path_returns_zero_exposure_defaults(self):
+        assert load_exposure(None) == {"sector_exposure": {}, "open_risk_pct": 0.0}
+
+    def test_missing_explicit_path_is_fatal(self, tmp_path):
+        # A supplied-but-missing path must not silently seed open_risk_pct=0.
+        with pytest.raises(FileNotFoundError):
+            load_exposure(str(tmp_path / "does_not_exist.json"))
+
+    def test_existing_path_loads(self, tmp_path):
+        f = tmp_path / "heat.json"
+        f.write_text(json.dumps({"open_risk_pct": 3.1, "sector_exposure": {"Tech": 12.0}}))
+        assert load_exposure(str(f))["open_risk_pct"] == 3.1
 
 
 def _make_args(**overrides) -> argparse.Namespace:
@@ -423,6 +439,60 @@ class TestGeneratePlans:
         meta = plans["input_metadata"]
         assert meta["candidates_in_file"] == 1
         assert meta["input_scope"] == "top_n_only"
+
+
+class TestExposureCapacity:
+    """Position-slot cap and incomplete-heat reserve from the exposure report."""
+
+    def _exposure_file(self, tmp_path, payload):
+        f = tmp_path / "heat.json"
+        f.write_text(json.dumps(payload))
+        return str(f)
+
+    def test_position_slots_cap_actionables(self, tmp_path):
+        # Two eligible candidates, but only 1 free position slot -> the second
+        # (lower score) is deferred, not opened.
+        data = _make_input_data(
+            [
+                _make_vcp_result(symbol="AAA", score=88.0),
+                _make_vcp_result(symbol="BBB", score=82.0),
+            ]
+        )
+        exp = self._exposure_file(
+            tmp_path,
+            {"open_risk_pct": 0.0, "sector_exposure": {}, "remaining_position_slots": 1},
+        )
+        plans = generate_plans(data, _make_args(current_exposure_json=exp))
+        assert plans["summary"]["actionable_count"] == 1
+        assert plans["actionable_orders"][0]["symbol"] == "AAA"
+        deferred_syms = [d["symbol"] for d in plans["deferred"]]
+        assert "BBB" in deferred_syms
+
+    def test_zero_slots_defers_all(self, tmp_path):
+        data = _make_input_data([_make_vcp_result(symbol="AAA", score=88.0)])
+        exp = self._exposure_file(
+            tmp_path,
+            {"open_risk_pct": 0.0, "sector_exposure": {}, "remaining_position_slots": 0},
+        )
+        plans = generate_plans(data, _make_args(current_exposure_json=exp))
+        assert plans["summary"]["actionable_count"] == 0
+
+    def test_incomplete_heat_reserves_headroom(self, tmp_path):
+        # One open position missing its stop (risk_dollars None): heat_complete
+        # is False, so a per-trade budget is reserved and a warning emitted.
+        exp = self._exposure_file(
+            tmp_path,
+            {
+                "open_risk_pct": 0.0,
+                "sector_exposure": {},
+                "heat_complete": False,
+                "positions": [{"ticker": "OLD", "risk_dollars": None}],
+            },
+        )
+        data = _make_input_data([_make_vcp_result(symbol="AAA", score=88.0)])
+        plans = generate_plans(data, _make_args(current_exposure_json=exp, risk_pct=0.33))
+        codes = [w["code"] for w in plans["warnings"]]
+        assert "HEAT_INCOMPLETE" in codes
 
 
 class TestEarningsGate:

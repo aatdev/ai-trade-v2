@@ -100,13 +100,18 @@ def _rel(p: Path) -> str:
 
 
 def _read_gate_decision(schedule_dir: Path, date_str: str) -> str:
-    """Real exposure gate for the day, default 'allow' when the file is absent."""
+    """Real exposure gate for the day.
+
+    Fails safe to 'restrict' when the decision file is missing, unreadable, or
+    carries no decision — the same direction the scheduler uses, so a day whose
+    regime/gate step never ran does not silently arm fresh long risk.
+    """
     f = schedule_dir / f"exposure_decision_{date_str}.json"
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "allow"
-    return str(data.get("decision", "")).strip().lower() or "allow"
+        return "restrict"
+    return str(data.get("decision", "")).strip().lower() or "restrict"
 
 
 def _promote(staged: Path, dest_dir: Path, prefix: str, ts: str) -> Path:

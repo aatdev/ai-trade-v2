@@ -5,7 +5,7 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app';
 import { clearListCache } from './files';
-import { deleteSignal, parseSignalBlocks, signalsFile } from './signals';
+import { deleteSignal, parseSignalBlocks, parseSignalLevels, signalsFile } from './signals';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
 
@@ -24,6 +24,31 @@ describe('parseSignalBlocks', () => {
     expect(blocks[0].date).toBe('2026-06-11');
     expect(blocks[0].status).toContain('BUY');
     expect(blocks[0].markdown.startsWith('## 2026-06-11 — ALB')).toBe(true);
+  });
+});
+
+describe('parseSignalLevels', () => {
+  it('parses four-figure prices with thousands separators in full', () => {
+    // "$1,030.00" must not truncate at the comma to 1.
+    const block = {
+      ticker: 'GEV',
+      date: '2026-06-11',
+      status: '🟢 BUY',
+      markdown: [
+        '## 2026-06-11 — GEV — 🟢 BUY',
+        '- **Trigger для Long:** close 1D > $1,030.00',
+        '- **Stop:** $980.50',
+        '- **T1 / T2 / T3:** $1,118.00 / $1,250.00 / $1,400.00',
+        '- **Entry (Long):** $1,030.00–$1,060.00',
+      ].join('\n'),
+    };
+    const levels = parseSignalLevels(block);
+    expect(levels).not.toBeNull();
+    expect(levels!.trigger).toBe(1030);
+    expect(levels!.stop).toBe(980.5);
+    expect(levels!.t1).toBe(1118);
+    expect(levels!.t2).toBe(1250);
+    expect(levels!.entryHigh).toBe(1060);
   });
 });
 

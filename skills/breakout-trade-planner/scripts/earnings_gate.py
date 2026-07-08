@@ -83,7 +83,7 @@ def fetch_earnings_map(
         EarningsFetchError: On network failure or an unexpected scanner
             response shape.
     """
-    today = today or date.today()
+    today = today or datetime.now(_US_EASTERN).date()
     wanted = {s.upper() for s in symbols if s}
     if not wanted:
         return {}

@@ -15,19 +15,25 @@ def build_pre_place_template(
     worst_entry: float,
     stop_loss: float,
     take_profit: float,
-    time_in_force: str = "day",
+    time_in_force: str = "gtc",
+    client_order_id: str | None = None,
 ) -> dict:
     """Build a stop-limit bracket order template for pre-placement.
 
     This template is placed on the market and auto-triggers when price
     reaches signal_entry (buy stop). Limit at worst_entry prevents chasing.
 
+    Defaults to GTC so a resting pre-breakout entry survives the session close
+    instead of silently expiring (the day-TIF failure fixed for the live IB
+    path). ``client_order_id`` stamps a deterministic id so replaying the same
+    plan does not double-submit the order.
+
     Raises:
         ValueError: On invalid inputs.
     """
     _validate_order_params(qty, signal_entry, worst_entry, stop_loss, take_profit)
 
-    return {
+    order = {
         "execution_mode": "pre_place",
         "requires_monitor_confirmation": False,
         "symbol": symbol,
@@ -41,6 +47,9 @@ def build_pre_place_template(
         "take_profit": {"limit_price": take_profit},
         "stop_loss": {"stop_price": stop_loss},
     }
+    if client_order_id:
+        order["client_order_id"] = client_order_id
+    return order
 
 
 def build_post_confirm_template(
@@ -50,19 +59,23 @@ def build_post_confirm_template(
     stop_loss: float,
     take_profit: float,
     entry_condition: dict,
-    time_in_force: str = "day",
+    time_in_force: str = "gtc",
+    client_order_id: str | None = None,
 ) -> dict:
     """Build a limit bracket order template for post-confirmation mode.
 
     This template is sent after the breakout-monitor confirms 5-min candle
-    conditions (close > pivot, close_loc >= 0.60, RVOL >= 1.5).
+    conditions (close > pivot, close_loc >= 0.60, RVOL >= 1.5). Defaults to GTC
+    (a confirmed entry should not silently expire at the close); pass
+    ``time_in_force="day"`` to keep it session-only. ``client_order_id`` guards
+    against duplicate submission on a plan replay.
 
     Raises:
         ValueError: On invalid inputs.
     """
     _validate_post_confirm_params(qty, worst_entry, stop_loss, take_profit)
 
-    return {
+    order = {
         "execution_mode": "post_confirm",
         "requires_monitor_confirmation": True,
         "entry_condition": entry_condition,
@@ -76,6 +89,9 @@ def build_post_confirm_template(
         "take_profit": {"limit_price": take_profit},
         "stop_loss": {"stop_price": stop_loss},
     }
+    if client_order_id:
+        order["client_order_id"] = client_order_id
+    return order
 
 
 def build_revalidation_advisory(
@@ -188,28 +204,36 @@ def _normalize_ib_tif(time_in_force: str) -> str:
     return tif
 
 
-def _ib_exit_legs(symbol: str, qty: int, stop_loss: float, take_profit: float) -> list[dict]:
+def _ib_exit_legs(
+    symbol: str,
+    qty: int,
+    stop_loss: float,
+    take_profit: float,
+    client_order_id: str | None = None,
+) -> list[dict]:
     """Protective stop + profit-target SELL legs (GTC) shared by both IB modes."""
-    return [
-        {
-            "role": "stop_loss",
-            "symbol": symbol,
-            "action": "SELL",
-            "orderType": "STP",
-            "stopPrice": stop_loss,
-            "quantity": qty,
-            "tif": "GTC",
-        },
-        {
-            "role": "take_profit",
-            "symbol": symbol,
-            "action": "SELL",
-            "orderType": "LMT",
-            "price": take_profit,
-            "quantity": qty,
-            "tif": "GTC",
-        },
-    ]
+    stop_leg = {
+        "role": "stop_loss",
+        "symbol": symbol,
+        "action": "SELL",
+        "orderType": "STP",
+        "stopPrice": stop_loss,
+        "quantity": qty,
+        "tif": "GTC",
+    }
+    tp_leg = {
+        "role": "take_profit",
+        "symbol": symbol,
+        "action": "SELL",
+        "orderType": "LMT",
+        "price": take_profit,
+        "quantity": qty,
+        "tif": "GTC",
+    }
+    if client_order_id:
+        stop_leg["cOID"] = f"{client_order_id}-sl"
+        tp_leg["cOID"] = f"{client_order_id}-tp"
+    return [stop_leg, tp_leg]
 
 
 def build_ib_pre_place_template(
@@ -219,12 +243,17 @@ def build_ib_pre_place_template(
     worst_entry: float,
     stop_loss: float,
     take_profit: float,
-    time_in_force: str = "DAY",
+    time_in_force: str = "GTC",
+    client_order_id: str | None = None,
 ) -> dict:
     """Build an Interactive Brokers pre-placement bracket (leg sequence).
 
     The entry is a buy-stop (STP @ signal_entry). The MCP has no stop-limit, so
     `max_fill_price` (worst_entry) is advisory only — a gap can fill above it.
+
+    Defaults to GTC so a resting pre-breakout entry does not expire at the close.
+    ``client_order_id`` stamps a deterministic ``cOID`` on each leg so replaying
+    the plan does not duplicate live orders.
 
     Raises:
         ValueError: On invalid inputs or time_in_force.
@@ -240,6 +269,8 @@ def build_ib_pre_place_template(
         "quantity": qty,
         "tif": tif,
     }
+    if client_order_id:
+        entry["cOID"] = f"{client_order_id}-entry"
     return {
         "broker": "interactive_brokers",
         "mcp_tool": "place_order",
@@ -250,7 +281,7 @@ def build_ib_pre_place_template(
         "order_class": "bracket",
         "entry_order_type": "STP",
         "max_fill_price": worst_entry,
-        "legs": [entry, *_ib_exit_legs(symbol, qty, stop_loss, take_profit)],
+        "legs": [entry, *_ib_exit_legs(symbol, qty, stop_loss, take_profit, client_order_id)],
         "notes": [
             *_IB_BRACKET_NOTES,
             f"Entry is stop-market (STP @ {signal_entry}), not stop-limit: this MCP "
@@ -267,12 +298,17 @@ def build_ib_post_confirm_template(
     stop_loss: float,
     take_profit: float,
     entry_condition: dict,
-    time_in_force: str = "DAY",
+    time_in_force: str = "GTC",
+    client_order_id: str | None = None,
 ) -> dict:
     """Build an Interactive Brokers post-confirmation bracket (leg sequence).
 
     The entry is a limit (LMT @ worst_entry), sent only after the breakout-monitor
     confirms `entry_condition`. This maps cleanly to IB with no stop-limit gap.
+
+    Defaults to GTC (a confirmed entry should not silently expire); pass
+    ``time_in_force="DAY"`` for session-only. ``client_order_id`` stamps a
+    deterministic ``cOID`` on each leg to guard against duplicate submission.
 
     Raises:
         ValueError: On invalid inputs or time_in_force.
@@ -288,6 +324,8 @@ def build_ib_post_confirm_template(
         "quantity": qty,
         "tif": tif,
     }
+    if client_order_id:
+        entry["cOID"] = f"{client_order_id}-entry"
     return {
         "broker": "interactive_brokers",
         "mcp_tool": "place_order",
@@ -298,6 +336,6 @@ def build_ib_post_confirm_template(
         "qty": qty,
         "order_class": "bracket",
         "entry_order_type": "LMT",
-        "legs": [entry, *_ib_exit_legs(symbol, qty, stop_loss, take_profit)],
+        "legs": [entry, *_ib_exit_legs(symbol, qty, stop_loss, take_profit, client_order_id)],
         "notes": list(_IB_BRACKET_NOTES),
     }

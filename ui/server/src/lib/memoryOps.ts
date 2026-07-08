@@ -216,6 +216,9 @@ export function buildMemoryArgs(body: Record<string, unknown>, stateDir: string)
       );
       const de = pushOptDate(args, '--event-date', body.eventDate);
       if (de) return { error: de };
+      // The CLI refuses an exit price wildly off the thesis's own levels; the
+      // UI can override explicitly when a real exit is genuinely far (a crash).
+      if (body.forcePrice === true) args.push('--force-price');
       return { args, label: `memory: close ${id}` };
     }
     case 'trim': {
@@ -241,6 +244,7 @@ export function buildMemoryArgs(body: Record<string, unknown>, stateDir: string)
       }
       const de = pushOptDate(args, '--event-date', body.eventDate);
       if (de) return { error: de };
+      if (body.forcePrice === true) args.push('--force-price');
       return { args, label: `memory: trim ${id}` };
     }
     case 'terminate': {
@@ -257,6 +261,7 @@ export function buildMemoryArgs(body: Record<string, unknown>, stateDir: string)
       if (de) return { error: de };
       ne = pushOptDate(args, '--event-date', body.eventDate);
       if (ne) return { error: ne };
+      if (body.forcePrice === true) args.push('--force-price');
       return { args, label: `memory: terminate ${id} (${ts})` };
     }
 

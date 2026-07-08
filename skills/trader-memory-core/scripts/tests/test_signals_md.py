@@ -107,3 +107,28 @@ def test_missing_levels_returns_none():
 """
     # No Stop / T1 -> unusable.
     assert signals_md.parse_signals_md(journal, ticker="XYZ") == []
+
+
+def test_thousands_comma_prices_parse_in_full():
+    # A four-figure price must not be truncated at the comma ("$3,960" != 3.0).
+    journal = """## 2026-06-11 — GEV — 🟢 BUY
+
+- **Trigger для Long:** close 1D > $1,030.00
+- **Stop:** $980.50
+- **T1 / T2 / T3:** $1,118.00 / $1,250.00 / $1,400.00
+"""
+    records = signals_md.parse_signals_md(journal, ticker="GEV")
+    assert len(records) == 1
+    r = records[0]
+    assert r["trigger"] == 1030.0
+    assert r["stop"] == 980.5
+    assert (r["t1"], r["t2"], r["t3"]) == (1118.0, 1250.0, 1400.0)
+
+
+def test_first_and_all_dollars_strip_commas():
+    assert signals_md._first_dollar("close > $3,960") == 3960.0
+    assert signals_md._all_dollars("$1,030.00 / $1,118.00 / $95.50") == [
+        1030.0,
+        1118.0,
+        95.5,
+    ]

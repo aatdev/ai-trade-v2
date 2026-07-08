@@ -125,22 +125,30 @@ def calculate_position_size(
     max_position_pct: float = 10.0,
     max_sector_pct: float = 30.0,
     current_sector_exposure: float = 0.0,
+    risk_multiplier_cap: float = 1.0,
 ) -> dict:
     """Calculate position size with portfolio constraints.
 
     Uses worst_entry as the entry price for conservative sizing.
     Self-contained fixed-fractional sizing with constraint checks.
 
+    ``risk_multiplier_cap`` bounds the rating-band multiplier so per-trade
+    risk never exceeds ``base_risk_pct * cap``; the default 1.0 keeps every
+    band at or below the profile's risk budget (boosting above it, e.g. the
+    textbook 1.75x band, is opt-in via profile/CLI).
+
     Returns:
         Dict with shares, position_value, risk_dollars, binding_constraint.
     """
-    effective_risk_pct = base_risk_pct * sizing_multiplier
+    applied_multiplier = min(sizing_multiplier, risk_multiplier_cap)
+    effective_risk_pct = base_risk_pct * applied_multiplier
     if effective_risk_pct <= 0:
         return {
             "shares": 0,
             "position_value": 0.0,
             "risk_dollars": 0.0,
             "effective_risk_pct": 0.0,
+            "sizing_multiplier_applied": applied_multiplier,
             "binding_constraint": "sizing_multiplier_zero",
         }
 
@@ -197,6 +205,7 @@ def calculate_position_size(
         "position_value": position_value,
         "risk_dollars": risk_dollars,
         "effective_risk_pct": round(effective_risk_pct, 4),
+        "sizing_multiplier_applied": applied_multiplier,
         "binding_constraint": binding,
         "constraints_applied": constraints,
     }

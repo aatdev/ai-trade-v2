@@ -50,8 +50,11 @@ _US_EASTERN = ZoneInfo("America/New_York")
 DEFAULT_CHASE_PCT = 2.0
 # "Approaching stop" early-warning band (percent of the stop level).
 NEAR_STOP_BAND_PCT = 1.0
-# Per-trade risk (% of account) for short sizing and for the conservative
-# capacity reserve of unsized candidates (profile risk_pct mirrors this).
+# Fallback per-trade risk (% of account) for short sizing and for the
+# conservative capacity reserve of unsized candidates. These are only used when
+# no profile value is threaded in — the scheduler forwards the account's
+# trading_profile.json ``risk_pct`` (0.33% for the primary user) so shorts are
+# NOT silently risked at 1% while longs sit at the profile budget.
 SHORT_RISK_PCT = 1.0
 DEFAULT_RISK_PCT = 1.0
 SHORT_MAX_POSITION_PCT = 25.0
@@ -305,14 +308,16 @@ def build_watchlist(
     *,
     account_size: float | None = None,
     short_risk_pct: float = SHORT_RISK_PCT,
+    short_max_position_pct: float = SHORT_MAX_POSITION_PCT,
     notes: str = "",
     source_plan: str | None = None,
 ) -> dict:
     """Merge planner output + short screen + validation verdicts into the
     watchlist gate file consumed by the premarket digest and the intraday
     monitor. Long candidates keep the planner's exact numbers; short candidates
-    get half-risk sizing. Validation-rejected names are moved aside (not
-    silently dropped)."""
+    are sized at ``short_risk_pct`` of the account (the scheduler forwards the
+    profile's per-trade risk budget), capped at ``short_max_position_pct``.
+    Validation-rejected names are moved aside (not silently dropped)."""
     verdicts = _validation_index(validation)
     candidates: list[dict] = []
     rejected: list[dict] = []
@@ -365,7 +370,16 @@ def build_watchlist(
         shares = None
         risk_dollars = None
         if account_size and entry and stop:
-            shares = size_short(account_size, entry, stop, risk_pct=short_risk_pct) or None
+            shares = (
+                size_short(
+                    account_size,
+                    entry,
+                    stop,
+                    risk_pct=short_risk_pct,
+                    max_position_pct=short_max_position_pct,
+                )
+                or None
+            )
             if shares:
                 risk_dollars = round(shares * (stop - entry), 2)
         add(
@@ -503,6 +517,7 @@ def evaluate_signals(
     *,
     today: dt.date | None = None,
     armed_tickers: set[str] | None = None,
+    suppress_opens: bool = False,
 ) -> list[dict]:
     """Compute the actionable signals for this monitoring round.
 
@@ -517,6 +532,11 @@ def evaluate_signals(
     ``armed_tickers`` (tickers whose bracket was already placed via the
     watchlist-order daemon) are suppressed from OPEN signals so the trader is not
     told to manually place an order that is already live in Interactive Brokers.
+
+    ``suppress_opens`` arms only position-management signals (STOP_HIT / +2R /
+    earnings) and emits NO new OPEN_LONG/OPEN_SHORT — used when the regime gate
+    is degraded (a failed/missing regime read is not a licence to open risk on
+    an unknown market, on either side).
     """
     today = today or dt.date.today()
     signals: list[dict] = []
@@ -546,6 +566,10 @@ def evaluate_signals(
             )
             if warn["key"] not in sent:
                 signals.append(warn)
+
+    # A degraded gate manages existing positions but never opens new risk.
+    if suppress_opens:
+        return signals
 
     # --- opening signals from the watchlist ---------------------------------
     slots_left = (heat or {}).get("remaining_position_slots")

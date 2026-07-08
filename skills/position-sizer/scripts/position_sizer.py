@@ -144,6 +144,11 @@ def validate_parameters(params: SizingParameters) -> None:
         raise ValueError("risk_pct must be positive")
     if params.atr is not None and params.atr <= 0:
         raise ValueError("atr must be positive")
+    if params.stop_price is not None and params.atr is not None:
+        # Sizing would use the ATR-derived stop while the final risk is reported
+        # against the explicit --stop (or vice versa) — a self-contradictory
+        # report. Require exactly one stop definition.
+        raise ValueError("specify either --stop (fixed stop) or --atr (ATR-derived stop), not both")
     if params.win_rate is not None:
         if params.win_rate <= 0 or params.win_rate > 1.0:
             raise ValueError("win_rate must be between 0 (exclusive) and 1.0 (inclusive)")

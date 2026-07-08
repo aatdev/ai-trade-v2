@@ -16,6 +16,13 @@ import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Earnings dates from the scanner are US-Eastern calendar dates; "today" for the
+# gate and session-validity stamp must be ET too, or a run between midnight and
+# ~06:00 CET (host tz) is a calendar day ahead and lets a stock reporting that
+# session slip past the earnings gate.
+_US_EASTERN = ZoneInfo("America/New_York")
 
 # Add scripts dir to path for sibling imports
 _SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -67,6 +74,7 @@ BUYABLE_RATINGS = {"Textbook VCP", "Strong VCP", "Good VCP"}
 KNOWN_PROFILE_KEYS = {
     "account_size",
     "risk_pct",
+    "risk_multiplier_cap",
     "max_position_pct",
     "max_sector_pct",
     "max_portfolio_heat_pct",
@@ -86,6 +94,7 @@ KNOWN_PROFILE_KEYS = {
 PLANNER_PROFILE_KEYS = {
     "account_size",
     "risk_pct",
+    "risk_multiplier_cap",
     "max_position_pct",
     "max_sector_pct",
     "max_portfolio_heat_pct",
@@ -189,8 +198,19 @@ def load_input(path: str) -> dict:
 
 
 def load_exposure(path: str | None) -> dict:
-    """Load current portfolio exposure or return defaults."""
-    if path and os.path.exists(path):
+    """Load current portfolio exposure, or empty defaults when none is requested.
+
+    A path that was explicitly supplied but does not exist is a hard error: a
+    typo'd or stale ``--current-exposure-json`` must not silently seed
+    ``open_risk_pct = 0`` and let the planner approve a full fresh heat budget on
+    top of positions it never saw.
+    """
+    if path:
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"--current-exposure-json path does not exist: {path} "
+                "(refusing to plan against an unknown open-risk state)"
+            )
         with open(path) as f:
             return json.load(f)
     return {"sector_exposure": {}, "open_risk_pct": 0.0}
@@ -427,6 +447,7 @@ def _build_actionable(
         max_position_pct=args.max_position_pct,
         max_sector_pct=args.max_sector_pct,
         current_sector_exposure=current_sector_exp,
+        risk_multiplier_cap=getattr(args, "risk_multiplier_cap", 1.0),
     )
 
     if sizing["shares"] == 0:
@@ -449,6 +470,17 @@ def _build_actionable(
             },
         }
 
+    # Valid for today if market is open (weekday), otherwise next trading day
+    today = datetime.now(_US_EASTERN).date()
+    if today.weekday() < 5:  # Monday-Friday: valid today
+        valid_date = today
+    else:  # Weekend: next Monday
+        valid_date = today + timedelta(days=7 - today.weekday())
+
+    # Deterministic client-order id: replaying the same plan (same symbol, same
+    # session) reuses this id, so a resting GTC bracket is not double-submitted.
+    client_order_id = f"bp-{base['symbol']}-{valid_date}"
+
     # Build entry condition and order templates
     entry_cond = build_entry_condition(
         pivot=pivot,
@@ -467,6 +499,7 @@ def _build_actionable(
             worst_entry=worst_entry,
             stop_loss=stop_loss,
             take_profit=tp_worst,
+            client_order_id=client_order_id,
         )
         order_templates["post_confirm"] = build_post_confirm_template(
             symbol=base["symbol"],
@@ -475,6 +508,7 @@ def _build_actionable(
             stop_loss=stop_loss,
             take_profit=tp_worst,
             entry_condition=entry_cond,
+            client_order_id=client_order_id,
         )
     if broker in ("ib", "both"):
         order_templates["pre_place_ib"] = build_ib_pre_place_template(
@@ -484,6 +518,7 @@ def _build_actionable(
             worst_entry=worst_entry,
             stop_loss=stop_loss,
             take_profit=tp_worst,
+            client_order_id=client_order_id,
         )
         order_templates["post_confirm_ib"] = build_ib_post_confirm_template(
             symbol=base["symbol"],
@@ -492,14 +527,8 @@ def _build_actionable(
             stop_loss=stop_loss,
             take_profit=tp_worst,
             entry_condition=entry_cond,
+            client_order_id=client_order_id,
         )
-
-    # Valid for today if market is open (weekday), otherwise next trading day
-    today = datetime.now().date()
-    if today.weekday() < 5:  # Monday-Friday: valid today
-        valid_date = today
-    else:  # Weekend: next Monday
-        valid_date = today + timedelta(days=7 - today.weekday())
 
     result = {
         **base,
@@ -521,6 +550,7 @@ def _build_actionable(
             "target_price": tp_worst,
             "reward_risk_ratio": args.target_r_multiple,
             "sizing_multiplier": multiplier,
+            "sizing_multiplier_applied": sizing.get("sizing_multiplier_applied", multiplier),
             "effective_risk_pct": sizing["effective_risk_pct"],
             "shares": sizing["shares"],
             "position_value": sizing["position_value"],
@@ -583,7 +613,7 @@ def generate_plans(
     gate_days = int(getattr(args, "earnings_gate_days", 0) or 0)
     gate_enabled = gate_days > 0
     fund_enabled = int(getattr(args, "fundamental_gate", 0) or 0) > 0
-    today = datetime.now().date()
+    today = datetime.now(_US_EASTERN).date()
 
     # Sort by composite_score descending (highest priority first)
     results_sorted = sorted(results, key=lambda r: r.get("composite_score", 0), reverse=True)
@@ -624,6 +654,33 @@ def generate_plans(
 
     cumulative_risk_pct = exposure.get("open_risk_pct", 0.0)
     sector_tracker: dict[str, float] = {}
+
+    # Heat-ledger completeness: a position missing a stop contributes $0 to
+    # open_risk_pct, so its real risk looks like free headroom. Reserve one
+    # per-trade budget for each unmeasured position before planning new risk.
+    if exposure.get("heat_complete") is False:
+        exposure_positions = exposure.get("positions") or []
+        unknown_count = sum(
+            1 for p in exposure_positions if isinstance(p, dict) and p.get("risk_dollars") is None
+        )
+        unknown_count = max(unknown_count, 1)  # flag set but list unavailable
+        reserve_pct = unknown_count * float(args.risk_pct)
+        cumulative_risk_pct += reserve_pct
+        warnings.append(
+            {
+                "symbol": "*",
+                "code": "HEAT_INCOMPLETE",
+                "message": (
+                    f"heat ledger incomplete: {unknown_count} open position(s) missing "
+                    f"a stop/risk; reserved {reserve_pct:.2f}% heat headroom for them"
+                ),
+            }
+        )
+
+    # Never plan more new entries than there are free position slots (the profile
+    # max_positions cap, surfaced by the heat report as remaining_position_slots).
+    remaining_slots = exposure.get("remaining_position_slots")
+    actionable_slots_used = 0
 
     for result in results_sorted:
         is_valid, warns = validate_result(result)
@@ -681,11 +738,25 @@ def generate_plans(
                 continue
 
         if cls == "actionable":
-            actionable.append(classified["data"])
-            cumulative_risk_pct += classified["risk_pct"]
-            sector = classified["data"]["sector"]
-            pos_pct = classified["data"]["trade_plan"]["position_value"] / args.account_size * 100
-            sector_tracker[sector] = sector_tracker.get(sector, 0.0) + pos_pct
+            if remaining_slots is not None and actionable_slots_used >= remaining_slots:
+                deferred.append(
+                    {
+                        "symbol": classified["data"]["symbol"],
+                        "reason": (
+                            f"Position-slot ceiling: {int(remaining_slots)} free slot(s), "
+                            "all allocated to higher-ranked candidates"
+                        ),
+                    }
+                )
+            else:
+                actionable.append(classified["data"])
+                actionable_slots_used += 1
+                cumulative_risk_pct += classified["risk_pct"]
+                sector = classified["data"]["sector"]
+                pos_pct = (
+                    classified["data"]["trade_plan"]["position_value"] / args.account_size * 100
+                )
+                sector_tracker[sector] = sector_tracker.get(sector, 0.0) + pos_pct
         elif cls == "revalidation":
             revalidation.append(classified["data"])
         elif cls == "watchlist":
@@ -894,6 +965,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Account equity ($); required unless provided via --profile",
     )
     parser.add_argument("--risk-pct", type=float, default=0.5, help="Base risk %% per trade")
+    parser.add_argument(
+        "--risk-multiplier-cap",
+        type=float,
+        default=1.0,
+        help=(
+            "Upper bound on the rating-band sizing multiplier. Default 1.0 keeps "
+            "every band at or below the profile's per-trade risk budget; raise it "
+            "(e.g. 1.75) to opt into boosting textbook setups above base risk."
+        ),
+    )
     parser.add_argument("--max-position-pct", type=float, default=10.0)
     parser.add_argument("--max-sector-pct", type=float, default=30.0)
     parser.add_argument("--max-portfolio-heat-pct", type=float, default=6.0)
@@ -996,14 +1077,18 @@ def main(argv: list[str] | None = None):
                 file=sys.stderr,
             )
 
-    plans = generate_plans(
-        data,
-        args,
-        earnings_map=earnings_map,
-        earnings_fetch_failed=earnings_fetch_failed,
-        fundamentals_map=fundamentals_map,
-        fundamentals_fetch_failed=fundamentals_fetch_failed,
-    )
+    try:
+        plans = generate_plans(
+            data,
+            args,
+            earnings_map=earnings_map,
+            earnings_fetch_failed=earnings_fetch_failed,
+            fundamentals_map=fundamentals_map,
+            fundamentals_fetch_failed=fundamentals_fetch_failed,
+        )
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     os.makedirs(args.output_dir, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
