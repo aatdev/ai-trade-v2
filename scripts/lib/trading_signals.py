@@ -438,7 +438,9 @@ def _signal(sig_type: str, ticker: str, side: str, price: float, **extra) -> dic
     }
 
 
-def _candidate_open_signal(candidate: dict, price: float, gate_decision: str) -> dict | None:
+def _candidate_open_signal(
+    candidate: dict, price: float, gate_decision: str, *, allow_shorts: bool = True
+) -> dict | None:
     """OPEN/MISSED decision for one watchlist candidate at the current price."""
     side = candidate.get("side", "long")
     pivot = candidate.get("pivot")
@@ -456,7 +458,10 @@ def _candidate_open_signal(candidate: dict, price: float, gate_decision: str) ->
         return None
 
     # short side: only when the regime gate forbids new longs (plan rule 6.4 —
-    # never short while the gate is `allow`)
+    # never short while the gate is `allow`), and only when short trading is
+    # enabled (opt-in; mirrors the long-under-restrict gate — silently unarmed).
+    if not allow_shorts:
+        return None
     if gate_decision not in ("restrict", "cash-priority"):
         return None
     worst = candidate.get("worst_entry") or round(pivot * (1 - DEFAULT_CHASE_PCT / 100), 2)
@@ -518,6 +523,7 @@ def evaluate_signals(
     today: dt.date | None = None,
     armed_tickers: set[str] | None = None,
     suppress_opens: bool = False,
+    allow_shorts: bool = True,
 ) -> list[dict]:
     """Compute the actionable signals for this monitoring round.
 
@@ -537,6 +543,11 @@ def evaluate_signals(
     earnings) and emits NO new OPEN_LONG/OPEN_SHORT — used when the regime gate
     is degraded (a failed/missing regime read is not a licence to open risk on
     an unknown market, on either side).
+
+    ``allow_shorts`` (default True) gates NEW short entries only: when False no
+    OPEN_SHORT is armed even for an in-band short candidate (short trading is
+    opt-in in the scheduler). Existing short positions are still managed — the
+    manage-open path below is never gated.
     """
     today = today or dt.date.today()
     signals: list[dict] = []
@@ -585,7 +596,10 @@ def evaluate_signals(
         if not quote:
             continue
         signal = _candidate_open_signal(
-            {**candidate, "ticker": ticker}, quote["price"], gate_decision
+            {**candidate, "ticker": ticker},
+            quote["price"],
+            gate_decision,
+            allow_shorts=allow_shorts,
         )
         # Plan rule 6.4: never hold a short through earnings — a report within
         # the gate window turns the OPEN_SHORT into an explicit skip.
@@ -640,6 +654,7 @@ def premarket_gap_gate(
     gate_decision: str,
     *,
     today: dt.date | None = None,
+    allow_shorts: bool = True,
 ) -> list[dict]:
     """Classify fresh-watchlist candidates against their pre-open price.
 
@@ -650,9 +665,9 @@ def premarket_gap_gate(
     as usual and omitted.
 
     Side gating mirrors ``evaluate_signals`` (longs only on ``allow``; shorts
-    only on ``restrict`` / ``cash-priority``) so a candidate the monitor would
-    not arm anyway is never flagged. Pure / read-only -- the caller decides what
-    to drop from the watchlist.
+    only on ``restrict`` / ``cash-priority``, and only when ``allow_shorts``) so
+    a candidate the monitor would not arm anyway is never flagged. Pure /
+    read-only -- the caller decides what to drop from the watchlist.
     """
     today = today or dt.date.today()
     out: list[dict] = []
@@ -663,6 +678,8 @@ def premarket_gap_gate(
         if not ticker or pivot in (None, 0):
             continue
         if side == "long" and gate_decision != "allow":
+            continue
+        if side == "short" and not allow_shorts:
             continue
         if side == "short" and gate_decision not in ("restrict", "cash-priority"):
             continue

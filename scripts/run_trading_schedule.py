@@ -38,7 +38,9 @@ keeps these anchored to the US open/close through the DST transition weeks):
                             exact entry/stop/target/shares + thesis ingest.
                             Under restrict/cash-priority the short branch runs
                             instead (swing-short-screener, plan step 6) when the
-                            market-pressure conditions hold.
+                            market-pressure conditions hold -- but ONLY when short
+                            trading is enabled (TRADING_ENABLE_SHORTS; off by
+                            default, the system is long-only otherwise).
   weekly        Sat ~12:00  Weekly background block (plan step 8): IBD
                             distribution days, macro regime, FTD detector
                             (deterministic) + market-top via claude/WebSearch.
@@ -543,6 +545,23 @@ def _stream_enabled() -> bool:
     scripts/run_trading_schedule.sh --slot weekly``.
     """
     return os.environ.get("TRADING_SCHEDULE_STREAM", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def shorts_enabled() -> bool:
+    """Whether the automated system may open NEW short risk.
+
+    Off by default — the scheduler is long-only unless explicitly enabled. When
+    ``TRADING_ENABLE_SHORTS`` is truthy the evening short branch runs under
+    restrict / cash-priority and OPEN_SHORT is armed in premarket / intraday;
+    otherwise both are skipped. Managing already-open short positions is never
+    gated by this flag.
+    """
+    return os.environ.get("TRADING_ENABLE_SHORTS", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -1502,7 +1521,9 @@ def _premarket_gap_block(date_str: str, wl_file, wl_data: dict, dec: dict, args)
         today = dt.date.fromisoformat(date_str)
     except ValueError:
         today = dt.date.today()
-    flagged = tsig.premarket_gap_gate(wl_data, quotes, dec["decision"], today=today)
+    flagged = tsig.premarket_gap_gate(
+        wl_data, quotes, dec["decision"], today=today, allow_shorts=shorts_enabled()
+    )
     if not flagged:
         log(f"premarket gap-gate: {len(tickers)} тикеров проверено — гэпов вне плана нет")
         return ""
@@ -3039,6 +3060,22 @@ def slot_evening_prep(date_str: str, args) -> int:
             msg += _care_block(args)
             notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
             return 0
+        if not shorts_enabled():
+            # Short trading is opt-in: under a genuine restrict / cash-priority
+            # gate we neither screen nor arm new shorts unless the operator has
+            # set TRADING_ENABLE_SHORTS. Gate-independent hygiene (offside
+            # theses, close cards, IB reconcile) already ran above.
+            msg = (
+                f"⚠️ {date_str}: режим-гейт {dec['decision'].upper()} — новый лонг-риск "
+                "не открываем, а работа с шортом отключена (TRADING_ENABLE_SHORTS "
+                "не задан). Шорт-скрин пропущен. Включить: TRADING_ENABLE_SHORTS=1 в .env."
+            )
+            offside_note = _offside_note(terminated_offside)
+            if offside_note:
+                msg += f"\n\n{offside_note}"
+            msg += _care_block(args)
+            notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
+            return 0
         return _evening_short_branch(
             date_str, dec, args, regime_ok=ok, terminated_offside=terminated_offside
         )
@@ -3149,6 +3186,10 @@ def slot_intraday(date_str: str, args) -> int:
         # A degraded/fail-safe gate (regime step failed or file missing) is not a
         # real regime read — manage open positions, but arm no new OPEN either side.
         suppress_opens=bool(dec.get("degraded")),
+        # Short trading is opt-in: never arm OPEN_SHORT from a stale short
+        # candidate unless TRADING_ENABLE_SHORTS is set (managing open shorts
+        # is unaffected).
+        allow_shorts=shorts_enabled(),
     )
     if not signals:
         log(f"intraday: {len(tickers)} тикеров проверено — новых сигналов нет")

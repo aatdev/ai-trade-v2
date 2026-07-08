@@ -45,6 +45,26 @@ def test_first_sunday_detection():
 
 
 # --------------------------------------------------------------------------- #
+# Short-trading opt-in flag (TRADING_ENABLE_SHORTS)
+# --------------------------------------------------------------------------- #
+def test_shorts_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("TRADING_ENABLE_SHORTS", raising=False)
+    assert ts.shorts_enabled() is False
+
+
+def test_shorts_enabled_for_truthy_values(monkeypatch):
+    for val in ("1", "true", "TRUE", "yes", "on", " On "):
+        monkeypatch.setenv("TRADING_ENABLE_SHORTS", val)
+        assert ts.shorts_enabled() is True, val
+
+
+def test_shorts_disabled_for_falsey_values(monkeypatch):
+    for val in ("", "0", "false", "no", "off", "maybe"):
+        monkeypatch.setenv("TRADING_ENABLE_SHORTS", val)
+        assert ts.shorts_enabled() is False, val
+
+
+# --------------------------------------------------------------------------- #
 # Exposure gate parsing (fail-safe behaviour)
 # --------------------------------------------------------------------------- #
 def test_missing_gate_file_defaults_to_restrict(tmp_path):
@@ -266,9 +286,7 @@ class TestMcpDisableFlags:
 
     def test_noop_when_caller_supplied_mcp_config(self):
         # ticker-analysis opts into the TradingView MCP; do not force it off.
-        assert (
-            ts._mcp_disable_flags(["--mcp-config", "/tmp/tv.json", "--strict-mcp-config"]) == []
-        )
+        assert ts._mcp_disable_flags(["--mcp-config", "/tmp/tv.json", "--strict-mcp-config"]) == []
         assert ts._mcp_disable_flags(["--mcp-config", "/tmp/tv.json"]) == []
 
     def test_noop_when_operator_already_strict(self):
@@ -974,8 +992,15 @@ class TestEveningHybrid:
         quotes_map=None,
         heat_ok=True,
         universe_tickers=None,
+        enable_shorts=False,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
+        # Short trading is opt-in (TRADING_ENABLE_SHORTS). Short-branch tests set
+        # this; long-branch tests leave the default off.
+        if enable_shorts:
+            monkeypatch.setenv("TRADING_ENABLE_SHORTS", "1")
+        else:
+            monkeypatch.delenv("TRADING_ENABLE_SHORTS", raising=False)
         # Control the expanded liquid universe (scripts/lib/data/vcp_universe.txt)
         # hermetically — both the long VCP screen and the short screen read it.
         # Default [] keeps the bundled S&P 500 fallback path deterministic
@@ -1107,6 +1132,7 @@ class TestEveningHybrid:
             market_top=market_top,
             short_candidates=shorts,
             universe_tickers=["AAPL", "MSFT", "NVDA"],  # expanded liquid universe
+            enable_shorts=True,
         )
         assert rc == 0
         assert any("short" in c for c in calls)
@@ -1152,6 +1178,7 @@ class TestEveningHybrid:
             market_top=market_top,
             short_candidates=shorts,
             universe_tickers=[],  # no expanded universe → fallback
+            enable_shorts=True,
         )
         assert rc == 0
         short_cmd = next(v for k, v in self.script_cmds.items() if "swing-short-screener" in k)
@@ -1193,6 +1220,7 @@ class TestEveningHybrid:
             market_top=market_top,
             short_candidates=shorts,
             quotes_map=quotes_map,
+            enable_shorts=True,
         )
         assert rc == 0
         wl = json.loads(
@@ -1202,10 +1230,41 @@ class TestEveningHybrid:
         assert any("Исключены перед отчётом" in m and "ADBE" in m for m in sent)
 
     def test_restrict_without_market_top_skips_shorts(self, monkeypatch, tmp_path):
-        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="restrict")
+        # Shorts enabled but no market-pressure evidence → the short branch runs
+        # yet skips (fail-safe), sending the "closed" digest.
+        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="restrict", enable_shorts=True)
         assert rc == 0
         assert not any("short" in c for c in calls)
         assert sent and "ЗАКРЫТ" in sent[0]
+
+    def test_restrict_with_shorts_disabled_skips_short_branch(self, monkeypatch, tmp_path):
+        # Default (TRADING_ENABLE_SHORTS unset): even with full market pressure,
+        # the short branch never runs and the digest names the opt-in flag.
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        shorts = [
+            {
+                "symbol": "NFLX",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": 245.0, "stop": 260.0, "target_2r": 215.0},
+            }
+        ]
+        rc, calls, sent = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            short_candidates=shorts,
+            enable_shorts=False,
+        )
+        assert rc == 0
+        assert not any("short" in c for c in calls)  # no screen / ingest / heat
+        assert not (tmp_path / "schedule" / "watchlist_2026-06-11.json").exists()
+        assert sent and "TRADING_ENABLE_SHORTS" in sent[0]
 
     def test_fresh_ftd_blocks_shorts(self, monkeypatch, tmp_path):
         market_top = {
@@ -1213,7 +1272,13 @@ class TestEveningHybrid:
             "components": {"distribution_days": {"effective_count": 6.0}},
             "follow_through_day": {"ftd_detected": True},
         }
-        rc, calls, _ = self._run(monkeypatch, tmp_path, decision="restrict", market_top=market_top)
+        rc, calls, _ = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            enable_shorts=True,
+        )
         assert rc == 0
         assert not any("short" in c for c in calls)
 
@@ -1970,6 +2035,7 @@ def test_open_short_signal_embeds_journal_commands(monkeypatch, tmp_path):
     """Shorts get the same copy-paste journal commands as longs once the short
     branch registers theses."""
     _patch_trading_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("TRADING_ENABLE_SHORTS", "1")  # OPEN_SHORT is opt-in
     _gate(tmp_path, "2026-06-11", "restrict")
     short_cand = {
         "ticker": "NFLX",
@@ -2115,7 +2181,12 @@ class TestTvIntegration:
         }
         helper = TestEveningHybrid()
         rc, calls, sent = helper._run(
-            monkeypatch, tmp_path, decision="restrict", market_top=market_top, tv_up=False
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            tv_up=False,
+            enable_shorts=True,
         )
         assert rc == 1
         assert sent and "TradingView" in sent[0]

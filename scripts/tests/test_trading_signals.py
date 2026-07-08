@@ -330,6 +330,31 @@ class TestOpenSignals:
         )
         assert _types(signals) == [("NFLX", "MISSED")]
 
+    def test_open_short_suppressed_when_shorts_disabled(self):
+        # Short trading opt-in: an in-band short candidate is NOT armed when
+        # allow_shorts=False, even under a genuine restrict gate.
+        wl = make_watchlist([short_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NFLX": {"price": 244.0}}, "restrict", set(), allow_shorts=False
+        )
+        assert signals == []
+
+    def test_disabling_shorts_leaves_longs_untouched(self):
+        # The flag gates only new short risk — a valid long still arms.
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(
+            wl, make_heat(), {"NVDA": {"price": 156.0}}, "allow", set(), allow_shorts=False
+        )
+        assert _types(signals) == [("NVDA", "OPEN_LONG")]
+
+    def test_open_short_still_manages_position_when_shorts_disabled(self):
+        # allow_shorts=False must NOT stop managing an already-open short.
+        heat = make_heat(positions=[short_position()])
+        signals = sig.evaluate_signals(
+            None, heat, {"NFLX": {"price": 261.0}}, "restrict", set(), allow_shorts=False
+        )
+        assert _types(signals) == [("NFLX", "STOP_HIT")]
+
     def test_no_capacity_slots_emits_skipped(self):
         wl = make_watchlist([long_candidate()])
         heat = make_heat(remaining_position_slots=0)
@@ -592,18 +617,14 @@ class TestPremarketGapGate:
 
     def test_earnings_today_blocks_armed_long(self):
         wl = make_watchlist([long_candidate()])
-        quotes = {
-            "NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-06-12"}
-        }
+        quotes = {"NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-06-12"}}
         flagged = sig.premarket_gap_gate(wl, quotes, "allow", today=_THU)  # Fri = 1 weekday
         assert _verdicts(flagged) == [("NVDA", sig.GAP_EARNINGS)]
         assert flagged[0]["days_to_earnings"] == 1
 
     def test_earnings_far_does_not_block_armed_long(self):
         wl = make_watchlist([long_candidate()])
-        quotes = {
-            "NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-07-30"}
-        }
+        quotes = {"NVDA": {"price": 156.0, "premarket_price": 156.0, "earnings_date": "2026-07-30"}}
         assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
 
     def test_long_not_flagged_when_gate_not_allow(self):
@@ -635,6 +656,13 @@ class TestPremarketGapGate:
         wl = make_watchlist([short_candidate()])
         quotes = {"NFLX": {"price": 235.0, "premarket_price": 235.0}}
         assert sig.premarket_gap_gate(wl, quotes, "allow", today=_THU) == []
+
+    def test_short_not_flagged_when_shorts_disabled(self):
+        # A short the monitor would not arm (allow_shorts=False) is never
+        # gap-flagged — mirrors evaluate_signals' side gate.
+        wl = make_watchlist([short_candidate()])
+        quotes = {"NFLX": {"price": 235.0, "premarket_price": 235.0}}
+        assert sig.premarket_gap_gate(wl, quotes, "restrict", today=_THU, allow_shorts=False) == []
 
     def test_empty_watchlist_returns_empty(self):
         assert sig.premarket_gap_gate(None, {}, "allow", today=_THU) == []
