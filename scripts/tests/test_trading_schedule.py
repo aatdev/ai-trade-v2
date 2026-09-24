@@ -2600,6 +2600,9 @@ class TestWeeklySlot:
             return True
 
         monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+        # Hermetic: the deterministic scripts only run with TradingView up; the
+        # test must not depend on whether the host's CDP endpoint is reachable.
+        monkeypatch.setattr(ts, "tv_available", lambda **k: True)
         sent = []
         monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
         rc = ts.main(["--slot", "weekly", "--date", "2026-06-13", "--no-telegram"])

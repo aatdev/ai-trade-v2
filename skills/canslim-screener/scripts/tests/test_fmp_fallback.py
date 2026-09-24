@@ -276,12 +276,15 @@ class TestCallerRegression:
     def test_canslim_exits_on_quote_failure(self):
         """get_quote("^GSPC") → None causes sys.exit(1)."""
         with patch.dict(os.environ, {"FMP_API_KEY": "test_key"}):  # pragma: allowlist secret
-            from fmp_client import FMPClient
+            # screen_canslim runs on the TradingView data layer (tv_client's
+            # FMPClient-compatible class): patch THAT class, not fmp_client's —
+            # patching the wrong one sent these tests to the live network.
+            import screen_canslim
+
+            FMPClient = screen_canslim.FMPClient
 
             with patch.object(FMPClient, "get_quote", return_value=None):
                 with patch("sys.argv", ["screen_canslim.py", "--max-candidates", "1"]):
-                    import screen_canslim
-
                     with pytest.raises(SystemExit) as exc_info:
                         screen_canslim.main()
                     assert exc_info.value.code == 1
@@ -289,7 +292,9 @@ class TestCallerRegression:
     def test_canslim_continues_on_historical_failure(self, capsys):
         """get_historical_prices("^GSPC") → None prints EMA fallback warning and continues."""
         with patch.dict(os.environ, {"FMP_API_KEY": "test_key"}):  # pragma: allowlist secret
-            from fmp_client import FMPClient
+            import screen_canslim
+
+            FMPClient = screen_canslim.FMPClient
 
             mock_quote = [
                 {
@@ -319,8 +324,6 @@ class TestCallerRegression:
                     "sys.argv", ["screen_canslim.py", "--max-candidates", "1", "--universe", "AAPL"]
                 ),
             ):
-                import screen_canslim
-
                 # Should NOT raise SystemExit — historical failure is non-fatal
                 try:
                     screen_canslim.main()

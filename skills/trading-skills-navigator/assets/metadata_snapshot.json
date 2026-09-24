@@ -18,6 +18,22 @@
       "timeframe": "research"
     },
     {
+      "category": "swing-opportunity",
+      "difficulty": "advanced",
+      "display_name": "Bottom Flow Divergence Screener",
+      "id": "bottom-flow-divergence-screener",
+      "integrations": [
+        {
+          "id": "tradingview",
+          "requirement": "not_required",
+          "type": "screener"
+        }
+      ],
+      "status": "production",
+      "summary": "Screen beaten-down US stocks near 52-week lows whose flows refuse to confirm the bottom — fundamental (revenue still growing + positive operating cash flow) and accumulation (Chaikin / Money Flow) divergence — and emit a graded A / B-accum / B-fund reversal watchlist.",
+      "timeframe": "daily"
+    },
+    {
       "category": "market-regime",
       "difficulty": "intermediate",
       "display_name": "Breadth Chart Analyst",

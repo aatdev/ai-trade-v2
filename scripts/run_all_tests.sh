@@ -17,10 +17,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Skills with known pre-existing test failures.
 # These are excluded from the gate so that the pre-push hook is usable.
 # Remove a skill from this list once its failures are fixed.
-KNOWN_SKIP=(
-    "theme-detector"    # 27 pre-existing failures
-    "canslim-screener"  # requires bs4 (optional dep, not in dev extras)
-)
+# (empty — every skill suite is gated; bash 3.2-safe expansions below)
+KNOWN_SKIP=()
 
 FAILED=0
 TOTAL=0
@@ -29,7 +27,7 @@ FAILED_SKILLS=()
 
 is_skipped() {
     local skill="$1"
-    for s in "${KNOWN_SKIP[@]}"; do
+    for s in ${KNOWN_SKIP[@]+"${KNOWN_SKIP[@]}"}; do
         [ "$s" = "$skill" ] && return 0
     done
     return 1
@@ -78,9 +76,9 @@ fi
 
 echo "=== Summary: $((TOTAL - FAILED))/$TOTAL passed, $SKIPPED skipped ==="
 if [ ${#KNOWN_SKIP[@]} -gt 0 ]; then
-    echo "Skipped (known failures): ${KNOWN_SKIP[*]}"
+    echo "Skipped (known failures): ${KNOWN_SKIP[*]-}"
 fi
 if [ $FAILED -gt 0 ]; then
-    echo "FAILED: ${FAILED_SKILLS[*]}"
+    echo "FAILED: ${FAILED_SKILLS[*]-}"
     exit 1
 fi
