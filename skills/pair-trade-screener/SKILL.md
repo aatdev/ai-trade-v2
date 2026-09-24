@@ -90,10 +90,13 @@ Narrow focus to specific industry within sector:
 - Adjustments: Adjusted for splits and dividends
 - Clean data: No gaps or missing values
 
-**FMP API Endpoint:**
+**FMP API Endpoint** (current keys — `/api/v3` is legacy-only since 2025-08-31):
 ```
-GET /v3/historical-price-full/{symbol}?apikey=YOUR_API_KEY
+GET /stable/historical-price-eod/dividend-adjusted?symbol={symbol}&apikey=YOUR_API_KEY
 ```
+Sector universe: `/stable/company-screener` (paid plans); on a plan where it is
+restricted the screener falls back to the public TradingView scanner (no key).
+Both live in `scripts/fmp_data.py`.
 
 **Data Validation:**
 - Verify consistent date ranges across all symbols
@@ -103,7 +106,7 @@ GET /v3/historical-price-full/{symbol}?apikey=YOUR_API_KEY
 
 **Script Execution:**
 ```bash
-python scripts/fetch_price_data.py --sector Technology --lookback 730
+python scripts/find_pairs.py --sector Technology --lookback-days 730   # fetches prices itself (scripts/fmp_data.py)
 ```
 
 ### Step 3: Calculate Correlation and Beta
@@ -603,7 +606,7 @@ Solutions:
 
 ## API Requirements
 
-- **Required**: FMP API key (free tier sufficient)
+- **Required**: FMP API key (free tier sufficient — prices via `/stable`; the sector list falls back to the public TradingView scanner when `company-screener` is not in your plan)
 - **Rate Limits**: ~250 requests/day on free tier
 - **Data Usage**: ~2 requests per symbol for 2-year history
 - **Upgrade**: Professional plan ($29/mo) recommended for frequent screening

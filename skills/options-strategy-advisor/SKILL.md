@@ -973,9 +973,7 @@ Workflow:
 - `references/volatility_guide.md` - HV vs IV, when to trade (future)
 
 **Scripts:**
-- `scripts/black_scholes.py` - Pricing engine and Greeks
-- `scripts/strategy_analyzer.py` - Strategy simulation
-- `scripts/earnings_strategy.py` - Earnings-specific analysis
+- `scripts/black_scholes.py` - Pricing engine, Greeks and strategy P/L simulation (the only bundled script)
 
 **External Resources:**
 - Options Playbook: https://www.optionsplaybook.com/

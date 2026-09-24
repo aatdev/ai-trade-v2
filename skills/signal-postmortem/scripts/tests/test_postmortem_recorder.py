@@ -227,3 +227,31 @@ class TestIntegration:
         assert loaded["ticker"] == "MSFT"
         assert loaded["outcome_category"] == "TRUE_POSITIVE"
         assert loaded["realized_returns"]["5d"] == 0.024
+
+
+class TestFetchPriceDataStable:
+    """FMP retired /api/v3 for new keys and `stable/historical-price-full` 404s;
+    the live stable endpoint is historical-price-eod/full (flat list)."""
+
+    def test_uses_stable_eod_full_flat_list(self, monkeypatch):
+        import postmortem_recorder as pr
+
+        calls = []
+
+        class _Resp:
+            status_code = 200
+
+            def json(self):
+                return [
+                    {"symbol": "AAPL", "date": "2026-09-24", "close": 335.92},
+                    {"symbol": "AAPL", "date": "2026-09-23", "close": 337.02},
+                ]
+
+        def fake_get(url, params=None, timeout=None, **k):
+            calls.append(url)
+            return _Resp()
+
+        monkeypatch.setattr(pr.requests, "get", fake_get)
+        prices = pr.fetch_price_data("AAPL", "2026-09-23", "2026-09-24", "k")
+        assert prices == {"2026-09-24": 335.92, "2026-09-23": 337.02}
+        assert calls[0].endswith("/stable/historical-price-eod/full")

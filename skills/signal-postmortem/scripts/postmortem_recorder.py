@@ -37,8 +37,10 @@ def fetch_price_data(ticker: str, start_date: str, end_date: str, api_key: str) 
     if not HAS_REQUESTS:
         return {}
 
+    # stable/historical-price-eod/full returns a flat list (the old stable
+    # path historical-price-full 404s); v3 kept only for legacy keys.
     endpoints = [
-        ("https://financialmodelingprep.com/stable/historical-price-full", True),
+        ("https://financialmodelingprep.com/stable/historical-price-eod/full", True),
         ("https://financialmodelingprep.com/api/v3/historical-price-full", False),
     ]
     for base_url, is_stable in endpoints:
@@ -54,7 +56,9 @@ def fetch_price_data(ticker: str, start_date: str, end_date: str, api_key: str) 
                 continue
             data = resp.json()
             historical = None
-            if isinstance(data, dict) and "historical" in data:
+            if isinstance(data, list):
+                historical = [row for row in data if isinstance(row, dict) and "date" in row]
+            elif isinstance(data, dict) and "historical" in data:
                 historical = data["historical"]
             elif isinstance(data, dict) and "historicalStockList" in data:
                 for entry in data["historicalStockList"]:

@@ -108,6 +108,18 @@ def _bars_call_timeout(n_symbols: int) -> int:
     return _BARS_TIMEOUT_BASE + _BARS_TIMEOUT_PER_SYMBOL * n_symbols
 
 
+# Consecutive "CDP connection failed" results after which the client stops
+# spawning the CLI and raises TVUnavailableError on every call (each dead-CDP
+# call burns ~16s of connect retries; a full-universe screen used to run for
+# hours against an unreachable TradingView Desktop).
+CDP_FAILURE_LIMIT = 2
+_CDP_DOWN_MARKERS = ("CDP connection failed", "ECONNREFUSED", "connect ETIMEDOUT")
+
+
+class TVUnavailableError(ConnectionError):
+    """TradingView Desktop's CDP endpoint is unreachable — fail the run fast."""
+
+
 class ApiCallBudgetExceeded(Exception):
     """Parity with FMPClient's budget exception. TradingView has no per-call
     quota, so this is never raised here — it exists only so skills that do
@@ -199,7 +211,17 @@ class TVClient:
         self._cli_argv = _resolve_cli()
 
     # ------------------------------------------------------------------ CLI
+    def _cdp_failed(self) -> None:
+        self._cdp_failures = getattr(self, "_cdp_failures", 0) + 1
+        if self._cdp_failures >= CDP_FAILURE_LIMIT:
+            raise TVUnavailableError(
+                f"TradingView Desktop CDP unreachable ({self._cdp_failures} consecutive "
+                "failures) — start TradingView with remote debugging / check TV_CDP_HOST"
+            )
+
     def _cli(self, *args: str, parse: bool = True, timeout: float = 40):
+        if getattr(self, "_cdp_failures", 0) >= CDP_FAILURE_LIMIT:
+            raise TVUnavailableError("TradingView Desktop CDP unreachable (breaker open)")
         self.api_calls_made += 1
         try:
             out = subprocess.run(
@@ -211,6 +233,12 @@ class TVClient:
         except subprocess.TimeoutExpired:
             print(f"  WARN: tv {' '.join(args)} timed out", file=sys.stderr)
             return None
+        text = f"{out.stdout or ''}{out.stderr or ''}"
+        if any(m in text for m in _CDP_DOWN_MARKERS):
+            print(f"  WARN: tv {' '.join(args)}: CDP connection failed", file=sys.stderr)
+            self._cdp_failed()
+            return None
+        self._cdp_failures = 0
         if out.returncode != 0:
             # A CLI checkout that predates `tv bars` rejects it with a plain
             # "Unknown command" on stderr — remember that so the fast path

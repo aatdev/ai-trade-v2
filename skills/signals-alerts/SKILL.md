@@ -157,7 +157,7 @@ node .claude/skills/signals-alerts/scripts/delete_alerts.mjs --tickers NVDA --me
 
 Запусти `mcp__tradingview__tv_health_check`. Если падает — выведи в чат:
 
-> ❌ TradingView Desktop недоступен. Запусти `tv launch` или `./scripts/launch_tv_debug_mac.sh` и попробуй ещё раз.
+> ❌ TradingView Desktop недоступен. Запусти `tv launch` или `vendor/tradingview-mcp/scripts/launch_tv_debug_mac.sh` и попробуй ещё раз.
 
 …и остановись.
 

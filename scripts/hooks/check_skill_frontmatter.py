@@ -22,6 +22,26 @@ def parse_frontmatter(text: str) -> dict[str, str]:
     return dict(FIELD_RE.findall(match.group(1)))
 
 
+def _strict_yaml_error(text: str) -> str | None:
+    """Parse the frontmatter with a real YAML parser (the skill reviewer and
+    packagers do); the flat regex above accepts `description: a: b`, which
+    PyYAML rejects. Skipped when PyYAML is not installed."""
+    try:
+        import yaml
+    except ImportError:
+        return None
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        return None
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        return str(exc).splitlines()[0]
+    if not isinstance(data, dict):
+        return "frontmatter is not a mapping"
+    return None
+
+
 def check_skill_md(filepath: str) -> list[str]:
     """Validate a single SKILL.md file. Return list of error messages."""
     errors = []
@@ -42,6 +62,14 @@ def check_skill_md(filepath: str) -> list[str]:
 
     if not fm:
         errors.append(f"  {filepath}: missing YAML frontmatter (---)")
+        return errors
+
+    strict_error = _strict_yaml_error(text)
+    if strict_error:
+        errors.append(
+            f"  {filepath}: frontmatter is not valid YAML ({strict_error}) — "
+            "quote the value (e.g. description: '...') when it contains ': '"
+        )
         return errors
 
     name = fm.get("name", "").strip().strip("'\"")
