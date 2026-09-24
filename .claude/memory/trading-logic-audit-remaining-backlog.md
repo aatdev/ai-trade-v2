@@ -8,13 +8,13 @@ metadata:
   modified: 2026-09-24T19:24:56.171Z
 ---
 
-2026-07-07 audit fixed 11 findings (commit 5dd25f0). 2026-09-24 re-audit (read-only) confirmed nearly all remaining items STILL PRESENT and found new ones. Fix plan phases 1-7 agreed 2026-09-24; phase 1 done, phases 2-7 (gating, reconcile, VCP, swing-short, skills, data/cron) open.
+2026-07-07 audit fixed 11 findings (commit 5dd25f0). 2026-09-24 re-audit (read-only) confirmed nearly all remaining items STILL PRESENT and found new ones. Fix plan phases 1-7 agreed 2026-09-24; phases 1-2 done, phases 3-7 (gating, reconcile, VCP, swing-short, skills, data/cron) open.
 
 **Operational state (2026-09-24):** autopilot crontab line commented out → no production runs since 2026-07-08. journal/theses holds only 4 files (_index.json rewritten 07-08 09:14, no audit trail; 07-05 monthly counted 78). Tests write to prod `trading-data/logs/trading_schedule.log` (LOG_FILE not monkeypatched); a 07-07 pytest run invalidated ~27 real short theses.
 
 **Sizing / heat — FIXED 2026-09-24 (commit 2fe43fa, phase 1):** worst-fill sizing (tsig.risk_sized_shares), validated-short 1% leak, geometry rejection (rejected_by_geometry), pending GTC brackets reserved in heat (pending_entries), intraday/tap heat fail-closed (≤30h, HEAT_MAX_AGE_HOURS), tap-time gate re-check (gate_ok_for), short-branch heat fail-safe. Note: stale prod heat now blocks UI open-now until a slot/`trader_memory_cli heat` rebuilds it.
 
-**Gating:** gate outcome depends on whether LLM passes optional macro-regime input (never produced daily → REDUCE_ONLY since 06-26); evening run can reuse morning exposure_decision file (run_claude checks existence, not mtime); FTD/IBD/market-top only weekly and `_latest` without age → shorts armed through fresh FTD; exposure ceiling never enforced; validation fails open (rank>3 or failed step → armed); screener crash → rc=0 "no setups"; `_auto_analyze_reconcile` no geometry/freshness/chase/HOLD checks.
+**Gating — FIXED 2026-09-24 (commit bf01960, phase 2):** evening deterministic regime inputs (breadth/uptrend/macro/FTD/IBD) before claude; exposure-coach re-run bounds LLM gate (clamp, ceiling ≤ coach, degraded → coach fallback); run_claude output-freshness (mtime) + read_decision date check; FTD/IBD ≤20h for shorts; coach staleness/all-missing=CASH/ceiling cap/No-FTD n/a; only validated candidates arm; screener crash → rc 1. **Still open:** exposure ceiling is not enforced as a portfolio limit in the planner (awaiting user decision); reconcile checks (phase 3).
 
 **VCP screener:** passes_trend_filter ignores calculator `passed`; RS ranked vs survivors; SPY fail → rs_rank 0 not None; volume zones index wrong bars (volume_pattern_calculator.py:189,219); sector always Unknown with --universe → sector gate dead; no bar-date freshness; os_read_ohlcv asc+2000 latent time bomb (OpenSearch never pruned); vcp_universe.txt from 2026-06-15. Prod: 0 actionable longs in whole period.
 
