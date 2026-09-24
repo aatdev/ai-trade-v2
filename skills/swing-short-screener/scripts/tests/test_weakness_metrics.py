@@ -73,3 +73,24 @@ def test_compute_metrics_exposes_atr_and_swing_high(downtrend_bars):
     m = compute_metrics(downtrend_bars)
     assert m["atr14"] is not None and m["atr14"] > 0
     assert "swing_high_20" in m
+
+
+def test_ma200_falling_flag():
+    from weakness_metrics import compute_metrics
+
+    # Steady decline, most-recent-first: MA200 today < MA200 20 sessions ago.
+    bars = [
+        {
+            "date": f"d{i}",
+            "open": 100 - i * -0.1,
+            "high": 101 + i * 0.1,
+            "low": 99 + i * 0.1,
+            "close": 100 + i * 0.1,
+            "volume": 1_000_000,
+        }
+        for i in range(260)
+    ]
+    m = compute_metrics(bars)
+    assert m["ma200_falling"] is True
+    rising = list(reversed([{**b} for b in bars]))
+    assert compute_metrics(rising)["ma200_falling"] is False

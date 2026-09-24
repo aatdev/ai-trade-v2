@@ -3329,6 +3329,28 @@ def _filter_shorts_on_earnings(shorts: list, args) -> tuple[list, str]:
     return kept, ""
 
 
+def _filter_shorts_on_signals(shorts: list, date_str: str) -> tuple[list, str]:
+    """Drop short candidates whose recent ticker-analysis (within
+    FRESH_ANALYSIS_WEEKDAYS) reads BUY or HOLD — the long branch's reconcile
+    applies the same veto; the short branch had none (prod: REGN shorted against
+    a 4-day-old BUY)."""
+    kept, dropped = [], []
+    for s in shorts:
+        sym = str(s.get("symbol", "")).upper()
+        sig = _parse_signals_md(sym) if sym else None
+        ws = _weekdays_since(sig["date"], as_of=date_str) if sig else None
+        if sig and ws is not None and ws <= FRESH_ANALYSIS_WEEKDAYS and sig["direction"] != "short":
+            dropped.append(f"{sym} ({sig['direction']} {sig['date']})")
+        else:
+            kept.append(s)
+    if dropped:
+        log("short signals veto: исключены по свежему анализу: " + ", ".join(dropped))
+        return kept, "🧭 Исключены по свежему анализу (BUY/HOLD в signals.md): " + ", ".join(
+            dropped
+        )
+    return kept, ""
+
+
 def _evening_short_branch(
     date_str: str,
     dec: dict,
@@ -3421,6 +3443,9 @@ def _evening_short_branch(
     )
     shorts = ((_read_json(short_path) or {}).get("candidates") or []) if short_path else []
     shorts, earnings_note = _filter_shorts_on_earnings(shorts, args)
+    shorts, signals_note = _filter_shorts_on_signals(shorts, date_str)
+    if signals_note:
+        earnings_note = f"{earnings_note}\n\n{signals_note}" if earnings_note else signals_note
     val_candidates = [
         {
             "ticker": s.get("symbol"),

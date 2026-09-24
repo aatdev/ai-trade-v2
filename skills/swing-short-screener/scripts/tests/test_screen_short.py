@@ -248,3 +248,13 @@ def test_main_writes_reports(tmp_path):
     payload = json.loads(json_file.read_text())
     assert "candidates" in payload and "meta" in payload
     assert any(c["symbol"] == "WEAK" for c in payload["candidates"])
+
+
+def test_stage4_requires_falling_ma200():
+    from screen_short import passes_short_filter
+
+    m = {"below_ma200": True, "ma200_falling": False, "price": 50.0, "avg_dollar_vol": 1e9}
+    ok, reason = passes_short_filter(m)
+    assert ok is False and reason == "ma200_not_falling"
+    m["ma200_falling"] = True
+    assert passes_short_filter(m)[0] is True

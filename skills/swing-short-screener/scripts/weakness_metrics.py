@@ -130,6 +130,10 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
     ma50_prev = sma(closes, 50, offset=10)  # MA50 ~2 weeks ago for slope
     if ma50 is None or ma200 is None or ma50_prev is None:
         return None
+    # MA200 ~1 month ago: Stage 4 = price below a FALLING 200-day line. With
+    # too little history the slope is unknown -> not falling (fail-closed).
+    ma200_prev = sma(closes, 200, offset=20)
+    ma200_falling = ma200_prev is not None and ma200 < ma200_prev
 
     # Volume: today vs trailing 20-session average (excluding today).
     avg_vol_20 = sma(vols, 20, offset=1) or 0.0
@@ -173,6 +177,8 @@ def compute_metrics(bars: list[dict], rs_lookback: int = 63) -> Optional[dict]:
         "below_ma200": price < ma200,
         "death_cross": ma50 < ma200,
         "ma50_falling": ma50 < ma50_prev,
+        "ma200_prev": round(ma200_prev, 2) if ma200_prev is not None else None,
+        "ma200_falling": ma200_falling,
         "rsi14": rsi(closes, 14),
         "stock_return": pct_return(closes, rs_lookback),
         "vol_ratio": round(vol_ratio, 2),

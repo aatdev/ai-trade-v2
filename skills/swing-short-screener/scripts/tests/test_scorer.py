@@ -21,6 +21,7 @@ def _clean_stage4_metrics(**overrides):
         "below_ma200": True,
         "death_cross": True,
         "ma50_falling": True,
+        "ma200_falling": True,
         "rsi14": 38.0,
         "stock_return": -0.18,
         "vol_ratio": 2.4,
@@ -45,15 +46,34 @@ def test_trend_structure_full_marks():
 
 def test_trend_structure_partial():
     m = _clean_stage4_metrics(death_cross=False, ma50_falling=False)
-    # below_ma200 (40) + below_ma50 (20) = 60
-    assert score_trend_structure(m) == 60.0
+    # below_ma200 (30) + ma200_falling (20) + below_ma50 (15) = 65
+    assert score_trend_structure(m) == 65.0
+
+
+def test_trend_structure_rewards_falling_ma200():
+    rising = score_trend_structure(_clean_stage4_metrics(ma200_falling=False))
+    assert rising == 80.0
 
 
 def test_relative_strength_underperformance():
-    # stock -20% vs index +0% → rel -0.20 → max score
-    assert score_relative_strength(-0.20, 0.0) == 100.0
+    # stock -30% vs index +0% → rel -0.30 → max score (was -20%: saturated
+    # almost every weak name at 100)
+    assert score_relative_strength(-0.30, 0.0) == 100.0
+    assert score_relative_strength(-0.15, 0.0) == 50.0
     # outperforming the index → 0
     assert score_relative_strength(0.05, 0.0) == 0.0
+
+
+def test_grade_a_requires_a_support_breakdown():
+    # Weak on every other axis but no break yet: that is a B watchlist name,
+    # not a prime A short (prod: 40% of names sat at exactly 80.0 / grade A).
+    m = _clean_stage4_metrics(
+        broke_support=False, vol_ratio=1.0, stock_return=-0.40, lower_high_pct=0.10
+    )
+    r = score_candidate(m, spy_return=0.0)
+    assert r["raw_grade"] == "A"
+    assert r["grade"] == "B"
+    assert r["no_breakdown"] is True
 
 
 def test_base_breakdown_volume_component():

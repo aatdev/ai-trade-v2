@@ -114,6 +114,10 @@ def passes_short_filter(
         return False, "insufficient_history"
     if not metrics["below_ma200"]:
         return False, "above_ma200_not_stage4"
+    if not metrics.get("ma200_falling"):
+        # Stage 4 is price below a FALLING MA200; below a rising one is a
+        # Stage 2 pullback, the textbook bear trap for shorts.
+        return False, "ma200_not_falling"
     if metrics["price"] < min_price:
         return False, "price_below_min"
     if metrics["avg_dollar_vol"] < min_dollar_vol:

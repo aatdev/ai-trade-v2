@@ -21,6 +21,8 @@ Grade Bands:
   50-64:  C  - Developing weakness, watchlist
   <50:    D  - Weak signal, skip
 
+A requires a support breakdown (base_breakdown >= 50), else capped at B.
+
 State Cap:
   oversold_extended (RSI < 25 or > 20% below MA50) → grade capped at C.
   Shorting a falling knife late invites a mean-reversion bounce; the cap
@@ -36,6 +38,13 @@ COMPONENT_WEIGHTS = {
     "lower_highs": 0.15,
     "liquidity": 0.10,
 }
+
+# Relative underperformance vs the index that maxes the RS factor.
+RS_FULL_UNDERPERFORMANCE = 0.30
+
+# Grade A needs an actual breakdown: without a support break (base_breakdown
+# below this) the name is weak but not yet triggered -> capped at B.
+GRADE_A_MIN_BREAKDOWN = 50.0
 
 # Stop buffer above the last swing high, in ATRs — keeps the stop out of
 # one-bar noise without ballooning the risk distance.
@@ -60,15 +69,17 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 100.0) -> float:
 
 
 def score_trend_structure(m: dict) -> float:
-    """Stage 4 trend points: below MA200 (40), death cross (25),
-    below MA50 (20), MA50 falling (15)."""
+    """Stage 4 trend points: below MA200 (30), MA200 falling (20), death
+    cross (20), below MA50 (15), MA50 falling (15)."""
     score = 0.0
     if m.get("below_ma200"):
-        score += 40
-    if m.get("death_cross"):
-        score += 25
-    if m.get("below_ma50"):
+        score += 30
+    if m.get("ma200_falling"):
         score += 20
+    if m.get("death_cross"):
+        score += 20
+    if m.get("below_ma50"):
+        score += 15
     if m.get("ma50_falling"):
         score += 15
     return round(score, 1)
@@ -78,12 +89,13 @@ def score_relative_strength(stock_return: Optional[float], spy_return: Optional[
     """Underperformance vs the index over the RS lookback.
 
     rel = stock_return - spy_return (negative == weaker than index).
-    -20% relative underperformance or worse → 100; at-or-above index → 0.
+    -30% relative underperformance or worse → 100; at-or-above index → 0.
+    (At -20% nearly every Stage 4 name saturated at 100 and RS stopped ranking.)
     """
     if stock_return is None or spy_return is None:
         return 0.0
     rel = stock_return - spy_return
-    return round(_clamp((-rel / 0.20) * 100), 1)
+    return round(_clamp((-rel / RS_FULL_UNDERPERFORMANCE) * 100), 1)
 
 
 def score_base_breakdown(m: dict) -> float:
@@ -194,6 +206,9 @@ def score_candidate(
         if (oversold_extended or squeeze_risk or sector_fight)
         else raw_grade
     )
+    no_breakdown = components["base_breakdown"] < GRADE_A_MIN_BREAKDOWN
+    if grade == "A" and no_breakdown:
+        grade = "B"
     cap_applied = grade != raw_grade
 
     # Short trade levels: enter near current price, stop above the most recent
@@ -220,6 +235,7 @@ def score_candidate(
         "oversold_extended": oversold_extended,
         "squeeze_risk": squeeze_risk,
         "squeeze_reason": squeeze_reason,
+        "no_breakdown": no_breakdown,
         "sector_fight": sector_fight,
         "sector_etf": sector_info.get("etf"),
         "sector_rs": sector_info.get("sector_rs"),

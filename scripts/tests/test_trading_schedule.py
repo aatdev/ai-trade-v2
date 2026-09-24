@@ -2943,3 +2943,19 @@ def test_fresh_universe_file_is_not_warned(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "log", lambda msg, *a, **k: logged.append(msg))
     assert ts._read_vcp_universe() == ["AAPL"]
     assert not any("устарел" in m for m in logged)
+
+
+def test_short_candidates_with_recent_buy_signal_are_dropped(monkeypatch, tmp_path):
+    """REGN was shorted 06-22 against a 06-18 BUY in signals.md."""
+    _patch_trading_dirs(monkeypatch, tmp_path)
+    sigs = {
+        "REGN": {"ticker": "REGN", "date": "2026-06-18", "direction": "long"},
+        "ALLE": {"ticker": "ALLE", "date": "2026-06-18", "direction": "hold"},
+        "XP": {"ticker": "XP", "date": "2026-06-18", "direction": "short"},
+        "OLD": {"ticker": "OLD", "date": "2026-05-01", "direction": "long"},
+    }
+    monkeypatch.setattr(ts, "_parse_signals_md", lambda t: sigs.get(t))
+    shorts = [{"symbol": t} for t in ("REGN", "ALLE", "XP", "OLD", "NEW")]
+    kept, note = ts._filter_shorts_on_signals(shorts, "2026-06-22")
+    assert [s["symbol"] for s in kept] == ["XP", "OLD", "NEW"]
+    assert "REGN" in note and "ALLE" in note

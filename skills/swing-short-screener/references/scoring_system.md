@@ -4,7 +4,7 @@
 
 | Factor | Weight | Source |
 |--------|--------|--------|
-| Trend Structure (Stage 4) | 30% | MA50/MA200 position, death cross, MA50 slope |
+| Trend Structure (Stage 4) | 30% | MA50/MA200 position, MA200 slope, death cross, MA50 slope |
 | Relative Strength (inverted) | 25% | Underperformance vs SPY over the lookback |
 | Base Breakdown on Volume | 20% | Prior 20-day support break + volume expansion |
 | Lower-Highs Structure | 15% | Recent 20d swing high vs prior 20d swing high |
@@ -19,9 +19,10 @@ Additive points:
 
 | Condition | Points |
 |-----------|--------|
-| Price below MA200 | 40 |
-| Death cross (MA50 < MA200) | 25 |
-| Price below MA50 | 20 |
+| Price below MA200 | 30 |
+| MA200 falling (vs ~20 sessions ago) | 20 |
+| Death cross (MA50 < MA200) | 20 |
+| Price below MA50 | 15 |
 | MA50 falling (vs ~10 sessions ago) | 15 |
 
 A perfect Stage 4 structure scores 100.
@@ -29,9 +30,10 @@ A perfect Stage 4 structure scores 100.
 ### 2. Relative Strength (0-100)
 `rel = stock_return − index_return` over the RS lookback (default 63 sessions).
 
-- `rel ≤ −20%` (20pts+ underperformance) → 100
+- `rel ≤ −30%` (30pts+ underperformance) → 100
 - `rel ≥ 0%` (matches or beats index) → 0
-- Linear in between: `score = clamp(−rel / 0.20 × 100, 0, 100)`
+- Linear in between: `score = clamp(−rel / 0.30 × 100, 0, 100)` (at −20% nearly
+  every Stage 4 name saturated at 100)
 
 ### 3. Base Breakdown on Volume (0-100)
 - Support break (latest close below the prior 20-session low): **+50**
@@ -59,7 +61,7 @@ Price < $5 halves the score (low-float squeeze risk).
 
 | Composite | Grade | Guidance |
 |-----------|-------|----------|
-| 80-100 | A | Clean Stage 4 weakness — prime swing-short candidate |
+| 80-100 | A | Clean Stage 4 weakness — prime swing-short candidate. **Requires a support breakdown** (Base Breakdown ≥ 50), else capped at B (`no_breakdown`) |
 | 65-79 | B | Strong weakness — tradable on a confirmed break |
 | 50-64 | C | Developing weakness — watchlist |
 | <50 | D | Weak signal — skip (dropped unless `--min-grade D`) |
@@ -70,6 +72,7 @@ A name is rejected before scoring if any of:
 
 - **Insufficient history** (< 200 sessions — cannot compute MA200)
 - **Above MA200** (`above_ma200_not_stage4`) — not a Stage 4 decline
+- **MA200 not falling** (`ma200_not_falling`, vs ~20 sessions ago) — below a rising MA200 is a Stage 2 pullback, not Stage 4
 - **Price < `--min-price`** (default $5, `price_below_min`)
 - **Avg dollar volume < `--min-dollar-vol`** (default $3M, `illiquid_squeeze_risk`)
 
