@@ -263,6 +263,8 @@ VCP_SCREEN_SCRIPT = SKILLS_DIR / "vcp-screener" / "scripts" / "screen_vcp.py"
 # it instead of the bundled S&P 500 — the long VCP screen and the short
 # swing-short screen. Delete the file to revert both to the S&P 500.
 VCP_UNIVERSE_FILE = PROJECT_ROOT / "scripts" / "lib" / "data" / "vcp_universe.txt"
+# Liquidity / market-cap floors drift: warn when the universe is older than this.
+UNIVERSE_MAX_AGE_DAYS = 30
 SHORT_SCREEN_SCRIPT = SKILLS_DIR / "swing-short-screener" / "scripts" / "screen_short.py"
 PLANNER_SCRIPT = SKILLS_DIR / "breakout-trade-planner" / "scripts" / "plan_breakout_trades.py"
 TRADER_MEMORY_CLI = SKILLS_DIR / "trader-memory-core" / "scripts" / "trader_memory_cli.py"
@@ -869,6 +871,20 @@ def _read_vcp_universe() -> list[str]:
         lines = VCP_UNIVERSE_FILE.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
+    for ln in lines:
+        m = re.match(r"#\s*Generated:\s*(\d{4}-\d{2}-\d{2})", ln.strip())
+        if m:
+            try:
+                age = (dt.date.today() - dt.date.fromisoformat(m.group(1))).days
+            except ValueError:
+                break
+            if age > UNIVERSE_MAX_AGE_DAYS:
+                log(
+                    f"VCP universe устарел: сгенерирован {m.group(1)} ({age} дн. назад) — "
+                    "пересобери: python3 scripts/build_vcp_universe.py",
+                    logging.WARNING,
+                )
+            break
     return [s.strip() for ln in lines if (s := ln.strip()) and not s.startswith("#")]
 
 

@@ -225,7 +225,15 @@ def run_live(args) -> tuple[list[dict], dict]:
 
     # Resolve the universe.
     if args.universe:
-        universe = [{"symbol": s, "name": s, "sector": ""} for s in args.universe]
+        # Sector / name from the liquid-universe sidecar so the sector-RS gate
+        # works on a custom universe too (was "" for every name).
+        from universe_meta import load_universe_meta, maps_for_universe
+
+        sectors, names, _caps = maps_for_universe(args.universe, load_universe_meta())
+        universe = [
+            {"symbol": s, "name": names.get(s, s), "sector": sectors.get(s, "")}
+            for s in args.universe
+        ]
     else:
         constituents = client.get_sp500_constituents() or []
         universe = [

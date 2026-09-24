@@ -35,6 +35,24 @@ SECTOR_ETF = {
     "Basic Materials": "XLB",
     "Communication Services": "XLC",
     "Communications": "XLC",
+    # TradingView scanner taxonomy (the liquid-universe metadata source).
+    "Electronic Technology": "XLK",
+    "Technology Services": "XLK",
+    "Finance": "XLF",
+    "Health Technology": "XLV",
+    "Health Services": "XLV",
+    "Retail Trade": "XLY",
+    "Consumer Services": "XLY",
+    "Consumer Durables": "XLY",
+    "Consumer Non-Durables": "XLP",
+    "Producer Manufacturing": "XLI",
+    "Industrial Services": "XLI",
+    "Transportation": "XLI",
+    "Commercial Services": "XLI",
+    "Distribution Services": "XLI",
+    "Energy Minerals": "XLE",
+    "Non-Energy Minerals": "XLB",
+    "Process Industries": "XLB",
 }
 
 # A sector ETF out/under-performing SPY by >= this many percentage points over

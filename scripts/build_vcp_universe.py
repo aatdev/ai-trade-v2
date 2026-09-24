@@ -24,6 +24,7 @@ Regenerate periodically (constituents/liquidity drift):
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -45,8 +46,11 @@ def build_universe(
     min_avg_volume: str,
     min_market_cap: str,
     timeout: int = 30,
-) -> tuple[list[str], int]:
-    """Return (bare tickers sorted by market cap desc, total matches)."""
+) -> tuple[list[str], int, dict[str, dict]]:
+    """Return (bare tickers sorted by market cap desc, total matches, metadata).
+
+    Metadata is {TICKER: {"sector", "name", "market_cap"}} from the scanner's
+    overview columns (TradingView sector taxonomy)."""
     filters = [
         f"close>{min_price}",
         f"avg_volume_30d>{min_avg_volume}",
@@ -64,15 +68,27 @@ def build_universe(
     response = tv.run_scan(payload, "america", timeout=timeout)
     total = int(response.get("totalCount", 0))
 
+    cols = list(payload.get("columns") or [])
+
+    def col(row: list, name: str):
+        return row[cols.index(name)] if name in cols and cols.index(name) < len(row) else None
+
     seen: set[str] = set()
     tickers: list[str] = []
+    meta: dict[str, dict] = {}
     for item in response.get("data", []):
         raw = item.get("s", "")  # e.g. "NASDAQ:AAPL"
         ticker = raw.split(":", 1)[1] if ":" in raw else raw
         if ticker and ticker not in seen:
             seen.add(ticker)
             tickers.append(ticker)
-    return tickers, total
+            row = item.get("d") or []
+            meta[ticker] = {
+                "sector": col(row, "sector") or "",
+                "name": col(row, "description") or ticker,
+                "market_cap": col(row, "market_cap_basic"),
+            }
+    return tickers, total, meta
 
 
 def main() -> int:
@@ -100,7 +116,7 @@ def main() -> int:
         flush=True,
     )
     try:
-        tickers, total = build_universe(
+        tickers, total, meta = build_universe(
             limit=args.limit,
             exchanges=exchanges,
             min_price=args.min_price,
@@ -130,6 +146,14 @@ def main() -> int:
         "# Regenerate: python3 scripts/build_vcp_universe.py",
     ]
     out_path.write_text("\n".join(header + tickers) + "\n", encoding="utf-8")
+    # Sidecar sector/name/market-cap metadata for --universe screens (see
+    # scripts/lib/universe_meta.py); the ticker file format stays unchanged.
+    meta_path = out_path.with_name(out_path.stem + "_meta.json")
+    meta_path.write_text(
+        json.dumps({"generated_at": generated, "tickers": meta}, ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
+    print(f"Wrote sector metadata → {meta_path}")
 
     print(f"Wrote {len(tickers)} tickers (of {total} matches) → {out_path}")
     if total > len(tickers):

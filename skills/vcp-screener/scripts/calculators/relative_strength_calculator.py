@@ -55,11 +55,22 @@ def calculate_relative_strength(
         }
 
     if not sp500_prices or len(sp500_prices) < 63:
+        # Benchmark unavailable: RS is UNKNOWN (None), not "rank 0" — a zero
+        # failed criterion 7 for every stock and silently zeroed the RS score.
+        return {
+            "score": 0,
+            "rs_rank_estimate": None,
+            "weighted_rs": None,
+            "error": "Insufficient S&P 500 price data (need 63+ days)",
+        }
+
+    stock_prices, sp500_prices = _align_on_dates(stock_prices, sp500_prices)
+    if len(stock_prices) < 63 or len(sp500_prices) < 63:
         return {
             "score": 0,
             "rs_rank_estimate": 0,
             "weighted_rs": None,
-            "error": "Insufficient S&P 500 price data (need 63+ days)",
+            "error": "Insufficient overlapping stock/S&P 500 dates (need 63+)",
         }
 
     stock_closes = [d.get("close", d.get("adjClose", 0)) for d in stock_prices]
@@ -68,6 +79,7 @@ def calculate_relative_strength(
     weighted_rs = 0.0
     total_weight = 0.0
     period_details = []
+    partial_used = False
 
     for period_days, weight in RS_PERIODS:
         if len(stock_closes) > period_days and len(sp500_closes) > period_days:
@@ -87,7 +99,14 @@ def calculate_relative_strength(
                     "relative_pct": round(relative, 2),
                 }
             )
-        elif len(stock_closes) > period_days // 2 and len(sp500_closes) > period_days // 2:
+        elif (
+            not partial_used
+            and len(stock_closes) > period_days // 2
+            and len(sp500_closes) > period_days // 2
+        ):
+            # Only the first under-covered period uses the full available span;
+            # longer ones would reuse the SAME window and double-count it.
+            partial_used = True
             # Partial data: use available days with reduced weight
             available = min(len(stock_closes) - 1, len(sp500_closes) - 1)
             stock_return = _period_return(stock_closes, available)
@@ -129,6 +148,25 @@ def calculate_relative_strength(
         "period_details": period_details,
         "error": None,
     }
+
+
+def _align_on_dates(stock: list[dict], bench: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Restrict both most-recent-first series to their common dates.
+
+    Returns are compared by bar POSITION; a stock missing a session (halt,
+    stale feed, later listing) would otherwise be measured against a
+    different SPY window. Series without dates are returned unchanged."""
+    s_dates = [d.get("date") for d in stock]
+    b_dates = [d.get("date") for d in bench]
+    if not all(s_dates) or not all(b_dates):
+        return stock, bench
+    common = set(s_dates) & set(b_dates)
+    if len(common) == len(s_dates) == len(b_dates):
+        return stock, bench
+    return (
+        [d for d in stock if d["date"] in common],
+        [d for d in bench if d["date"] in common],
+    )
 
 
 def _period_return(closes: list[float], period: int) -> float:

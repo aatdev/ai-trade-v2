@@ -278,9 +278,36 @@ def passes_trend_filter(tt_result: dict, trend_min_score: float = 85.0) -> bool:
     """Check if a stock passes Phase 2 trend template filter.
 
     Uses raw_score (before extended penalty) so that the CLI --trend-min-score
-    flag can override the calculator's hardcoded 85-point gate.
+    flag can override the calculator's hardcoded 85-point gate — but the
+    calculator's MANDATORY items (RS > 70, price > SMA50 > SMA200) always apply:
+    a 6/7 score with failed RS used to slip through. Missing flag fails closed.
     """
+    if not tt_result.get("hard_gates_passed", False):
+        return False
     return tt_result.get("raw_score", 0) >= trend_min_score
+
+
+def universe_ranked_rs(survivors: dict[str, dict], population: dict[str, dict]) -> dict[str, dict]:
+    """RS percentile/score for each survivor, ranked against the WHOLE candidate
+    population (every pre-filtered name with a history), not only the Phase-3
+    survivors — among 30 genuinely strong survivors the weakest used to rank
+    ~3rd percentile and lose ~12 composite points."""
+    pool = {**population, **survivors}
+    ranked = rank_relative_strength_universe(pool)
+    return {sym: ranked[sym] for sym in survivors}
+
+
+# Latest bar more than this many calendar days older than the benchmark's
+# means a stale/halted feed; such a history is not scored as current.
+MAX_BENCHMARK_AGE_DAYS = 4
+
+
+def bars_are_current(history: list[dict], benchmark_last_date: str | None) -> bool:
+    """History's newest bar (most-recent-first) is the benchmark's newest date."""
+    if not history or not benchmark_last_date:
+        return False
+    last = history[0].get("date")
+    return bool(last) and str(last)[:10] == str(benchmark_last_date)[:10]
 
 
 # Plan checklist 5.3 hard floors: price >= $15 and >= $25M/day dollar volume.
@@ -397,6 +424,7 @@ def analyze_stock(
         pivot_price=pivot_price,
         contractions=vcp_result.get("contractions"),
         breakout_volume_ratio=breakout_volume_ratio,
+        lookback_days=lookback_days,
     )
 
     # 5. Pivot Proximity
@@ -621,10 +649,19 @@ def main():
     # Build sector/name lookup
     sector_map = {}
     name_map = {}
+    cap_map: dict = {}
     if not args.universe and constituents:
         for c in constituents:
             sector_map[c["symbol"]] = c.get("sector", "Unknown")
             name_map[c["symbol"]] = c.get("name", c["symbol"])
+    else:
+        # Custom universe has no constituents feed: take sector / name / cap
+        # from the liquid-universe sidecar (else every sector is "Unknown" and
+        # the sector-RS gate never fires).
+        from universe_meta import load_universe_meta, maps_for_universe
+
+        sector_map, name_map, cap_map = maps_for_universe(symbols, load_universe_meta())
+        print(f"  Universe metadata: sectors for {len(sector_map)}/{len(symbols)} symbols")
 
     # Batch fetch quotes
     print("  Fetching quotes...", end=" ", flush=True)
@@ -660,10 +697,27 @@ def main():
     print("  Fetching SPY 260-day history...", end=" ", flush=True)
     spy_data = client.get_historical_prices("SPY", days=260)
     sp500_history = spy_data.get("historical", []) if spy_data else []
-    if sp500_history:
-        print(f"OK ({len(sp500_history)} days)")
-    else:
-        print("WARN - SPY data unavailable, RS calculations will be limited")
+    if len(sp500_history) < 63:
+        # Without the benchmark RS is unknowable: every rating would silently
+        # drop a tier. Fail the run so the scheduler reports it (not "no setups").
+        print("FAILED")
+        print(
+            "ERROR: SPY history unavailable — relative strength cannot be computed", file=sys.stderr
+        )
+        sys.exit(1)
+    spy_last_date = str(sp500_history[0].get("date") or "")[:10]
+    try:
+        spy_age = (datetime.now().date() - datetime.strptime(spy_last_date, "%Y-%m-%d").date()).days
+    except ValueError:
+        spy_age = None
+    if spy_age is None or spy_age > MAX_BENCHMARK_AGE_DAYS:
+        print("FAILED")
+        print(
+            f"ERROR: SPY data is stale (last bar {spy_last_date or '?'}) — data layer not current",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"OK ({len(sp500_history)} days, last {spy_last_date})")
 
     # Fetch historical data for candidates
     candidate_symbols = [c[0] for c in candidates]
@@ -680,14 +734,20 @@ def main():
     # Apply Trend Template filter
     print("  Applying 7-point Trend Template...", end=" ", flush=True)
     trend_passed = []
+    universe_rs: dict[str, dict] = {}
+    stale_bars: list[str] = []
 
     for sym, likelihood, quote in candidates:
         hist = candidate_histories.get(sym, [])
         if not hist or len(hist) < 50:
             continue
+        if not bars_are_current(hist, spy_last_date):
+            stale_bars.append(sym)
+            continue
 
-        # Quick RS calculation for criterion 7
+        # Quick RS calculation for criterion 7 (kept for the universe ranking)
         rs_result = calculate_relative_strength(hist, sp500_history)
+        universe_rs[sym] = rs_result
         rs_rank = rs_result.get("rs_rank_estimate", 0)
 
         tt_result = calculate_trend_template(
@@ -697,6 +757,12 @@ def main():
             trend_passed.append((sym, quote))
 
     print(f"{len(trend_passed)} passed")
+    if stale_bars:
+        print(
+            f"  Skipped {len(stale_bars)} with a stale last bar (≠ SPY {spy_last_date}): "
+            + ", ".join(stale_bars[:10])
+            + (" …" if len(stale_bars) > 10 else "")
+        )
     print()
 
     # ========================================================================
@@ -729,6 +795,8 @@ def main():
 
     for sym, quote in trend_passed:
         hist = candidate_histories.get(sym, [])
+        if not quote.get("marketCap") and cap_map.get(sym):
+            quote = {**quote, "marketCap": cap_map[sym]}
         sector = sector_map.get(sym, "Unknown")
         name = name_map.get(sym, sym)
 
@@ -776,7 +844,7 @@ def main():
     # Re-rank RS across the universe for percentile-based scoring
     if results:
         rs_map = {r["symbol"]: r["relative_strength"] for r in results}
-        ranked_rs = rank_relative_strength_universe(rs_map)
+        ranked_rs = universe_ranked_rs(rs_map, universe_rs)
         for r in results:
             r["relative_strength"] = ranked_rs[r["symbol"]]
             # Recalculate composite score with updated RS (preserving state caps)

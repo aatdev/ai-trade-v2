@@ -23,7 +23,7 @@ A stock MUST pass all (or nearly all) of these criteria to be in a confirmed Sta
 | 2 | 150-day SMA > 200-day SMA | Shorter MA above longer (bullish alignment) |
 | 3 | 200-day SMA trending up for 22+ trading days | Long-term trend is up |
 | 4 | Price > 50-day SMA | Above intermediate trend line |
-| 5 | Price at least 25% above 52-week low | Sufficient distance from lows |
+| 5 | Price at least 30% above 52-week low | Sufficient distance from lows (Minervini canon) |
 | 6 | Price within 25% of 52-week high | Not in a deep correction |
 | 7 | Relative Strength rating > 70 | Outperforming most stocks |
 

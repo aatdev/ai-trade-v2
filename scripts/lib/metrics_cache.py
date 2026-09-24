@@ -165,20 +165,24 @@ def os_read_ohlcv(ticker: str) -> Optional[dict]:
     """Reconstruct the ohlcv.json-shaped doc from candle docs, or None.
 
     Bars are OLDEST-FIRST, mirroring the local file; collected_at is the latest
-    across candles so is_fresh() works the same as on the file doc."""
+    across candles so is_fresh() works the same as on the file doc. The index
+    keeps every candle forever, so the query takes the NEWEST
+    ``_MAX_CANDLE_HITS`` (sort desc) and reverses them — an ascending sort
+    returned the oldest 2000 once a ticker outgrew the cap."""
     r = _os_request(
         "POST",
         f"/{IDX_CANDLES}/_search",
         {
             "size": _MAX_CANDLE_HITS,
             "query": {"term": {"ticker": ticker}},
-            "sort": [{"time": "asc"}],
+            "sort": [{"time": "desc"}],
             "_source": ["time", "date", "open", "high", "low", "close", "volume", "collected_at"],
         },
     )
     hits = (r or {}).get("hits", {}).get("hits")
     if not hits:
         return None
+    hits = list(reversed(hits))  # newest-first query -> oldest-first bars
     collected_at = None
     bars = []
     for h in hits:
@@ -188,15 +192,17 @@ def os_read_ohlcv(ticker: str) -> Optional[dict]:
             collected_at = ca
         # Stored as ms (legacy schema) → UNIX seconds to mirror ohlcv.json.
         t = s.get("time")
-        bars.append({
-            "time": int(t) // 1000 if t is not None else None,
-            "date": s.get("date"),
-            "open": s.get("open"),
-            "high": s.get("high"),
-            "low": s.get("low"),
-            "close": s.get("close"),
-            "volume": s.get("volume") or 0,
-        })
+        bars.append(
+            {
+                "time": int(t) // 1000 if t is not None else None,
+                "date": s.get("date"),
+                "open": s.get("open"),
+                "high": s.get("high"),
+                "low": s.get("low"),
+                "close": s.get("close"),
+                "volume": s.get("volume") or 0,
+            }
+        )
     last = bars[-1] if bars else None
     return {
         "ticker": ticker,
@@ -368,9 +374,7 @@ def cached_indicators(ticker: str, stale_days: float = STALE_DAYS) -> Optional[d
     return m.get("indicators") if m else None
 
 
-def cached_ohlcv(
-    ticker: str, min_bars: int = 1, stale_days: float = STALE_DAYS
-) -> Optional[list]:
+def cached_ohlcv(ticker: str, min_bars: int = 1, stale_days: float = STALE_DAYS) -> Optional[list]:
     """FMP-shaped daily bars from a fresh OHLCV file, NEWEST-FIRST, else None.
 
     Each bar: {date, open, high, low, close, adjClose, volume} — matches what

@@ -140,7 +140,33 @@ def _snap(hours_old: float) -> dict:
 
 
 def test_is_fresh_at_three_hour_boundary():
-    assert mc.is_fresh(_snap(1.0)) is True       # 1h old → fresh
-    assert mc.is_fresh(_snap(2.9)) is True        # just under 3h → fresh
-    assert mc.is_fresh(_snap(4.0)) is False       # 4h old → stale, go live
-    assert mc.is_fresh(_snap(48.0)) is False      # what the OLD 2-day window let through
+    assert mc.is_fresh(_snap(1.0)) is True  # 1h old → fresh
+    assert mc.is_fresh(_snap(2.9)) is True  # just under 3h → fresh
+    assert mc.is_fresh(_snap(4.0)) is False  # 4h old → stale, go live
+    assert mc.is_fresh(_snap(48.0)) is False  # what the OLD 2-day window let through
+
+
+def test_os_read_ohlcv_fetches_the_newest_bars(monkeypatch):
+    """OpenSearch keeps every candle forever; an ascending sort capped at 2000
+    hits returned the OLDEST 2000 once a ticker grew past that — a silently
+    months-old history that still looked fresh. Fetch newest-first, then
+    return oldest-first like the local file."""
+    seen = {}
+
+    def fake_request(method, path, body=None):
+        seen["body"] = body
+        hits = [
+            {"_source": {"time": t * 1000, "date": d, "close": c, "collected_at": ca}}
+            for t, d, c, ca in [
+                (3, "2026-09-23", 12.0, "2026-09-23T22:00:00"),
+                (2, "2026-09-22", 11.0, "2026-09-22T22:00:00"),
+                (1, "2026-09-21", 10.0, "2026-09-21T22:00:00"),
+            ]
+        ]
+        return {"hits": {"hits": hits}}
+
+    monkeypatch.setattr(mc, "_os_request", fake_request)
+    doc = mc.os_read_ohlcv("AAPL")
+    assert seen["body"]["sort"] == [{"time": "desc"}]
+    assert [b["date"] for b in doc["bars"]] == ["2026-09-21", "2026-09-22", "2026-09-23"]
+    assert doc["as_of_date"] == "2026-09-23"

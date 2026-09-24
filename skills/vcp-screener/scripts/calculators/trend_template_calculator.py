@@ -123,17 +123,17 @@ def calculate_trend_template(
         "detail": f"Price ${price:.2f} vs SMA50 ${sma50:.2f}" if sma50 else "Insufficient data",
     }
 
-    # Criterion 5: Price at least 25% above 52-week low
+    # Criterion 5: Price at least 30% above 52-week low (Minervini canon)
     c5_pass = False
     if year_low > 0:
         pct_above_low = (price - year_low) / year_low * 100
-        c5_pass = pct_above_low >= 25
-        criteria["c5_25pct_above_52w_low"] = {
+        c5_pass = pct_above_low >= 30
+        criteria["c5_30pct_above_52w_low"] = {
             "passed": c5_pass,
-            "detail": f"{pct_above_low:.1f}% above 52w low ${year_low:.2f} (need >= 25%)",
+            "detail": f"{pct_above_low:.1f}% above 52w low ${year_low:.2f} (need >= 30%)",
         }
     else:
-        criteria["c5_25pct_above_52w_low"] = {
+        criteria["c5_30pct_above_52w_low"] = {
             "passed": False,
             "detail": "52-week low data unavailable",
         }
@@ -178,10 +178,9 @@ def calculate_trend_template(
     # data degrades to the soft gate (an SPY fetch failure must not blank the
     # whole screen); missing MAs fail conservatively.
     hard_rs = c7_pass or rs_rank is None
-    hard_ma_chain = bool(
-        c4_pass and sma50 is not None and sma200 is not None and sma50 > sma200
-    )
-    passed = raw_score >= 85 and hard_rs and hard_ma_chain
+    hard_ma_chain = bool(c4_pass and sma50 is not None and sma200 is not None and sma50 > sma200)
+    hard_gates_passed = bool(hard_rs and hard_ma_chain)
+    passed = raw_score >= 85 and hard_gates_passed
 
     # Extended penalty: deduct for price too far above SMA50 (ranking用)
     extended_penalty, sma50_distance_pct = _calculate_extended_penalty(
@@ -202,6 +201,9 @@ def calculate_trend_template(
         "score": score,
         "raw_score": raw_score,
         "passed": passed,
+        # Mandatory items independent of the 7-point score threshold (the
+        # screener's --trend-min-score may lower the score bar, never these).
+        "hard_gates_passed": hard_gates_passed,
         "extended_penalty": extended_penalty,
         "sma200_penalty": sma200_penalty,
         "sma50_distance_pct": round(sma50_distance_pct, 2)

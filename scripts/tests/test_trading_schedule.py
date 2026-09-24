@@ -2921,3 +2921,25 @@ def test_reconcile_ib_closes_no_positions_noop(monkeypatch, tmp_path):
     args = types.SimpleNamespace(dry_run=False, no_telegram=False, timeout=60, ib_fixture=None)
     ts._reconcile_ib_closes("2026-06-15", args)
     assert sent == []
+
+
+def test_stale_universe_file_is_warned(monkeypatch, tmp_path):
+    f = tmp_path / "vcp_universe.txt"
+    old = (dt.datetime.now() - dt.timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
+    f.write_text(f"# header\n# Generated: {old}\nAAPL\nMSFT\n", encoding="utf-8")
+    monkeypatch.setattr(ts, "VCP_UNIVERSE_FILE", f)
+    logged = []
+    monkeypatch.setattr(ts, "log", lambda msg, *a, **k: logged.append(msg))
+    assert ts._read_vcp_universe() == ["AAPL", "MSFT"]
+    assert any("устарел" in m for m in logged)
+
+
+def test_fresh_universe_file_is_not_warned(monkeypatch, tmp_path):
+    f = tmp_path / "vcp_universe.txt"
+    now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    f.write_text(f"# Generated: {now}\nAAPL\n", encoding="utf-8")
+    monkeypatch.setattr(ts, "VCP_UNIVERSE_FILE", f)
+    logged = []
+    monkeypatch.setattr(ts, "log", lambda msg, *a, **k: logged.append(msg))
+    assert ts._read_vcp_universe() == ["AAPL"]
+    assert not any("устарел" in m for m in logged)

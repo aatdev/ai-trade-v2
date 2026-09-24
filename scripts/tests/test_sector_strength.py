@@ -122,3 +122,31 @@ def test_threshold_changes_classification():
     # rs = +6pp: leading at a 5pp threshold, only inline at an 8pp threshold.
     assert ss.classify_leadership(6.0, threshold=5.0) == "leading"
     assert ss.classify_leadership(6.0, threshold=8.0) == "inline"
+
+
+def test_tradingview_sector_taxonomy_maps_to_spdr_etfs():
+    # The liquid-universe metadata comes from the TradingView scanner, whose
+    # sector names are NOT GICS — unmapped, the sector-RS gate never fired.
+    expected = {
+        "Electronic Technology": "XLK",
+        "Technology Services": "XLK",
+        "Finance": "XLF",
+        "Health Technology": "XLV",
+        "Health Services": "XLV",
+        "Retail Trade": "XLY",
+        "Consumer Services": "XLY",
+        "Consumer Durables": "XLY",
+        "Consumer Non-Durables": "XLP",
+        "Producer Manufacturing": "XLI",
+        "Industrial Services": "XLI",
+        "Transportation": "XLI",
+        "Commercial Services": "XLI",
+        "Distribution Services": "XLI",
+        "Energy Minerals": "XLE",
+        "Non-Energy Minerals": "XLB",
+        "Process Industries": "XLB",
+        "Utilities": "XLU",
+        "Communications": "XLC",
+    }
+    for sector, etf in expected.items():
+        assert ss.SECTOR_ETF.get(sector) == etf, sector

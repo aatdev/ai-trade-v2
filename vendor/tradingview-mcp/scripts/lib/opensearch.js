@@ -206,7 +206,10 @@ export async function readCandlesDoc(ticker) {
     {
       size: MAX_CANDLE_HITS,
       query: { term: { ticker } },
-      sort: [{ time: 'asc' }],
+      // Newest-first then reversed: the index keeps every candle forever, and
+      // an ascending sort capped at MAX_CANDLE_HITS returned the OLDEST bars
+      // once a ticker outgrew the cap (a silently months-old history).
+      sort: [{ time: 'desc' }],
       _source: ['time', 'date', 'open', 'high', 'low', 'close', 'volume', 'collected_at'],
     },
     { soft: true }
@@ -215,7 +218,7 @@ export async function readCandlesDoc(ticker) {
   if (!hits?.length) return null;
 
   let collectedAt = null;
-  const bars = hits.map((h) => {
+  const bars = [...hits].reverse().map((h) => {
     const s = h._source;
     if (s.collected_at && (!collectedAt || s.collected_at > collectedAt))
       collectedAt = s.collected_at;

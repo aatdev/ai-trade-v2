@@ -35,6 +35,7 @@ def calculate_volume_pattern(
     pivot_price: Optional[float] = None,
     contractions: Optional[list[dict]] = None,
     breakout_volume_ratio: float = 1.5,
+    lookback_days: int = 120,
 ) -> dict:
     """
     Analyze volume behavior near the VCP pivot point.
@@ -82,7 +83,13 @@ def calculate_volume_pattern(
 
     if use_zone:
         zone_analysis, contraction_volume_trend = _zone_volume_analysis(
-            volumes, closes, contractions, pivot_price, avg_volume_50d
+            volumes,
+            closes,
+            contractions,
+            pivot_price,
+            avg_volume_50d,
+            dates=[d.get("date") for d in historical_prices],
+            window=lookback_days,
         )
 
     # Dry-up ratio: use Zone B if available, otherwise legacy window.
@@ -179,30 +186,45 @@ def calculate_volume_pattern(
     return result
 
 
+def _contraction_span(c: dict, n: int, date_index: dict[str, int], window: int) -> tuple[int, int]:
+    """Most-recent-first [start, end] bar span of a contraction.
+
+    Contraction ``*_idx`` are chronological indices INTO THE VCP LOOKBACK
+    WINDOW (not the full history), so the full-history ``n - 1 - idx`` mapping
+    read bars up to a year old. Prefer the contraction dates; else map within
+    the window."""
+    hi = date_index.get(c.get("high_date"))
+    lo = date_index.get(c.get("low_date"))
+    if hi is None or lo is None:
+        m = min(window, n)
+        hi = m - 1 - c["high_idx"]
+        lo = m - 1 - c["low_idx"]
+    return min(hi, lo), max(hi, lo)
+
+
 def _zone_volume_analysis(
     volumes: list[int],
     closes: list[float],
     contractions: list[dict],
     pivot_price: Optional[float],
     avg_volume_50d: float,
+    dates: Optional[list] = None,
+    window: int = 120,
 ) -> tuple:
     """Perform zone-based volume analysis using contraction boundaries.
 
-    Data is most-recent-first. Contraction indices are chronological (oldest-first).
-    We convert contraction indices to most-recent-first by: rev_idx = n - 1 - chrono_idx
+    Data is most-recent-first. Contraction bars are located by their dates
+    (or window-relative indices — see ``_contraction_span``).
 
     Returns:
         (zone_analysis dict, contraction_volume_trend dict)
     """
     n = len(volumes)
+    date_index = {d: i for i, d in enumerate(dates or []) if d}
 
     # Zone A: Last contraction period
     last_c = contractions[-1]
-    # Convert chronological indices to most-recent-first
-    zone_a_start_rev = n - 1 - last_c["low_idx"]
-    zone_a_end_rev = n - 1 - last_c["high_idx"]
-    zone_a_start = min(zone_a_start_rev, zone_a_end_rev)
-    zone_a_end = max(zone_a_start_rev, zone_a_end_rev)
+    zone_a_start, zone_a_end = _contraction_span(last_c, n, date_index, window)
     zone_a_vols = volumes[max(0, zone_a_start) : min(n, zone_a_end + 1)]
     zone_a_avg = int(sum(zone_a_vols) / len(zone_a_vols)) if zone_a_vols else 0
 
@@ -232,10 +254,7 @@ def _zone_volume_analysis(
     # Contraction volume trend: check if volume declines across contractions
     contraction_avgs = []
     for c in contractions:
-        c_start_rev = n - 1 - c["low_idx"]
-        c_end_rev = n - 1 - c["high_idx"]
-        c_start = min(c_start_rev, c_end_rev)
-        c_end = max(c_start_rev, c_end_rev)
+        c_start, c_end = _contraction_span(c, n, date_index, window)
         c_vols = volumes[max(0, c_start) : min(n, c_end + 1)]
         if c_vols:
             contraction_avgs.append(int(sum(c_vols) / len(c_vols)))

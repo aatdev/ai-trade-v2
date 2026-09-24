@@ -20,11 +20,13 @@ from report_generator import generate_json_report, generate_markdown_report
 from scorer import calculate_composite_score
 from screen_vcp import (
     analyze_stock,
+    bars_are_current,
     compute_entry_ready,
     is_stale_price,
     parse_arguments,
     passes_trend_filter,
     pre_filter_stock,
+    universe_ranked_rs,
 )
 
 # ---------------------------------------------------------------------------
@@ -1869,7 +1871,7 @@ class TestTrendMinScore:
 
     def test_trend_min_score_70_passes_raw_75(self):
         """passes_trend_filter with raw_score=75 and threshold=70 -> True."""
-        tt_result = {"raw_score": 75, "passed": False}
+        tt_result = {"raw_score": 75, "passed": False, "hard_gates_passed": True}
         assert passes_trend_filter(tt_result, trend_min_score=70) is True
 
     def test_trend_min_score_85_rejects_raw_80(self):
@@ -1888,7 +1890,7 @@ class TestTrendMinScore:
         A stock with raw_score=75 and passed=False should still pass
         Phase 2 when trend_min_score=70.
         """
-        tt_result = {"raw_score": 75, "passed": False, "score": 60}
+        tt_result = {"raw_score": 75, "passed": False, "score": 60, "hard_gates_passed": True}
         assert passes_trend_filter(tt_result, trend_min_score=70) is True
         # Verify it would NOT pass if we used the 'passed' field
         assert tt_result["passed"] is False
@@ -3079,10 +3081,14 @@ class TestDecliningContractionBonus:
             {"high_idx": 45, "low_idx": 60, "label": "T2"},
         ]
 
+        # Contraction indices are window-relative: a 150-bar window makes them
+        # line up with the 150-bar history exactly as designed above.
         r_dec = calculate_volume_pattern(
-            prices_declining, pivot_price=101.0, contractions=contractions
+            prices_declining, pivot_price=101.0, contractions=contractions, lookback_days=150
         )
-        r_flat = calculate_volume_pattern(prices_flat, pivot_price=101.0, contractions=contractions)
+        r_flat = calculate_volume_pattern(
+            prices_flat, pivot_price=101.0, contractions=contractions, lookback_days=150
+        )
 
         assert r_dec.get("contraction_volume_trend", {}).get("declining") is True
         assert r_flat.get("contraction_volume_trend", {}).get("declining") is False
@@ -3424,3 +3430,123 @@ class TestEarlyPostBreakoutCap:
             breakout_volume=False,
         )
         assert result["state"] == "Early-post-breakout"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-24 audit (phase 4) regressions
+# ---------------------------------------------------------------------------
+class TestTrendFilterHardGates:
+    def test_hard_gate_failure_rejected_even_above_min_score(self):
+        # 6/7 criteria (raw 85.7) but RS < 70: the calculator's hard gate says
+        # no — the Phase-2 filter used to ignore it.
+        tt = {"raw_score": 85.7, "passed": False, "hard_gates_passed": False}
+        assert passes_trend_filter(tt) is False
+
+    def test_missing_hard_gate_flag_fails_closed(self):
+        assert passes_trend_filter({"raw_score": 100}) is False
+
+    def test_low_rs_rank_fails_hard_gate(self):
+        prices = _make_prices(260, start=80, daily_change=0.001)
+        quote = {"price": 120, "yearHigh": 125, "yearLow": 70}
+        tt = calculate_trend_template(prices, quote, rs_rank=10)
+        assert tt["hard_gates_passed"] is False
+        assert passes_trend_filter(tt, trend_min_score=0) is False
+
+    def test_unknown_rs_degrades_to_soft_gate(self):
+        prices = _make_prices(260, start=80, daily_change=0.001)
+        quote = {"price": 120, "yearHigh": 125, "yearLow": 70}
+        tt = calculate_trend_template(prices, quote, rs_rank=None)
+        assert tt["hard_gates_passed"] is True
+
+    def test_c5_uses_canonical_30pct(self):
+        prices = _make_prices(260, start=80, daily_change=0.001)
+        # 27% above the 52w low: passes the old 25% rule, fails Minervini's 30%.
+        quote = {"price": 127, "yearHigh": 130, "yearLow": 100}
+        tt = calculate_trend_template(prices, quote, rs_rank=85)
+        c5 = next(v for k, v in tt["criteria"].items() if k.startswith("c5_"))
+        assert c5["passed"] is False
+
+
+class TestRelativeStrengthBenchmark:
+    def test_missing_benchmark_gives_unknown_rank_not_zero(self):
+        stock = _make_prices(260, start=80, daily_change=0.001)
+        rs = calculate_relative_strength(stock, [])
+        assert rs["rs_rank_estimate"] is None
+        assert rs["weighted_rs"] is None
+
+    def test_rs_aligned_on_dates_not_bar_positions(self):
+        # Stock missing its newest bar (halt / stale feed): comparing position 0
+        # of each series would pit yesterday's stock close against today's SPY.
+        spy = _make_prices(260, start=100, daily_change=0.0)
+        stock = _make_prices(260, start=100, daily_change=0.0)
+        spy[0] = {**spy[0], "close": 150.0}  # SPY +50% on its newest (unmatched) bar
+        stock_shifted = stock[1:]  # stock lacks that date
+        rs = calculate_relative_strength(stock_shifted, spy)
+        # Aligned on common dates both series are flat -> ~0 relative strength.
+        assert abs(rs["weighted_rs"]) < 1.0
+
+    def test_short_history_does_not_double_count_partial_periods(self):
+        stock = _make_prices(200, start=80, daily_change=0.001)
+        spy = _make_prices(200, start=100, daily_change=0.0)
+        rs = calculate_relative_strength(stock, spy)
+        partial = [d for d in rs["period_details"] if "note" in d]
+        assert len(partial) <= 1
+
+
+class TestUniverseRankedRs:
+    def test_survivors_ranked_against_full_candidate_population(self):
+        # 30 survivors all genuinely strong; the weakest survivor must not be
+        # ranked bottom just because it is weakest AMONG survivors.
+        population = {f"W{i}": {"weighted_rs": -20.0 + i * 0.1} for i in range(70)}
+        survivors = {f"S{i}": {"weighted_rs": 30.0 + i} for i in range(30)}
+        population.update(survivors)
+        ranked = universe_ranked_rs(survivors, population)
+        assert set(ranked) == set(survivors)
+        assert ranked["S0"]["rs_percentile"] >= 70
+        assert ranked["S0"]["score"] >= 70
+
+
+class TestBarsAreCurrent:
+    def test_matching_last_date_is_current(self):
+        assert bars_are_current([{"date": "2026-09-23"}], "2026-09-23") is True
+
+    def test_lagging_last_date_is_not_current(self):
+        assert bars_are_current([{"date": "2026-09-18"}], "2026-09-23") is False
+
+    def test_missing_dates_are_not_current(self):
+        assert bars_are_current([{"close": 1.0}], "2026-09-23") is False
+        assert bars_are_current([], "2026-09-23") is False
+
+
+class TestVolumeZonesUseWindowIndices:
+    def test_zone_a_reads_the_contraction_bars_not_a_year_ago(self):
+        # 300 bars, most-recent-first: the last 120 bars trade 1,000 shares,
+        # everything older 9,600,000. A contraction inside the 120-bar window
+        # must average ~1,000.
+        n = 300
+        prices = []
+        for i in range(n):
+            vol = 1000 if i < 120 else 9_600_000
+            prices.append(
+                {
+                    "date": f"d{n - i:04d}",
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.0,
+                    "volume": vol,
+                }
+            )
+        # Window-chronological indices of a contraction 30..60 bars ago
+        # (window of 120 -> chrono idx = 119 - rev_idx).
+        contractions = [
+            {
+                "high_idx": 119 - 60,
+                "low_idx": 119 - 30,
+                "high_date": prices[60]["date"],
+                "low_date": prices[30]["date"],
+                "depth_pct": 10.0,
+            }
+        ]
+        res = calculate_volume_pattern(prices, pivot_price=101.0, contractions=contractions)
+        assert res["zone_analysis"]["zone_a_avg_volume"] == 1000
