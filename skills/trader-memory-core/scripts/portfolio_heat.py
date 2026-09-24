@@ -370,6 +370,20 @@ def build_report(
         )
         enriched.append({**p, "risk_pct_of_account": risk_pct})
 
+    # Gross notional deployed (live positions at entry + resting entries at their
+    # worst fill) as % of account — what the regime gate's exposure ceiling caps.
+    pending_value = 0.0
+    for p in pending_entries:
+        try:
+            fill = float(p.get("worst_entry") or p.get("pivot") or 0)
+            pending_value += fill * float(p.get("shares") or 0)
+        except (TypeError, ValueError):
+            continue
+    live_value = sum(float(p["position_value"]) for p in positions)
+    gross_exposure_pct = (
+        round((live_value + pending_value) / account_size * 100, 2) if account_size else 0.0
+    )
+
     remaining_heat_pct = round(max(0.0, max_heat_pct - open_risk_pct), 2)
     return {
         "schema_version": "1.0",
@@ -381,6 +395,7 @@ def build_report(
         # Ledger detail
         "open_risk_dollars": open_risk_dollars,
         "live_risk_dollars": live_risk_dollars,
+        "gross_exposure_pct": gross_exposure_pct,
         "pending_risk_dollars": pending_risk_dollars,
         "positions_count": len(positions),
         "pending_count": len(pending_entries),

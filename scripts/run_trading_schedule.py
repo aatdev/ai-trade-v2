@@ -2649,7 +2649,7 @@ def _ingest_theses(
         log(f"thesis-ingest: thesis_id injected into {len(ticker_to_tid)} watchlist candidate(s)")
 
 
-def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
+def _evening_long_branch(date_str: str, args, dec: dict | None = None) -> tuple[Path, dict, str]:
     """Deterministic screen -> plan -> hybrid validation -> watchlist + theses."""
     # Heat FIRST (cheap, local): without the ledger the planner would assume a
     # zero-risk baseline and silently ignore the 6% heat ceiling with real
@@ -2708,6 +2708,11 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
         cmd = [PLANNER_SCRIPT, "--input", vcp]
         if heat:
             cmd += ["--current-exposure-json", heat]
+        # The regime gate's exposure ceiling is a hard portfolio limit, not a
+        # display value: the planner defers entries past it.
+        ceiling = (dec or {}).get("net_exposure_ceiling_pct")
+        if isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool):
+            cmd += ["--max-exposure-pct", str(float(ceiling))]
         plan_path = run_skill_script(
             cmd,
             label="breakout-trade-planner",
@@ -3436,7 +3441,7 @@ def slot_evening_prep(date_str: str, args) -> int:
         return 1
 
     # Gate is allow -> deterministic long pipeline + hybrid chart validation
-    wl_path, wl, val_note = _evening_long_branch(date_str, args)
+    wl_path, wl, val_note = _evening_long_branch(date_str, args, dec)
     candidates = wl.get("candidates") or []
     wl_rel = _rel(wl_path) if wl_path.exists() else "(файл не создан)"
     msg = build_evening_allow_msg(date_str, dec, wl_rel, candidates)

@@ -682,6 +682,19 @@ def generate_plans(
     remaining_slots = exposure.get("remaining_position_slots")
     actionable_slots_used = 0
 
+    # Regime-gate exposure ceiling (net_exposure_ceiling_pct): gross notional of
+    # live positions + resting entries + today's new plans must stay under it.
+    # Older heat reports lack gross_exposure_pct -> sum of sector_exposure.
+    max_exposure_pct = getattr(args, "max_exposure_pct", None)
+    gross_exposure_pct = exposure.get("gross_exposure_pct")
+    if gross_exposure_pct is None:
+        gross_exposure_pct = sum(
+            float(v)
+            for v in (exposure.get("sector_exposure") or {}).values()
+            if isinstance(v, (int, float))
+        )
+    gross_exposure_pct = float(gross_exposure_pct or 0.0)
+
     for result in results_sorted:
         is_valid, warns = validate_result(result)
         if not is_valid:
@@ -738,7 +751,23 @@ def generate_plans(
                 continue
 
         if cls == "actionable":
-            if remaining_slots is not None and actionable_slots_used >= remaining_slots:
+            new_pct = (
+                classified["data"]["trade_plan"]["position_value"] / args.account_size * 100
+                if args.account_size
+                else 0.0
+            )
+            if max_exposure_pct is not None and gross_exposure_pct + new_pct > max_exposure_pct:
+                deferred.append(
+                    {
+                        "symbol": classified["data"]["symbol"],
+                        "reason": (
+                            f"Exposure ceiling: {gross_exposure_pct:.1f}% deployed + "
+                            f"{new_pct:.1f}% would exceed the regime ceiling "
+                            f"{float(max_exposure_pct):g}%"
+                        ),
+                    }
+                )
+            elif remaining_slots is not None and actionable_slots_used >= remaining_slots:
                 deferred.append(
                     {
                         "symbol": classified["data"]["symbol"],
@@ -751,6 +780,7 @@ def generate_plans(
             else:
                 actionable.append(classified["data"])
                 actionable_slots_used += 1
+                gross_exposure_pct += new_pct
                 cumulative_risk_pct += classified["risk_pct"]
                 sector = classified["data"]["sector"]
                 pos_pct = (
@@ -781,6 +811,7 @@ def generate_plans(
             "max_position_pct": args.max_position_pct,
             "max_sector_pct": args.max_sector_pct,
             "max_portfolio_heat_pct": args.max_portfolio_heat_pct,
+            "max_exposure_pct": max_exposure_pct,
             "target_r_multiple": args.target_r_multiple,
             "stop_buffer_pct": args.stop_buffer_pct,
             "max_chase_pct": args.max_chase_pct,
@@ -978,6 +1009,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-position-pct", type=float, default=10.0)
     parser.add_argument("--max-sector-pct", type=float, default=30.0)
     parser.add_argument("--max-portfolio-heat-pct", type=float, default=6.0)
+    parser.add_argument(
+        "--max-exposure-pct",
+        type=float,
+        default=None,
+        help=(
+            "Gross exposure ceiling (%% of account) from the regime gate "
+            "(net_exposure_ceiling_pct): new entries are deferred once live + resting + "
+            "planned notional would exceed it. Default: no ceiling."
+        ),
+    )
     parser.add_argument("--target-r-multiple", type=float, default=2.0)
     parser.add_argument("--stop-buffer-pct", type=float, default=1.0)
     parser.add_argument("--max-chase-pct", type=float, default=2.0)

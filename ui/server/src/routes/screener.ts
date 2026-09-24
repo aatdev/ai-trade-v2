@@ -14,6 +14,7 @@ import {
 } from '../lib/mappers';
 import { mapStagedPlan, mapStagedScreener } from '../lib/screenerMappers';
 import type {
+  ExposureGate,
   StagedBottomFlowResponse,
   StagedScreenerResponse,
   StagedShortScreenerResponse,
@@ -57,6 +58,20 @@ function readWideUniverse(projectRoot: string): string[] {
  * reject. `--top 100` and `--output-dir` are always server-controlled. Pure +
  * exported for unit tests.
  */
+/** Local-calendar YYYY-MM-DD (the scheduler names gate files by local date). */
+export function localToday(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** Planner flag for the regime gate's exposure ceiling (hard portfolio limit). */
+export function exposureCeilingArgs(gate: ExposureGate | null | undefined): string[] {
+  const c = gate?.net_exposure_ceiling_pct;
+  return typeof c === 'number' && Number.isFinite(c) ? ['--max-exposure-pct', String(c)] : [];
+}
+
 export function buildScreenArgs(
   body: Record<string, unknown>,
   stagingDir: string,
@@ -334,6 +349,8 @@ export function screenerRouter(projectRoot: string, dataDir: string, jobs: JobMa
     const args = [PLAN_SCRIPT, '--input', vcpFile, '--output-dir', stagingDir];
     const heatFile = findLatest(path.join(dataDir, 'journal'), RE.portfolioHeat, null);
     if (heatFile) args.push('--current-exposure-json', heatFile);
+    // Same hard exposure ceiling the evening pipeline applies (today's gate only).
+    args.push(...exposureCeilingArgs(getExposureGate(dataDir, localToday()).data));
     // Only override the profile's earnings_gate_days when explicitly provided.
     const gate = body.earningsGateDays;
     if (gate !== undefined && gate !== null && gate !== '') {

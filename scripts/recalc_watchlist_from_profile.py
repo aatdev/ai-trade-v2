@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import shlex
 import shutil
@@ -74,6 +75,19 @@ def _latest(dir_path: Path, prefix: str) -> Path | None:
     except OSError:
         return None
     return files[-1] if files else None
+
+
+def _gate_ceiling(data_dir: Path, date_str: str) -> float | None:
+    """net_exposure_ceiling_pct of the day's regime gate, if present and numeric."""
+    path = data_dir / "schedule" / f"exposure_decision_{date_str}.json"
+    try:
+        gate = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    ceiling = gate.get("net_exposure_ceiling_pct") if isinstance(gate, dict) else None
+    if isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool):
+        return float(ceiling)
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,6 +147,10 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if heat is not None:
         planner_argv += ["--current-exposure-json", str(heat)]
+    # Same hard exposure ceiling the evening pipeline applies (today's gate).
+    ceiling = _gate_ceiling(data_dir, date_str)
+    if ceiling is not None:
+        planner_argv += ["--max-exposure-pct", str(ceiling)]
 
     def builder_argv(plan_path: str) -> list[str]:
         return [

@@ -468,6 +468,49 @@ class TestExposureCapacity:
         deferred_syms = [d["symbol"] for d in plans["deferred"]]
         assert "BBB" in deferred_syms
 
+    def test_exposure_ceiling_defers_entries_past_the_cap(self, tmp_path):
+        # Gate ceiling 45%, 40% already deployed (live + resting entries): only
+        # candidates whose notional still fits under the ceiling are planned.
+        data = _make_input_data(
+            [
+                _make_vcp_result(symbol="AAA", score=88.0),
+                _make_vcp_result(symbol="BBB", score=82.0),
+            ]
+        )
+        free = generate_plans(data, _make_args())
+        aaa_pct = free["actionable_orders"][0]["trade_plan"]["position_value"] / 100_000 * 100
+        exp = self._exposure_file(
+            tmp_path,
+            {"open_risk_pct": 0.0, "sector_exposure": {}, "gross_exposure_pct": 40.0},
+        )
+        ceiling = 40.0 + aaa_pct + 0.5  # room for exactly one
+        plans = generate_plans(
+            data, _make_args(current_exposure_json=exp, max_exposure_pct=ceiling)
+        )
+        assert [a["symbol"] for a in plans["actionable_orders"]] == ["AAA"]
+        bbb = next(d for d in plans["deferred"] if d["symbol"] == "BBB")
+        assert "Exposure ceiling" in bbb["reason"]
+        assert plans["parameters"]["max_exposure_pct"] == ceiling
+
+    def test_exposure_ceiling_falls_back_to_sector_exposure_sum(self, tmp_path):
+        # Older heat reports have no gross_exposure_pct: sum sector_exposure.
+        data = _make_input_data([_make_vcp_result(symbol="AAA", score=88.0)])
+        exp = self._exposure_file(
+            tmp_path,
+            {"open_risk_pct": 0.0, "sector_exposure": {"Tech": 30.0, "Energy": 20.0}},
+        )
+        plans = generate_plans(data, _make_args(current_exposure_json=exp, max_exposure_pct=50.0))
+        assert plans["summary"]["actionable_count"] == 0
+
+    def test_no_ceiling_means_no_exposure_cap(self, tmp_path):
+        data = _make_input_data([_make_vcp_result(symbol="AAA", score=88.0)])
+        exp = self._exposure_file(
+            tmp_path,
+            {"open_risk_pct": 0.0, "sector_exposure": {}, "gross_exposure_pct": 99.0},
+        )
+        plans = generate_plans(data, _make_args(current_exposure_json=exp))
+        assert plans["summary"]["actionable_count"] == 1
+
     def test_zero_slots_defers_all(self, tmp_path):
         data = _make_input_data([_make_vcp_result(symbol="AAA", score=88.0)])
         exp = self._exposure_file(

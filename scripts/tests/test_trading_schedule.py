@@ -1218,6 +1218,7 @@ class TestEveningHybrid:
         enable_shorts=False,
         ftd_report=None,
         fail_label=None,
+        ceiling=None,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
         # Short trading is opt-in (TRADING_ENABLE_SHORTS). Short-branch tests set
@@ -1268,6 +1269,11 @@ class TestEveningHybrid:
         def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
             if "market-regime-daily" in label:
                 _gate(tmp_path, "2026-06-11", decision)
+                if ceiling is not None:
+                    _write_json(
+                        tmp_path / "schedule" / "exposure_decision_2026-06-11.json",
+                        {"decision": decision, "net_exposure_ceiling_pct": ceiling},
+                    )
             if "validation" in label and validation is not None:
                 _write_json(
                     tmp_path / "schedule" / "watchlist_validation_2026-06-11.json", validation
@@ -1344,6 +1350,17 @@ class TestEveningHybrid:
         )
         assert rc == 1
         assert sent and "swing-short-screener" in sent[0] and "не отработал" in sent[0]
+
+    def test_gate_ceiling_is_passed_to_planner(self, monkeypatch, tmp_path):
+        rc, _, _ = self._run(monkeypatch, tmp_path, decision="allow", ceiling=45)
+        planner_cmd = next(v for k, v in self.script_cmds.items() if "planner" in k)
+        i = planner_cmd.index("--max-exposure-pct")
+        assert float(planner_cmd[i + 1]) == 45.0
+
+    def test_no_ceiling_passes_no_cap(self, monkeypatch, tmp_path):
+        self._run(monkeypatch, tmp_path, decision="allow")
+        planner_cmd = next(v for k, v in self.script_cmds.items() if "planner" in k)
+        assert "--max-exposure-pct" not in planner_cmd
 
     def test_heat_failure_blocks_long_pipeline_fail_safe(self, monkeypatch, tmp_path):
         """No heat ledger → the planner would assume a zero-risk baseline with

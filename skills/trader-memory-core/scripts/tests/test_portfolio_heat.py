@@ -442,3 +442,28 @@ class TestPendingEntries:
             pending_entries=pending,
         )
         assert report["heat_complete"] is False
+
+
+class TestGrossExposure:
+    def test_gross_exposure_includes_live_and_pending_notional(self, tmp_path):
+        _make_active(tmp_path, "AAPL", entry=50.0, stop=45.0, shares=100)  # $5,000
+        positions, warnings = portfolio_heat.collect_positions(tmp_path)
+        pending = [
+            {
+                "thesis_id": "th_x",
+                "ticker": "NVDA",
+                "shares": 20,
+                "pivot": 100.0,
+                "worst_entry": 102.0,  # notional at the worst fill: $2,040
+                "risk_dollars": 100.0,
+            }
+        ]
+        report = portfolio_heat.build_report(
+            positions,
+            warnings,
+            account_size=100_000.0,
+            max_heat_pct=6.0,
+            max_positions=6,
+            pending_entries=pending,
+        )
+        assert report["gross_exposure_pct"] == 7.04

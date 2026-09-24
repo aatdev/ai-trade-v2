@@ -82,6 +82,25 @@ def test_dry_run_without_heat_omits_current_exposure(tmp_path, capsys):
     assert "--current-exposure-json" not in planner_line
 
 
+def test_gate_ceiling_passed_to_planner(tmp_path, capsys):
+    data_dir = _setup(tmp_path)
+    (data_dir / "schedule").mkdir()
+    (data_dir / "schedule" / f"exposure_decision_{DATE}.json").write_text(
+        json.dumps({"decision": "allow", "date": DATE, "net_exposure_ceiling_pct": 45}),
+        encoding="utf-8",
+    )
+    assert _run_dry(data_dir) == 0
+    planner_line = next(ln for ln in capsys.readouterr().out.splitlines() if "planner:" in ln)
+    assert "--max-exposure-pct 45.0" in planner_line
+
+
+def test_no_gate_file_passes_no_ceiling(tmp_path, capsys):
+    data_dir = _setup(tmp_path)
+    assert _run_dry(data_dir) == 0
+    planner_line = next(ln for ln in capsys.readouterr().out.splitlines() if "planner:" in ln)
+    assert "--max-exposure-pct" not in planner_line
+
+
 def test_no_canonical_vcp_returns_2(tmp_path, capsys):
     data_dir = _setup(tmp_path, vcps=())
     assert _run_dry(data_dir) == 2

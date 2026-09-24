@@ -5,7 +5,13 @@ import request from 'supertest';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../app';
 import { clearListCache } from '../lib/files';
-import { buildBottomFlowArgs, buildScreenArgs, buildShortScreenArgs } from './screener';
+import {
+  buildBottomFlowArgs,
+  buildScreenArgs,
+  buildShortScreenArgs,
+  exposureCeilingArgs,
+  localToday,
+} from './screener';
 
 const FIXTURE = path.resolve(process.cwd(), 'test/fixture');
 const ROOT = path.resolve(process.cwd());
@@ -352,5 +358,25 @@ describe('buildBottomFlowArgs', () => {
         '--top', '30',
       ]),
     );
+  });
+});
+
+/* ---------------- exposure ceiling → planner (pure) ---------------- */
+
+describe('exposureCeilingArgs', () => {
+  it('passes the gate ceiling as a hard planner limit', () => {
+    expect(exposureCeilingArgs({ decision: 'allow', net_exposure_ceiling_pct: 45 } as never)).toEqual([
+      '--max-exposure-pct',
+      '45',
+    ]);
+  });
+
+  it('adds nothing without a gate or a numeric ceiling', () => {
+    expect(exposureCeilingArgs(null)).toEqual([]);
+    expect(exposureCeilingArgs({ decision: 'allow', net_exposure_ceiling_pct: null } as never)).toEqual([]);
+  });
+
+  it('localToday formats the local calendar date', () => {
+    expect(localToday(new Date(2026, 8, 4, 23, 30))).toBe('2026-09-04');
   });
 });

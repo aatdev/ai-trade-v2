@@ -90,6 +90,7 @@ Candidates must pass ALL conditions:
 | --max-position-pct | 10.0 | Max single position % |
 | --max-sector-pct | 30.0 | Max sector exposure % |
 | --max-portfolio-heat-pct | 6.0 | Max total open risk % |
+| --max-exposure-pct | none | Gross exposure ceiling % (regime gate `net_exposure_ceiling_pct`); entries whose notional would push live + resting + planned exposure past it are deferred |
 | --target-r-multiple | 2.0 | Take-profit R-multiple |
 | --stop-buffer-pct | 1.0 | Stop buffer below contraction low |
 | --max-chase-pct | 2.0 | Max chase above pivot |
