@@ -529,6 +529,76 @@ def test_watchlist_filter_empty_candidates_registers_nothing(tmp_path: Path):
     assert ids == []
 
 
+def _plan_and_levels_wl(tmp_path: Path):
+    vcp_file = _write_json(
+        tmp_path, {"results": [{"symbol": "PLTR", "composite_score": 80.0}]}, "vcp.json"
+    )
+    plan_file = _write_json(
+        tmp_path,
+        {
+            "actionable_orders": [
+                {
+                    "symbol": "PLTR",
+                    "trade_plan": {
+                        "signal_entry": 25.50,
+                        "stop_loss_price": 23.00,
+                        "target_price": 30.00,
+                    },
+                }
+            ]
+        },
+        "plan.json",
+    )
+    # Chart-validation / analysis levels the orders and alerts will actually use.
+    wl_file = _write_json(
+        tmp_path,
+        {
+            "candidates": [
+                {
+                    "ticker": "PLTR",
+                    "side": "long",
+                    "pivot": 26.0,
+                    "stop": 24.2,
+                    "target": 29.5,
+                    "t2": 31.0,
+                    "t3": 33.0,
+                }
+            ]
+        },
+        "wl.json",
+    )
+    return vcp_file, plan_file, wl_file
+
+
+def test_watchlist_levels_win_over_plan_levels(tmp_path: Path):
+    """The thesis must carry the levels the order/alerts use (final watchlist),
+    not the planner's mechanical ones the validation step overrode."""
+    state_dir = tmp_path / "theses"
+    vcp_file, plan_file, wl_file = _plan_and_levels_wl(tmp_path)
+    ids = thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), plan_input=plan_file, watchlist_filter=wl_file
+    )
+    thesis = thesis_store.get(state_dir, ids[0])
+    assert thesis["entry"]["target_price"] == 26.0
+    assert thesis["exit"]["stop_loss"] == 24.2
+    assert thesis["exit"]["take_profit"] == 29.5
+    assert thesis["exit"]["take_profit_2"] == 31.0
+    assert thesis["exit"]["take_profit_3"] == 33.0
+
+
+def test_watchlist_levels_refresh_reused_pre_entry_thesis(tmp_path: Path):
+    state_dir = tmp_path / "theses"
+    vcp_file, plan_file, wl_file = _plan_and_levels_wl(tmp_path)
+    first = thesis_ingest.ingest("vcp-screener", vcp_file, str(state_dir), plan_input=plan_file)
+    again = thesis_ingest.ingest(
+        "vcp-screener", vcp_file, str(state_dir), plan_input=plan_file, watchlist_filter=wl_file
+    )
+    assert again == first  # reused, not duplicated
+    thesis = thesis_store.get(state_dir, first[0])
+    assert thesis["exit"]["stop_loss"] == 24.2
+    assert thesis["entry"]["target_price"] == 26.0
+
+
 # -- Tests: ids_output (--ids-output) -----------------------------------------
 
 

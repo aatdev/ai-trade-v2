@@ -100,10 +100,10 @@ describe('reconcile', () => {
     const wl = watchlist([candidate({ side: 'long', pivot: 59, stop: 56.5, target: 63 })]);
     const r = reconcile(wl, 'AOS', longSignal, profile);
     expect(r.change).toBe('levels-updated');
-    // budget = 150000 × 1% = 1500; shares = 1500 / |60−56| = 375
-    // (NOT the old candidate's 517.59 / 4 ≈ 129)
-    expect(r.proposed!.shares).toBe(375);
-    expect(r.proposed!.risk_dollars).toBe(1500);
+    // budget = 150000 × 1% = 1500 at the WORST fill: 1500 / |60.5−56| = 333
+    // (NOT the old candidate's 517.59 / 4 ≈ 129) — mirrors the scheduler.
+    expect(r.proposed!.shares).toBe(333);
+    expect(r.proposed!.risk_dollars).toBe(1498.5);
     // worst_entry from the analysis Entry range, not pivot itself
     expect(r.proposed!.worst_entry).toBe(60.5);
   });
@@ -112,9 +112,9 @@ describe('reconcile', () => {
     const wl = watchlist([]);
     const tightStop: AnalysisSignal = { ...longSignal, trigger: 60, stop: 59.9 };
     const r = reconcile(wl, 'AOS', tightStop, { ...profile, max_position_pct: 25 });
-    // budget shares = 1500 / 0.1 = 15000; cap = 150000×25% / 60 = 625
-    expect(r.proposed!.shares).toBe(625);
-    expect(r.proposed!.risk_dollars).toBe(62.5);
+    // budget shares = 1500 / |60.5−59.9| = 2500; cap = 150000×25% / 60.5 = 619
+    expect(r.proposed!.shares).toBe(619);
+    expect(r.proposed!.risk_dollars).toBe(371.4);
   });
 
   it('falls back to chase % for worst_entry without an Entry range', () => {
@@ -122,6 +122,25 @@ describe('reconcile', () => {
     const noRange: AnalysisSignal = { ...longSignal, entryLow: null, entryHigh: null };
     const r = reconcile(wl, 'AOS', noRange, profile);
     expect(r.proposed!.worst_entry).toBe(61.2); // 60 × 1.02
+  });
+
+  it('refuses analysis levels with a stop on the wrong side', () => {
+    const wl = watchlist([candidate({ side: 'long', pivot: 59, stop: 56.5, target: 63 })]);
+    const r = reconcile(wl, 'AOS', { ...longSignal, stop: 61 }, profile);
+    expect(r.change).toBe('invalid-levels');
+    expect(r.proposed).toBeNull();
+  });
+
+  it('refuses analysis levels with T1 on the wrong side', () => {
+    const wl = watchlist([candidate({ side: 'long', pivot: 59, stop: 56.5, target: 63 })]);
+    const r = reconcile(wl, 'AOS', { ...longSignal, t1: 58 }, profile);
+    expect(r.change).toBe('invalid-levels');
+  });
+
+  it('clamps a wrong-side Entry bound to the chase band', () => {
+    const wl = watchlist([]);
+    const r = reconcile(wl, 'AOS', { ...longSignal, entryHigh: 59 }, profile);
+    expect(r.proposed!.worst_entry).toBe(61.2); // 60 × 1.02, not 59 (< trigger)
   });
 
   it('reports unchanged when side and levels already match', () => {
@@ -134,8 +153,8 @@ describe('reconcile', () => {
     const wl = watchlist([]);
     const r = reconcile(wl, 'AOS', longSignal, profile);
     expect(r.change).toBe('new');
-    // risk = 150000 * 1% = 1500; shares = 1500 / 4 = 375
-    expect(r.proposed!.shares).toBe(375);
+    // risk = 150000 * 1% = 1500 at the worst fill: 1500 / |60.5 − 56| = 333
+    expect(r.proposed!.shares).toBe(333);
     expect(r.proposed!.screener_origin).toBeNull();
   });
 
@@ -175,6 +194,24 @@ describe('reconcile', () => {
 });
 
 describe('parseSignalLevels HOLD guard', () => {
+  it('takes direction from the heading, not an alternative-scenario emoji', () => {
+    const md = [
+      '# J',
+      '',
+      '---',
+      '',
+      '## 2026-06-12 — NVDA — 🔴 SELL (breakdown)',
+      '',
+      '- **Trigger для Short:** close < $150.00',
+      '- **Stop:** $158.00',
+      '- **T1 / T2 / T3:** $140.00 / $135.00 / $130.00',
+      '- **Альтернатива:** 🟢 BUY above $165',
+      '',
+    ].join('\n');
+    const block = parseSignalBlocks(md).find((b) => b.ticker === 'NVDA')!;
+    expect(parseSignalLevels(block)!.direction).toBe('short');
+  });
+
   it('refuses to arm levels from a 🟡 HOLD block even with a Trigger line', () => {
     const md = [
       '# Trading Signals Journal',

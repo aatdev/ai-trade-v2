@@ -557,6 +557,39 @@ def _watchlist_tickers(wl_file: str) -> set[str]:
     }
 
 
+def _watchlist_level_index(wl_file: str) -> dict[tuple[str, str], dict]:
+    """{(TICKER, side): update()-shaped level fields} from watchlist candidates.
+
+    The watchlist carries the FINAL levels (chart-validation / analysis
+    overrides of the planner's mechanical ones) that the order cards, alerts and
+    heat ledger act on, so they win over plan and adapter levels."""
+    data = json.loads(Path(wl_file).read_text(encoding="utf-8"))
+    out: dict[tuple[str, str], dict] = {}
+    for c in data.get("candidates") or []:
+        if not isinstance(c, dict) or not c.get("ticker"):
+            continue
+        fields: dict = {}
+        if c.get("pivot") is not None:
+            fields.setdefault("entry", {})["target_price"] = c["pivot"]
+        for src, dst in (
+            ("stop", "stop_loss"),
+            ("target", "take_profit"),
+            ("t2", "take_profit_2"),
+            ("t3", "take_profit_3"),
+        ):
+            if c.get(src) is not None:
+                fields.setdefault("exit", {})[dst] = c[src]
+        side = str(c.get("side") or "long").lower()
+        out[(str(c["ticker"]).upper(), side)] = fields
+    return out
+
+
+def _merge_fields(base: dict, override: dict) -> dict:
+    for key, sub in override.items():
+        base.setdefault(key, {}).update(sub)
+    return base
+
+
 def _plan_fields(tp: dict) -> dict:
     """Plan levels as a thesis_store.update()-shaped fields dict.
 
@@ -699,6 +732,7 @@ def ingest(
 
     plan_index = _build_plan_index(plan_input) if plan_input else {}
     allowed_tickers = _watchlist_tickers(watchlist_filter) if watchlist_filter else None
+    wl_levels = _watchlist_level_index(watchlist_filter) if watchlist_filter else {}
 
     thesis_ids: list[str] = []
     ticker_id_map: dict[str, str] = {}
@@ -719,6 +753,13 @@ def ingest(
         # Enrich with exact plan levels when available
         if plan_index:
             _enrich_from_plan(thesis_data, plan_index)
+        # Final watchlist levels (chart-validation / analysis) win over both.
+        wl_key = (
+            str(thesis_data.get("ticker", "")).upper(),
+            str(thesis_data.get("side") or "long").lower(),
+        )
+        if wl_levels.get(wl_key):
+            _merge_fields(thesis_data, wl_levels[wl_key])
         # Inject source date so thesis_id and created_at reflect the report date
         if source_date and "_source_date" not in thesis_data:
             thesis_data["_source_date"] = source_date
@@ -754,6 +795,8 @@ def ingest(
                 if tp:
                     for key, sub in _plan_fields(tp).items():
                         fields.setdefault(key, {}).update(sub)
+                if wl_levels.get((t_ticker, t_side)):
+                    _merge_fields(fields, wl_levels[(t_ticker, t_side)])
                 if fields:
                     try:
                         thesis_store.update(state_path, tid, fields)

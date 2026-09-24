@@ -151,7 +151,8 @@ export type ReconcileChange =
   | 'new'
   | 'unchanged'
   | 'levels-updated'
-  | 'direction-flip';
+  | 'direction-flip'
+  | 'invalid-levels';
 
 /** Comparison of the screener watchlist candidate vs the analysis signal. */
 export interface ReconcileResult {

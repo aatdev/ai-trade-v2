@@ -1254,6 +1254,9 @@ class TestEveningHybrid:
             script_cmds[label] = [str(c) for c in cmd]
             if fail_label and fail_label in label:
                 return None  # the script crashed / timed out
+            if "ingest" in label:
+                wl_file = tmp_path / "schedule" / "watchlist_2026-06-11.json"
+                self.wl_at_ingest = json.loads(wl_file.read_text(encoding="utf-8"))
             if "vcp" in label:
                 return _write_json(
                     tmp_path / "screeners" / "vcp_screener_2026-06-11_221000.json", {"results": []}
@@ -1350,6 +1353,25 @@ class TestEveningHybrid:
         )
         assert rc == 1
         assert sent and "swing-short-screener" in sent[0] and "не отработал" in sent[0]
+
+    def test_theses_ingested_after_chart_levels_applied(self, monkeypatch, tmp_path):
+        validation = {
+            "date": "2026-06-11",
+            "verdicts": [
+                {
+                    "ticker": "NVDA",
+                    "verdict": "pass",
+                    "entry": 156.0,
+                    "stop": 150.0,
+                    "target": 170.0,
+                }
+            ],
+        }
+        monkeypatch.setattr(ts, "_auto_analyze_reconcile", lambda wl, p, d, a: wl)
+        self._run(monkeypatch, tmp_path, decision="allow", validation=validation)
+        nvda = self.wl_at_ingest["candidates"][0]
+        assert nvda["source"] == "chart-validation"
+        assert nvda["stop"] == 150.0
 
     def test_gate_ceiling_is_passed_to_planner(self, monkeypatch, tmp_path):
         rc, _, _ = self._run(monkeypatch, tmp_path, decision="allow", ceiling=45)
@@ -1935,8 +1957,24 @@ class TestParseSignalsMd:
         assert (sig["entry_low"], sig["entry_high"]) == (58.0, 60.5)
 
     def test_hold_block_never_arms_levels(self, monkeypatch, tmp_path):
+        # HOLD is reported (so the reconcile can EXCLUDE the name) but carries
+        # no levels to arm.
         self._write(monkeypatch, tmp_path)
-        assert ts._parse_signals_md("ALLE") is None
+        sig = ts._parse_signals_md("ALLE")
+        assert sig["direction"] == "hold"
+        assert sig["date"] == "2026-06-12"
+        assert "trigger" not in sig
+
+    def test_direction_from_heading_not_alternative_scenario(self, monkeypatch, tmp_path):
+        md = (
+            "# J\n\n---\n\n## 2026-06-12 — NVDA — 🔴 SELL (breakdown)\n\n"
+            "- **Trigger для Short:** close < $150.00\n"
+            "- **Stop:** $158.00\n"
+            "- **T1 / T2 / T3:** $140.00 / $135.00 / $130.00\n"
+            "- **Альтернатива:** 🟢 BUY above $165\n"
+        )
+        self._write(monkeypatch, tmp_path, md)
+        assert ts._parse_signals_md("NVDA")["direction"] == "short"
 
     def test_direction_from_trigger_line_without_emoji(self, monkeypatch, tmp_path):
         md = (
@@ -2113,7 +2151,7 @@ class TestShortConditions:
 # --------------------------------------------------------------------------- #
 _AOS_SIGNAL = {
     "ticker": "AOS",
-    "date": "2026-06-12",
+    "date": "2026-06-11",
     "direction": "long",
     "trigger": 60.0,
     "stop": 56.0,
@@ -2206,6 +2244,89 @@ class TestAutoAnalyzeReconcile:
         assert shares == 42  # 300 / 7
         assert risk == 294.0
 
+    def test_stale_signal_block_is_not_applied(self, monkeypatch, tmp_path):
+        # The analysis ran but did not write today's block: an older one must
+        # not overwrite today's chart-validation levels.
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {**_AOS_SIGNAL, "date": "2026-06-01"}
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        c = out["candidates"][0]
+        assert c["pivot"] == 59.0 and c.get("source") != "analysis"
+
+    def test_hold_signal_excludes_candidate(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {"ticker": "AOS", "date": "2026-06-11", "direction": "hold"}
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        assert out["candidates"] == []
+        assert out["rejected_by_validation"][0]["source"] == "analysis-excluded"
+
+    def test_bad_geometry_signal_keeps_chart_levels(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {**_AOS_SIGNAL, "stop": 61.0}  # long stop above the trigger
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        c = out["candidates"][0]
+        assert c["pivot"] == 59.0 and c.get("source") != "analysis"
+
+    def test_t1_on_wrong_side_keeps_chart_levels(self, monkeypatch, tmp_path):
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {**_AOS_SIGNAL, "t1": 58.0}
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        assert out["candidates"][0].get("source") != "analysis"
+
+    def test_recent_contradicting_analysis_excludes_without_rerun(self, monkeypatch, tmp_path):
+        # Analyzed 2 days ago -> no deep-dive rerun, but its SELL still vetoes a
+        # screener long (used to be skipped entirely).
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(tmp_path / "trading_profile.json", {"account_size": 150000, "risk_pct": 1})
+        monkeypatch.setattr(ts, "_recently_analyzed", lambda t, n: True)
+        ran = []
+        monkeypatch.setattr(ts, "_run_ticker_analysis", lambda t, a: ran.append(t) or True)
+        monkeypatch.setattr(
+            ts,
+            "_parse_signals_md",
+            lambda t: {**_AOS_SIGNAL, "date": "2026-06-09", "direction": "short"},
+        )
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        wl = {"date": "2026-06-11", "candidates": [cand]}
+        wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        out = ts._auto_analyze_reconcile(wl, wl_path, "2026-06-11", args)
+        assert ran == []
+        assert out["candidates"] == []
+
+    def test_recent_agreeing_analysis_keeps_candidate(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _write_json(tmp_path / "trading_profile.json", {"account_size": 150000, "risk_pct": 1})
+        monkeypatch.setattr(ts, "_recently_analyzed", lambda t, n: True)
+        monkeypatch.setattr(ts, "_run_ticker_analysis", lambda t, a: True)
+        monkeypatch.setattr(
+            ts, "_parse_signals_md", lambda t: {**_AOS_SIGNAL, "date": "2026-06-09"}
+        )
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        wl = {"date": "2026-06-11", "candidates": [cand]}
+        wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        out = ts._auto_analyze_reconcile(wl, wl_path, "2026-06-11", args)
+        assert out["candidates"][0]["pivot"] == 59.0  # levels untouched
+
+    def test_direction_flip_invalidates_pending_theses_by_ticker(self, monkeypatch, tmp_path):
+        # Ingest now runs AFTER the reconcile, so the candidate has no thesis_id:
+        # a pending same-side thesis from an earlier day must still be killed.
+        killed = []
+        monkeypatch.setattr(ts, "_invalidate_thesis", lambda tid, *, reason: killed.append(tid))
+        monkeypatch.setattr(
+            ts,
+            "_list_theses",
+            lambda: [
+                {"thesis_id": "th_old", "ticker": "AOS", "side": "short", "status": "IDEA"},
+                {"thesis_id": "th_live", "ticker": "AOS", "side": "short", "status": "ACTIVE"},
+                {"thesis_id": "th_long", "ticker": "AOS", "side": "long", "status": "IDEA"},
+            ],
+        )
+        cand = {"ticker": "AOS", "side": "short", "pivot": 58.66, "stop": 59.47, "shares": 10}
+        self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
+        assert killed == ["th_old"]
+
     def test_profile_sized_shares_caps_tight_stop(self):
         profile = {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25}
         shares, risk = ts._profile_sized_shares(profile, 60.0, 59.9)
@@ -2247,6 +2368,19 @@ class TestAutoAnalyzeReconcile:
         wl_path = _write_json(tmp_path / "schedule" / "watchlist_2026-06-11.json", wl)
         ts._auto_analyze_reconcile(wl, wl_path, "2026-06-11", args)
         assert analyzed == ["BBB"]
+
+
+def test_ticker_analysis_requires_fresh_signals_md(monkeypatch, tmp_path):
+    _patch_trading_dirs(monkeypatch, tmp_path)
+    seen = {}
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
+        seen["expected"] = expected_output
+        return True
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    ts._run_ticker_analysis("AOS", types.SimpleNamespace(dry_run=False, timeout=60))
+    assert Path(seen["expected"]) == tmp_path / "analysis" / "signals.md"
 
 
 # --------------------------------------------------------------------------- #

@@ -132,3 +132,16 @@ def test_first_and_all_dollars_strip_commas():
         1118.0,
         95.5,
     ]
+
+
+def test_direction_from_heading_not_alternative_scenario_emoji():
+    # A "🟢 BUY" in an alternative line under a 🔴 SELL heading must not flip it.
+    body = (
+        "- **Trigger для Short:** close < $150.00\n"
+        "- **Stop:** $158.00\n"
+        "- **T1 / T2 / T3:** $140.00 / $135.00 / $130.00\n"
+        "- **Альтернатива:** 🟢 BUY above $165\n"
+    )
+    rec = signals_md.parse_block("2026-06-12", "NVDA", "🔴 SELL (breakdown)", body)
+    assert rec is not None
+    assert rec.get("direction", rec.get("side")) == "short"

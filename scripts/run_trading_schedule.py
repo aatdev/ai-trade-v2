@@ -2007,7 +2007,8 @@ def _parse_signals_md(ticker: str) -> dict | None:
     `**Trigger для Long/Short:**` lines, «Альтернатива» lines skipped. The old
     implementation expected a ticker-first heading, a nonexistent `Direction:`
     field and bare numbers — it parsed 0 real blocks, leaving the auto-analyze
-    reconcile dead. A 🟡 HOLD block never arms levels.
+    reconcile dead. A 🟡 HOLD block never arms levels: it is returned as
+    ``{"ticker", "date", "direction": "hold"}`` so the caller can exclude it.
 
     Returns direction/trigger/stop/t1/t2/t3 + entry_low/entry_high, or None.
     """
@@ -2028,12 +2029,15 @@ def _parse_signals_md(ticker: str) -> dict | None:
     date, status, body = latest
 
     if "HOLD" in status.upper() or "🟡" in status:
-        return None
+        # Reported (the reconcile EXCLUDES a HOLD name) but never arms levels.
+        return {"ticker": T, "date": date, "direction": "hold"}
 
+    # Direction from the heading status first — a "🟢 BUY" inside an
+    # alternative-scenario line under a 🔴 SELL heading must not flip it.
     direction = None
-    if re.search(r"🟢\s*BUY", body):
+    if re.search(r"🟢|\bBUY\b", status, re.IGNORECASE):
         direction = "long"
-    elif re.search(r"🔴\s*SELL", body):
+    elif re.search(r"🔴|\bSELL\b", status, re.IGNORECASE):
         direction = "short"
 
     trigger = None
@@ -2115,11 +2119,14 @@ def _run_ticker_analysis(ticker: str, args) -> bool:
     combined = (orig + " " + extra_flags).strip()
     os.environ["TRADING_SCHEDULE_CLAUDE_FLAGS"] = combined
     try:
+        # The skill must append today's block to signals.md: a run that only
+        # wrote reports (or nothing) is not a signal to reconcile against.
         return run_claude(
             prompt,
             label=f"ticker-analysis ({ticker})",
             dry_run=args.dry_run,
             timeout=min(args.timeout, TICKER_ANALYSIS_TIMEOUT_S),
+            expected_output=TRADING_DATA_DIR / "analysis" / "signals.md",
         )
     finally:
         if orig:
@@ -2401,35 +2408,170 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
     return wl
 
 
+def _signal_geometry_ok(signal: dict) -> bool:
+    """Analysis levels on the correct side: long stop < trigger < T1, short
+    stop > trigger > T1."""
+    try:
+        trig, stop, t1 = float(signal["trigger"]), float(signal["stop"]), float(signal["t1"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if signal.get("direction") == "short":
+        return stop > trig > t1 > 0
+    return 0 < stop < trig < t1
+
+
+def _invalidate_pending_theses(ticker: str, side: str, *, reason: str, args) -> list[str]:
+    """INVALIDATE every pre-entry (IDEA / ENTRY_READY) thesis for ticker+side.
+
+    Theses are ingested after the reconcile, so an excluded candidate carries no
+    thesis_id — but a pending same-side thesis from an earlier day may exist.
+    Open positions are never touched."""
+    if args.dry_run:
+        return []
+    killed = []
+    for t in _list_theses():
+        if (
+            str(t.get("ticker", "")).upper() == ticker
+            and str(t.get("side") or "long").lower() == side
+            and str(t.get("status", "")).upper() in NON_OPEN_THESIS_STATES
+            and t.get("thesis_id")
+        ):
+            _invalidate_thesis(t["thesis_id"], reason=reason)
+            killed.append(t["thesis_id"])
+    return killed
+
+
+def _exclude_candidate(wl: dict, cand: dict, note: str, args) -> None:
+    """Move a candidate to rejected_by_validation (audit trail) and kill its
+    pending theses."""
+    ticker = str(cand.get("ticker", "")).upper()
+    side = str(cand.get("side", "long")).lower()
+    excluded = {
+        **cand,
+        "validation_note": note,
+        "source": "analysis-excluded",
+        "validated": False,
+    }
+    wl["candidates"] = [
+        c for c in (wl.get("candidates") or []) if str(c.get("ticker", "")).upper() != ticker
+    ]
+    rejected = [
+        c
+        for c in (wl.get("rejected_by_validation") or [])
+        if str(c.get("ticker", "")).upper() != ticker
+    ]
+    wl["rejected_by_validation"] = rejected + [excluded]
+    tids = {cand.get("thesis_id")} - {None}
+    if tids and not args.dry_run:
+        for tid in tids:
+            _invalidate_thesis(tid, reason=note)
+    _invalidate_pending_theses(ticker, side, reason=note, args=args)
+
+
+def _apply_analysis_levels(wl: dict, cand: dict, signal: dict) -> None:
+    """Make a same-direction, same-day, geometry-valid analysis authoritative."""
+    ticker = str(cand.get("ticker", "")).upper()
+    cand_side = str(cand.get("side", "")).lower()
+    profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
+    # worst_entry from the analysis Entry range when it lies on the chase
+    # side of the trigger, else the standard chase band — never the
+    # trigger itself or a wrong-side bound (zero/negative chase room
+    # turns the first tick past the trigger into MISSED + alert purge).
+    chase = tsig.DEFAULT_CHASE_PCT / 100
+    trigger = float(signal["trigger"])
+    if cand_side == "short":
+        worst = signal.get("entry_low")
+        if not worst or float(worst) >= trigger:
+            worst = round(trigger * (1 - chase), 2)
+    else:
+        worst = signal.get("entry_high")
+        if not worst or float(worst) <= trigger:
+            worst = round(trigger * (1 + chase), 2)
+    shares, risk_dollars = _profile_sized_shares(
+        profile, trigger, signal["stop"], worst=worst, side=cand_side
+    )
+    if shares is None:
+        shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
+    screener_origin = cand.get("screener_origin") or {
+        "side": cand.get("side"),
+        "pivot": cand.get("pivot"),
+        "stop": cand.get("stop"),
+        "target": cand.get("target"),
+        "shares": cand.get("shares"),
+        "score": cand.get("score"),
+        "source_plan": wl.get("source_plan"),
+    }
+    updated = {
+        **cand,
+        "pivot": signal["trigger"],
+        "worst_entry": worst,
+        "stop": signal["stop"],
+        "target": signal["t1"],
+        "t1": signal["t1"],
+        "t2": signal.get("t2"),
+        "t3": signal.get("t3"),
+        "shares": shares,
+        "risk_dollars": risk_dollars,
+        "validation_note": f"From ticker-analysis (signals.md {signal['date']})",
+        "validated": True,
+        "source": "analysis",
+        "screener_origin": screener_origin,
+    }
+    wl["candidates"] = [
+        updated if str(c.get("ticker", "")).upper() == ticker else c
+        for c in (wl.get("candidates") or [])
+    ]
+
+
 def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dict:
     """Deep ticker-analysis + reconcile for up to AUTO_ANALYZE_TOP_N (=1) of the
     best *fresh* watchlist candidates — the single deepest news+fundamental pass.
 
-    Walks candidates in rank order, skipping any analyzed within
-    FRESH_ANALYSIS_WEEKDAYS, and deep-dives the first not-fresh one(s) up to the
-    budget. For each analyzed name:
-    - direction match  → update pivot/stop/target/shares from analysis signal
-    - direction-flip   → remove from candidates (→ rejected_by_validation), invalidate thesis
-    - no signal parsed → keep as-is (log warning)
+    Walks candidates in rank order. A name analyzed within
+    FRESH_ANALYSIS_WEEKDAYS is not re-analyzed, but its latest signal still
+    vetoes the candidate when it is HOLD or the opposite direction. The first
+    not-recently-analyzed name(s) get the deep dive, then:
+    - signal not dated today      → keep chart-validation levels (stale block)
+    - HOLD / direction-flip       → exclude (→ rejected_by_validation), kill
+                                    pending same-side theses
+    - bad geometry (stop/T1 side) → keep chart-validation levels
+    - otherwise                   → analysis levels authoritative, re-sized
 
-    Every other candidate keeps its chart-validation levels. Writes the watchlist
-    in-place and returns the mutated wl dict."""
+    Writes the watchlist in-place and returns the mutated wl dict."""
     candidates = list(wl.get("candidates") or [])
     if not candidates:
         return wl
 
     runs = 0
-    for cand in list(candidates):
-        if runs >= AUTO_ANALYZE_TOP_N:
-            break
+    for cand in candidates:
         ticker = str(cand.get("ticker", "")).upper()
         if not ticker:
             continue
+        cand_side = str(cand.get("side", "")).lower()
+
         if _recently_analyzed(ticker, FRESH_ANALYSIS_WEEKDAYS):
+            recent = _parse_signals_md(ticker)
+            ws = _weekdays_since(recent["date"], as_of=date_str) if recent else None
+            if recent and ws is not None and ws <= FRESH_ANALYSIS_WEEKDAYS:
+                if recent["direction"] != cand_side:
+                    log(
+                        f"auto-analyze: {ticker} recent analysis ({recent['date']}) says "
+                        f"{recent['direction']} vs screener {cand_side} — excluding"
+                    )
+                    _exclude_candidate(
+                        wl,
+                        cand,
+                        f"Excluded by recent analysis: signal={recent['direction']}, "
+                        f"screener={cand_side} ({recent['date']})",
+                        args,
+                    )
+                    continue
             log(
                 f"auto-analyze: {ticker} analyzed within {FRESH_ANALYSIS_WEEKDAYS} weekdays "
                 "— keeping chart-validation levels, skipping deep dive"
             )
+            continue
+        if runs >= AUTO_ANALYZE_TOP_N:
             continue
         runs += 1
         log(f"auto-analyze: deep ticker-analysis for {ticker} (budget {runs}/{AUTO_ANALYZE_TOP_N})")
@@ -2443,83 +2585,38 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
         if signal is None:
             log(f"auto-analyze: {ticker} — no signal parsed from signals.md, keeping as-is")
             continue
+        if signal.get("date") != date_str:
+            log(
+                f"auto-analyze: {ticker} latest signals.md block is {signal.get('date')}, "
+                f"not {date_str} — stale, keeping chart-validation levels",
+                logging.WARNING,
+            )
+            continue
 
         sig_dir = signal["direction"]
-        cand_side = str(cand.get("side", "")).lower()
-
         if sig_dir != cand_side:
-            log(f"auto-analyze: {ticker} direction-flip ({cand_side} → {sig_dir}) — excluding")
-            excluded = dict(cand)
-            excluded["validation_note"] = (
-                f"Excluded by auto-analysis: signal={sig_dir}, screener={cand_side} ({signal['date']})"
+            log(f"auto-analyze: {ticker} {sig_dir} vs screener {cand_side} — excluding")
+            _exclude_candidate(
+                wl,
+                cand,
+                f"Excluded by auto-analysis: signal={sig_dir}, screener={cand_side} "
+                f"({signal['date']})",
+                args,
             )
-            excluded["source"] = "analysis-excluded"
-            excluded["validated"] = False
-            candidates = [c for c in candidates if str(c.get("ticker", "")).upper() != ticker]
-            rejected = [
-                c
-                for c in (wl.get("rejected_by_validation") or [])
-                if str(c.get("ticker", "")).upper() != ticker
-            ]
-            wl["rejected_by_validation"] = rejected + [excluded]
-            wl["candidates"] = candidates
-            tid = cand.get("thesis_id")
-            if tid and not args.dry_run:
-                _invalidate_thesis(tid, reason=f"analysis direction-flip: signal={sig_dir}")
-        else:
+            continue
+        if not _signal_geometry_ok(signal):
             log(
-                f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
-                f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}"
+                f"auto-analyze: {ticker} analysis levels have bad geometry "
+                f"(trigger={signal.get('trigger')} stop={signal.get('stop')} "
+                f"t1={signal.get('t1')}) — keeping chart-validation levels",
+                logging.WARNING,
             )
-            profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
-            # worst_entry from the analysis Entry range when it lies on the chase
-            # side of the trigger, else the standard chase band — never the
-            # trigger itself or a wrong-side bound (zero/negative chase room
-            # turns the first tick past the trigger into MISSED + alert purge).
-            chase = tsig.DEFAULT_CHASE_PCT / 100
-            trigger = float(signal["trigger"])
-            if cand_side == "short":
-                worst = signal.get("entry_low")
-                if not worst or float(worst) >= trigger:
-                    worst = round(trigger * (1 - chase), 2)
-            else:
-                worst = signal.get("entry_high")
-                if not worst or float(worst) <= trigger:
-                    worst = round(trigger * (1 + chase), 2)
-            shares, risk_dollars = _profile_sized_shares(
-                profile, trigger, signal["stop"], worst=worst, side=cand_side
-            )
-            if shares is None:
-                shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
-            screener_origin = cand.get("screener_origin") or {
-                "side": cand.get("side"),
-                "pivot": cand.get("pivot"),
-                "stop": cand.get("stop"),
-                "target": cand.get("target"),
-                "shares": cand.get("shares"),
-                "score": cand.get("score"),
-                "source_plan": wl.get("source_plan"),
-            }
-            updated = {
-                **cand,
-                "pivot": signal["trigger"],
-                "worst_entry": worst,
-                "stop": signal["stop"],
-                "target": signal["t1"],
-                "t1": signal["t1"],
-                "t2": signal["t2"],
-                "t3": signal["t3"],
-                "shares": shares,
-                "risk_dollars": risk_dollars,
-                "validation_note": f"From ticker-analysis (signals.md {signal['date']})",
-                "validated": True,
-                "source": "analysis",
-                "screener_origin": screener_origin,
-            }
-            candidates = [
-                updated if str(c.get("ticker", "")).upper() == ticker else c for c in candidates
-            ]
-            wl["candidates"] = candidates
+            continue
+        log(
+            f"auto-analyze: {ticker} levels-updated from analysis ({signal['date']}): "
+            f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}"
+        )
+        _apply_analysis_levels(wl, cand, signal)
 
     if not args.dry_run:
         _atomic_write_json(wl_path, wl)
@@ -2740,22 +2837,28 @@ def _evening_long_branch(date_str: str, args, dec: dict | None = None) -> tuple[
     if failed:
         wl["pipeline_errors"] = failed
     wl_path = _write_watchlist(wl, date_str, args)
-    if vcp and not args.dry_run:
-        _ingest_theses("vcp-screener", vcp, wl, wl_path, date_str, args, plan_path=plan_path)
     # Chart-validation levels are authoritative for every passed candidate;
     # the single deep ticker-analysis then refines / flips at most one of them.
     wl = _apply_validation_levels(wl, wl_path, validation, args)
     wl = _auto_analyze_reconcile(wl, wl_path, date_str, args)
+    # Theses LAST, from the final watchlist: they carry the levels the orders,
+    # alerts and heat ledger act on (not the planner's overridden ones), and
+    # excluded names are never registered.
+    if vcp and not args.dry_run:
+        _ingest_theses("vcp-screener", vcp, wl, wl_path, date_str, args, plan_path=plan_path)
     return wl_path, wl, _validation_note(wl, validation)
 
 
-def _weekdays_since(date_iso: str) -> int | None:
-    """Weekdays elapsed since a YYYY-MM-DD date; None on a bad date."""
+def _weekdays_since(date_iso: str, as_of: str | None = None) -> int | None:
+    """Weekdays elapsed since a YYYY-MM-DD date, counted to ``as_of`` (the
+    slot's --date; default today — a backfill run must not judge freshness by
+    the wall clock). None on a bad date."""
     try:
         start = dt.date.fromisoformat(date_iso)
+        end = dt.date.fromisoformat(as_of) if as_of else dt.date.today()
     except (TypeError, ValueError):
         return None
-    return tsig.weekdays_until(dt.date.today().isoformat(), start)
+    return tsig.weekdays_until(end.isoformat(), start)
 
 
 def _ftd_from_detector(path: Path | None) -> tuple[bool, str] | None:
@@ -3333,11 +3436,12 @@ def _evening_short_branch(
         source_plan=_rel(short_path) if short_path else None,
     )
     wl_path = _write_watchlist(wl, date_str, args)
-    if short_path and not args.dry_run:
-        _ingest_theses("swing-short-screener", short_path, wl, wl_path, date_str, args)
     # Chart-validation levels are authoritative for the short watchlist too
     # (no deep ticker-analysis on the short branch — detection-only).
     wl = _apply_validation_levels(wl, wl_path, validation, args)
+    # Theses from the final watchlist levels (see the long branch).
+    if short_path and not args.dry_run:
+        _ingest_theses("swing-short-screener", short_path, wl, wl_path, date_str, args)
     msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
     short_failed = short_path is None and not args.dry_run
     if short_failed:

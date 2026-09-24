@@ -112,9 +112,12 @@ export function parseSignalLevels(block: SignalBlock): AnalysisSignal | null {
   // HOLD once flipped a grade-A screener short into a "validated" long.
   if (block.status && (/\bHOLD\b/i.test(block.status) || block.status.includes('🟡'))) return null;
   const lines = block.markdown.split('\n');
-  let direction: 'long' | 'short' | null = /🟢\s*BUY/.test(block.markdown)
+  // Direction from the heading status first: a "🟢 BUY" inside an
+  // alternative-scenario line under a 🔴 SELL heading must not flip it.
+  const status = block.status ?? '';
+  let direction: 'long' | 'short' | null = /🟢|\bBUY\b/i.test(status)
     ? 'long'
-    : /🔴\s*SELL/.test(block.markdown)
+    : /🔴|\bSELL\b/i.test(status)
       ? 'short'
       : null;
 

@@ -72,10 +72,12 @@ def parse_block(date: str, ticker: str, status: str, body: str) -> dict | None:
     if "HOLD" in status.upper() or "🟡" in status:
         return None
 
+    # Direction from the heading status first: a "🟢 BUY" inside an
+    # alternative-scenario line under a 🔴 SELL heading must not flip it.
     direction = None
-    if re.search(r"🟢\s*BUY", body):
+    if re.search(r"🟢|\bBUY\b", status, re.IGNORECASE):
         direction = "long"
-    elif re.search(r"🔴\s*SELL", body):
+    elif re.search(r"🔴|\bSELL\b", status, re.IGNORECASE):
         direction = "short"
 
     trigger = None

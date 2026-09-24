@@ -15,6 +15,8 @@ function changeInfo(change: ReconcileChange): { label: string; color: string } {
       return { label: 'New candidate', color: 'var(--accent)' };
     case 'unchanged':
       return { label: 'No change', color: 'var(--muted)' };
+    case 'invalid-levels':
+      return { label: 'Invalid levels (stop/T1 on wrong side) — not applied', color: 'var(--red)' };
     default:
       return { label: 'No analysis signal found', color: 'var(--muted)' };
   }

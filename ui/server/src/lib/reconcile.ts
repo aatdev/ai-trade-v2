@@ -49,27 +49,37 @@ function originSnapshot(c: WatchlistCandidate, sourcePlan: string | null): Scree
 }
 
 /**
- * Risk-budget sizing for an analysis-updated candidate: shares from the
- * profile risk % (account × risk% / |pivot − stop|), capped so the position
- * never exceeds max_position_pct of the account. Never inherits the previous
- * candidate's risk_dollars — that number is the *achieved post-cap* risk of
- * the old geometry, not a budget (a capped 0.1%-risk short once resized a
- * flipped long to 1/9 of the intended risk).
+ * Risk-budget sizing for an analysis-updated candidate, measured at the WORST
+ * fill of the chase band (mirrors tsig.risk_sized_shares): shares = account ×
+ * risk% / |worst − stop|, capped so the position never exceeds max_position_pct
+ * of the account. Never inherits the previous candidate's risk_dollars — that
+ * number is the *achieved post-cap* risk of the old geometry, not a budget (a
+ * capped 0.1%-risk short once resized a flipped long to 1/9 of the intended
+ * risk).
  */
 function sizeFromProfile(
   profile: SizingProfile | null,
+  side: 'long' | 'short',
   pivot: number,
   stop: number,
+  worst: number,
 ): { shares: number; risk_dollars: number } | null {
   if (!profile || profile.account_size <= 0 || profile.risk_pct <= 0 || pivot <= 0) return null;
-  const dist = Math.abs(pivot - stop);
+  const fill = side === 'long' ? Math.max(pivot, worst) : Math.min(pivot, worst);
+  const dist = side === 'long' ? fill - stop : stop - fill;
   if (dist <= 0) return null;
   const budget = profile.account_size * (profile.risk_pct / 100);
   const capPct = profile.max_position_pct ?? DEFAULT_MAX_POSITION_PCT;
-  const cap = Math.floor((profile.account_size * capPct) / 100 / pivot);
+  const cap = Math.floor((profile.account_size * capPct) / 100 / Math.max(pivot, fill));
   const shares = Math.min(Math.floor(budget / dist), cap);
   if (shares <= 0) return null;
   return { shares, risk_dollars: round2(shares * dist) };
+}
+
+/** Long: stop < trigger < T1; short: stop > trigger > T1 (scheduler parity). */
+function levelsValid(a: AnalysisSignal): boolean {
+  if (a.direction === 'short') return a.stop > a.trigger && a.trigger > a.t1 && a.t1 > 0;
+  return a.stop > 0 && a.stop < a.trigger && a.trigger < a.t1;
 }
 
 /**
@@ -116,15 +126,26 @@ export function reconcile(
     return { ticker: T, change: 'direction-flip', analysis, current, proposed: excluded };
   }
 
+  if (!levelsValid(analysis)) {
+    // Stop / T1 on the wrong side of the trigger: never arm these levels.
+    return { ticker: T, change: 'invalid-levels', analysis, current, proposed: null };
+  }
+
   const pivot = analysis.trigger;
   const stop = analysis.stop;
   const target = analysis.t1;
+  // Entry-range bound only when it lies on the chase side of the trigger; a
+  // wrong-side bound would turn the first tick past the trigger into MISSED.
   const worst_entry =
     side === 'long'
-      ? (analysis.entryHigh ?? round2(pivot * (1 + CHASE_PCT / 100)))
-      : (analysis.entryLow ?? round2(pivot * (1 - CHASE_PCT / 100)));
+      ? analysis.entryHigh != null && analysis.entryHigh > pivot
+        ? analysis.entryHigh
+        : round2(pivot * (1 + CHASE_PCT / 100))
+      : analysis.entryLow != null && analysis.entryLow < pivot
+        ? analysis.entryLow
+        : round2(pivot * (1 - CHASE_PCT / 100));
 
-  const sized = sizeFromProfile(profile, pivot, stop);
+  const sized = sizeFromProfile(profile, side, pivot, stop, worst_entry);
   const shares = sized?.shares ?? current?.shares ?? null;
   const riskDollars = sized?.risk_dollars ?? current?.risk_dollars ?? null;
 
