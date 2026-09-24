@@ -8,7 +8,7 @@ metadata:
   modified: 2026-09-24T19:24:56.171Z
 ---
 
-2026-07-07 audit fixed 11 findings (commit 5dd25f0). 2026-09-24 re-audit (read-only) confirmed nearly all remaining items STILL PRESENT and found new ones. Fix plan phases 1-7 agreed 2026-09-24; phases 1-4 done, phases 5-7 (swing-short, skills, data/cron) (gating, reconcile, VCP, swing-short, skills, data/cron) open.
+2026-07-07 audit fixed 11 findings (commit 5dd25f0). 2026-09-24 re-audit (read-only) confirmed nearly all remaining items STILL PRESENT and found new ones. Fix plan phases 1-7 agreed 2026-09-24; phases 1-6 done; phase 7 blocked on user (real exit prices, cron enable) (gating, reconcile, VCP, swing-short, skills, data/cron) open.
 
 **Operational state (2026-09-24):** autopilot crontab line commented out → no production runs since 2026-07-08. journal/theses holds only 4 files (_index.json rewritten 07-08 09:14, no audit trail; 07-05 monthly counted 78). Tests write to prod `trading-data/logs/trading_schedule.log` (LOG_FILE not monkeypatched); a 07-07 pytest run invalidated ~27 real short theses.
 
@@ -18,6 +18,10 @@ metadata:
 
 **VCP screener — FIXED 2026-09-24 (commit 5b8d735, phase 4):** hard trend gates, c5 30%, universe-wide RS, SPY missing/stale → exit 1, current-bar check + date-aligned RS, volume zones by date, universe sidecar vcp_universe_meta.json (TV sectors → SPDR) for vcp+short, metrics_cache newest candles (py + vendor JS). Not fixed: same asc-sort bug in the separate tradingview-mcp-jackson checkout; ZigZag final-contraction miss (PLAUSIBLE); min-atr-pct tight-base skip.
 
-**Skills:** FMP v3 dead → pead-screener, earnings-trade-analyzer, pair-trade-screener dead; wrong stable path in signal-postmortem (use `stable/historical-price-eod/full`); run_all_tests rc=1 (navigator snapshot drift + non-hermetic weekly test); theme-detector 22 fails hidden by KNOWN_SKIP; bottom-flow SKILL.md frontmatter invalid YAML; TV screeners hang with no timeout when CDP unreachable.
+**Swing-short — FIXED (7d8419a, phase 5):** falling-MA200 hard gate, MA200-slope weight, RS maxes at -30%, grade A needs a support break, short branch vetoes recent BUY/HOLD analyses.
+
+**Skills — FIXED (677c93f + 7308df7, phase 6):** CI 55/55, KNOWN_SKIP empty (theme-detector tests → v2 formulas, canslim tests patched the wrong client → live network); pair-trade on FMP /stable + TV-scanner sector fallback (scripts/fmp_data.py); signal-postmortem stable eod path; TV client CDP breaker (TVUnavailableError after 2 CDP failures); bottom-flow frontmatter quoted + hook strict YAML (only when PyYAML importable — system python3 lacks it). Note: pead-screener / earnings-trade-analyzer already use the TV data layer; their fmp_client.py is dead code (audit finding was wrong). Not done: low-score SKILL.md structure for save-note / signals-alerts / ticker-analysis / send-telegram.
+
+**Phase 7 (2026-09-24):** dry-runs of evening-prep/premarket/intraday clean; heat snapshot refreshed. NOT done: 4 CLOSED theses with $1.0 exit (REGN/ZTS/INSM/TTEK) — no real fill prices anywhere in artifacts, needs the user's IB statement; autopilot crontab line still commented — enabling it was denied by the permission classifier, user must uncomment it themselves.
 
 Older items still open: orphaned GTC brackets, multi-day fill detection, HTTP exceptions in order handlers, partial submit_brackets, exposure-coach staleness/all-missing=50/No-FTD=0, market-top 5% rally invalidation, swing-short falling MA200, trader-memory postmortem 5d NEUTRAL. See [[corrupted-theses-exit-price-sentinel]], [[trading-system-profile]], [[autopilot-cron-env-gotchas]].
