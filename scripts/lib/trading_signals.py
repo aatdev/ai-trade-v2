@@ -741,6 +741,10 @@ def evaluate_signals(
             continue
         if signal["type"] in (OPEN_LONG, OPEN_SHORT) and not capacity_known:
             continue
+        # Only a chart-validated candidate (validation PASS, or levels from the
+        # deep analysis) arms an entry; unvalidated names are watch-only.
+        if signal["type"] in (OPEN_LONG, OPEN_SHORT) and candidate.get("validated") is not True:
+            continue
         if signal["type"] in (OPEN_LONG, OPEN_SHORT):
             risk = candidate.get("risk_dollars")
             if risk is None:

@@ -42,6 +42,7 @@ def _cand(ticker, side="long", thesis_id=None, **geo):
         "target": 110.0,
         "shares": 10,
         "risk_dollars": 50.0,
+        "validated": True,
     }
     base.update(geo)
     if thesis_id:
@@ -66,6 +67,13 @@ def test_select_cards_fallback_ticker_side():
     theses = [_thesis("th_amd_pvt_20260612_bbbb", "AMD", "long")]
     cards = wo.select_cards(wl, theses, "2026-06-15", "allow")
     assert len(cards) == 1 and cards[0]["thesis_id"] == "th_amd_pvt_20260612_bbbb"
+
+
+def test_select_cards_skips_unvalidated_candidates():
+    # No chart validation (failed step / rank > top-3) -> no order card.
+    wl = {"candidates": [_cand("NVDA", thesis_id="th_nvda_pvt_20260612_aaaa", validated=None)]}
+    theses = [_thesis("th_nvda_pvt_20260612_aaaa", "NVDA")]
+    assert wo.select_cards(wl, theses, "2026-06-15", "allow") == []
 
 
 def test_select_cards_skips_non_entry_ready():
@@ -158,7 +166,7 @@ def patched(monkeypatch, tmp_path):
 
 def test_cmd_send_short_under_restrict_sends(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "restrict", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "restrict", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,
@@ -188,7 +196,7 @@ def test_cmd_send_short_under_restrict_sends(monkeypatch, patched):
 
 def test_cmd_send_long_under_restrict_no_cards(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "restrict", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "restrict", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,
@@ -209,7 +217,7 @@ def test_cmd_send_long_under_restrict_no_cards(monkeypatch, patched):
 
 def test_cmd_send_skips_when_degraded(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": True}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": True}
     )
     monkeypatch.setattr(wo.ti, "send_order_card", lambda *a, **k: 1)
     assert wo.cmd_send(_Args()) == 0
@@ -217,7 +225,7 @@ def test_cmd_send_skips_when_degraded(monkeypatch, patched):
 
 def test_cmd_send_skips_when_stale(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": False}
     )
     monkeypatch.setattr(wo.sched, "_read_json", lambda p: {"date": "2020-01-01", "candidates": []})
     monkeypatch.setattr(wo.sched, "_watchlist_is_fresh", lambda wl, today: False)
@@ -227,7 +235,7 @@ def test_cmd_send_skips_when_stale(monkeypatch, patched):
 
 def test_cmd_send_happy_path_writes_ledger(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,
@@ -263,7 +271,7 @@ def test_cmd_send_happy_path_writes_ledger(monkeypatch, patched):
 
 def test_cmd_send_idempotent_no_duplicate(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,
@@ -286,7 +294,7 @@ def test_cmd_send_idempotent_no_duplicate(monkeypatch, patched):
 
 def test_cmd_send_dry_run_sends_nothing(monkeypatch, patched):
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,
@@ -466,7 +474,7 @@ class TestGateOkFor:
         monkeypatch.setattr(
             wo.sched,
             "read_decision",
-            lambda path: {"decision": decision, "degraded": degraded},
+            lambda path, **k: {"decision": decision, "degraded": degraded},
         )
 
     def test_long_allowed_under_allow(self, monkeypatch):
@@ -749,7 +757,7 @@ def test_cmd_listen_timeout_expires_pending(monkeypatch, patched):
 def test_cmd_send_skips_expired(monkeypatch, patched):
     # An expired card must not be re-sent the same day (idempotent guard).
     monkeypatch.setattr(
-        wo.sched, "read_decision", lambda p: {"decision": "allow", "degraded": False}
+        wo.sched, "read_decision", lambda p, **k: {"decision": "allow", "degraded": False}
     )
     monkeypatch.setattr(
         wo.sched,

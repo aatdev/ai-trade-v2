@@ -28,6 +28,10 @@ WEIGHTS = {
 # Critical inputs that reduce confidence when missing
 CRITICAL_INPUTS = {"regime", "top_risk", "breadth"}
 
+# Inputs older than this are treated as missing (a days-old breadth/regime read
+# is not "today's market"). Overridable with --max-input-age-hours.
+DEFAULT_MAX_INPUT_AGE_HOURS = 96.0
+
 # Regime to baseline score mapping
 REGIME_SCORES = {
     "broadening": 80,
@@ -76,6 +80,28 @@ def load_json_file(path: Optional[Path]) -> Optional[dict]:
     except (OSError, json.JSONDecodeError) as e:
         print(f"Warning: Could not load {path}: {e}", file=sys.stderr)
         return None
+
+
+def input_age_hours(data: Optional[dict], path: Path, *, now: Optional[datetime] = None) -> float:
+    """Age of an upstream report: its own ``generated_at`` (top level or under
+    ``metadata``) when parseable, else the file mtime."""
+    now = now or datetime.now(timezone.utc)
+    raw = None
+    if isinstance(data, dict):
+        raw = data.get("generated_at") or (data.get("metadata") or {}).get("generated_at")
+    if raw:
+        try:
+            ts = datetime.fromisoformat(str(raw).replace(" ", "T").replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.astimezone()
+            return max(0.0, (now - ts).total_seconds() / 3600)
+        except ValueError:
+            pass
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return float("inf")
+    return max(0.0, (now - mtime).total_seconds() / 3600)
 
 
 def extract_breadth_score(data: Optional[dict]) -> Optional[int]:
@@ -225,10 +251,18 @@ def extract_ftd_score(data: Optional[dict]) -> Optional[int]:
         return None
     if "ftd_score" in data:
         return int(data["ftd_score"])
+    # An FTD that was confirmed and then undercut is a failed bottom: bearish.
+    if (data.get("ftd_invalidation") or {}).get("invalidated"):
+        return 15
     # ftd-detector real shape: {"quality_score": {"total_score": 0-100, ...}}
     quality = data.get("quality_score")
-    if isinstance(quality, dict) and quality.get("total_score") is not None:
-        return max(0, min(100, int(quality["total_score"])))
+    if isinstance(quality, dict):
+        # "No FTD" = no rally attempt to confirm (often an intact uptrend): the
+        # input is not applicable, NOT a 0 like a failed follow-through.
+        if str(quality.get("signal") or "").strip().lower() == "no ftd":
+            return None
+        if quality.get("total_score") is not None:
+            return max(0, min(100, int(quality["total_score"])))
     if "anomaly_level" in data:
         level = data["anomaly_level"].lower()
         mapping = {"none": 90, "low": 80, "moderate": 55, "elevated": 35, "critical": 15}
@@ -322,7 +356,9 @@ def calculate_composite_score(
             missing.append(key)
 
     if total_weight == 0:
-        return 50.0, provided, missing
+        # No evidence at all -> fail safe (ceiling 0 / CASH_PRIORITY), not a
+        # neutral 50 that would read as a 50% exposure ceiling.
+        return 0.0, provided, missing
 
     composite = weighted_sum / total_weight
 
@@ -348,6 +384,22 @@ def determine_exposure_ceiling(composite: float) -> int:
         return int(10 + (composite - 20) * 1.3)
     else:
         return max(0, int(composite / 2))
+
+
+# Composite thresholds of the recommendation bands (see determine_recommendation).
+_CASH_PRIORITY_BELOW = 30.0
+_REDUCE_ONLY_BELOW = 50.0
+
+
+def cap_ceiling_for_recommendation(ceiling: int, recommendation: str) -> int:
+    """A REDUCE_ONLY / CASH_PRIORITY override (top risk, missing inputs) must
+    also bound the ceiling to its band — a 76% ceiling next to CASH_PRIORITY is
+    a contradiction downstream consumers cannot resolve."""
+    if recommendation == "CASH_PRIORITY":
+        return min(ceiling, determine_exposure_ceiling(_CASH_PRIORITY_BELOW - 0.1))
+    if recommendation == "REDUCE_ONLY":
+        return min(ceiling, determine_exposure_ceiling(_REDUCE_ONLY_BELOW - 0.1))
+    return ceiling
 
 
 def determine_recommendation(
@@ -588,18 +640,44 @@ def main():
         help="Output directory for reports (default: $TRADING_DATE_DIR/market, else reports/)",
     )
     parser.add_argument("--json-only", action="store_true", help="Output JSON only, skip markdown")
+    parser.add_argument(
+        "--max-input-age-hours",
+        type=float,
+        default=DEFAULT_MAX_INPUT_AGE_HOURS,
+        help=(
+            "Inputs older than this (their generated_at, else file mtime) are treated "
+            f"as missing (default: {DEFAULT_MAX_INPUT_AGE_HOURS:g}h)"
+        ),
+    )
 
     args = parser.parse_args()
 
-    # Load all inputs
-    breadth_data = load_json_file(args.breadth)
-    uptrend_data = load_json_file(args.uptrend)
-    regime_data = load_json_file(args.regime)
-    top_risk_data = load_json_file(args.top_risk)
-    ftd_data = load_json_file(args.ftd)
-    theme_data = load_json_file(args.theme)
-    sector_data = load_json_file(args.sector)
-    institutional_data = load_json_file(args.institutional)
+    # Load all inputs; stale ones count as missing (and are listed).
+    stale: list[str] = []
+
+    def load_fresh(key: str, path: Optional[Path]) -> Optional[dict]:
+        data = load_json_file(path)
+        if data is None:
+            return None
+        age = input_age_hours(data, path)
+        if age > args.max_input_age_hours:
+            print(
+                f"Warning: {key} input {path} is {age:.0f}h old "
+                f"(> {args.max_input_age_hours:g}h) — treated as missing",
+                file=sys.stderr,
+            )
+            stale.append(key)
+            return None
+        return data
+
+    breadth_data = load_fresh("breadth", args.breadth)
+    uptrend_data = load_fresh("uptrend", args.uptrend)
+    regime_data = load_fresh("regime", args.regime)
+    top_risk_data = load_fresh("top_risk", args.top_risk)
+    ftd_data = load_fresh("ftd", args.ftd)
+    theme_data = load_fresh("theme", args.theme)
+    sector_data = load_fresh("sector", args.sector)
+    institutional_data = load_fresh("institutional", args.institutional)
 
     # Extract scores
     scores: dict[str, Optional[int]] = {
@@ -620,6 +698,7 @@ def main():
     exposure_ceiling = determine_exposure_ceiling(composite)
     missing_critical = len(set(missing) & CRITICAL_INPUTS)
     recommendation = determine_recommendation(composite, scores["top_risk"], missing_critical)
+    exposure_ceiling = cap_ceiling_for_recommendation(exposure_ceiling, recommendation)
 
     regime_name = extract_regime_name(regime_data)
     bias = determine_bias(regime_name, scores["theme"], sector_data, institutional_data)
@@ -642,6 +721,7 @@ def main():
         "component_scores": {f"{k}_score": v for k, v in scores.items() if v is not None},
         "inputs_provided": provided,
         "inputs_missing": missing,
+        "inputs_stale": stale,
         "rationale": rationale,
     }
 

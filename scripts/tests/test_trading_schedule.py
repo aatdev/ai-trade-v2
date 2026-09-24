@@ -4,6 +4,7 @@ import datetime as dt
 import importlib.util
 import json
 import os
+import time
 import types
 from pathlib import Path
 
@@ -93,6 +94,20 @@ def test_unknown_decision_value_fails_safe(tmp_path):
     dec = ts.read_decision(p)
     assert dec["decision"] == "restrict"
     assert dec["degraded"] is True
+
+
+def test_gate_for_another_date_fails_safe(tmp_path):
+    p = tmp_path / "g.json"
+    p.write_text(json.dumps({"decision": "allow", "date": "2026-06-11"}))
+    dec = ts.read_decision(p, expected_date="2026-06-12")
+    assert dec["decision"] == "restrict"
+    assert dec["degraded"] is True
+
+
+def test_gate_matching_date_is_accepted(tmp_path):
+    p = tmp_path / "g.json"
+    p.write_text(json.dumps({"decision": "allow", "date": "2026-06-12"}))
+    assert ts.read_decision(p, expected_date="2026-06-12")["decision"] == "allow"
 
 
 def test_unparseable_gate_file_fails_safe(tmp_path):
@@ -405,9 +420,31 @@ def test_run_claude_requires_expected_output(monkeypatch, tmp_path):
     monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
     # File not written -> failure even though rc=0 and stdout is non-empty.
     assert ts.run_claude("x", label="t", dry_run=False, timeout=10, expected_output=out) is False
-    # Once the expected file exists with content -> success.
-    out.write_text(json.dumps({"ok": True}))
+
+    # Once the run itself writes the expected file with content -> success.
+    def writes_output(cmd, **kwargs):
+        out.write_text(json.dumps({"ok": True}))
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", writes_output)
     assert ts.run_claude("x", label="t", dry_run=False, timeout=10, expected_output=out) is True
+
+
+def test_run_claude_rejects_expected_output_left_by_an_earlier_run(monkeypatch, tmp_path):
+    """The evening regime run shares its gate path with the premarket run: a
+    no-op claude (rc=0) must not pass on the morning's file."""
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_EXIT_MODE", raising=False)
+    monkeypatch.delenv("TRADING_SCHEDULE_CLAUDE_FLAGS", raising=False)
+    out = tmp_path / "exposure_decision_2026-06-12.json"
+    out.write_text(json.dumps({"decision": "allow"}))
+    old = time.time() - 3600
+    os.utime(out, (old, old))
+
+    def fake_subprocess_run(cmd, **kwargs):
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(ts.subprocess, "run", fake_subprocess_run)
+    assert ts.run_claude("x", label="t", dry_run=False, timeout=10, expected_output=out) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -456,6 +493,49 @@ def test_run_regime_gate_no_retry_when_first_pass_writes(monkeypatch, tmp_path):
     assert dec["decision"] == "restrict"
 
 
+def test_run_regime_gate_ignores_stale_premarket_gate(monkeypatch, tmp_path):
+    """Evening run that writes nothing must not inherit the premarket gate."""
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    gate = ts.decision_path("2026-06-12")
+    gate.parent.mkdir(parents=True, exist_ok=True)
+    gate.write_text(json.dumps({"decision": "allow", "date": "2026-06-12"}))
+    old = time.time() - 6 * 3600
+    os.utime(gate, (old, old))
+    calls = []
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
+        calls.append(label)
+        return False  # no-op / failed session, gate untouched
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    args = types.SimpleNamespace(dry_run=False, timeout=60)
+    ok, dec = ts.run_regime_gate(
+        "2026-06-12", gate, quick=False, label="market-regime-daily (evening EOD)", args=args
+    )
+    assert len(calls) == 2  # stale file -> the finish-and-write retry still runs
+    assert dec["decision"] == "restrict" and dec["degraded"] is True
+
+
+def test_run_regime_gate_accepts_gate_written_before_timeout(monkeypatch, tmp_path):
+    """claude wrote a valid gate and then hit its budget (prod 07-06): the read
+    is real, not a fail-safe."""
+    monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
+    gate = ts.decision_path("2026-06-12")
+
+    def fake_run_claude(prompt, *, label, dry_run, timeout, expected_output=None):
+        gate.parent.mkdir(parents=True, exist_ok=True)
+        gate.write_text(json.dumps({"decision": "restrict", "date": "2026-06-12"}))
+        return False  # timed out after writing
+
+    monkeypatch.setattr(ts, "run_claude", fake_run_claude)
+    args = types.SimpleNamespace(dry_run=False, timeout=60)
+    ok, dec = ts.run_regime_gate(
+        "2026-06-12", gate, quick=False, label="market-regime-daily (evening EOD)", args=args
+    )
+    assert dec["decision"] == "restrict"
+    assert dec["degraded"] is False
+
+
 def test_run_regime_gate_dry_run_single_call(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "SCHEDULE_DIR", tmp_path / "schedule")
     gate = ts.decision_path("2026-06-12")
@@ -473,6 +553,110 @@ def test_run_regime_gate_dry_run_single_call(monkeypatch, tmp_path):
     # Dry-run never retries (no gate write expected); fail-safe restrict from read_decision.
     assert len(calls) == 1
     assert dec["decision"] == "restrict"
+
+
+# --------------------------------------------------------------------------- #
+# Deterministic exposure-coach reconciliation of the LLM gate
+# --------------------------------------------------------------------------- #
+def _posture(rec, ceiling, *, provided=("breadth", "uptrend", "regime")):
+    return {
+        "recommendation": rec,
+        "exposure_ceiling_pct": ceiling,
+        "composite_score": 55.0,
+        "inputs_provided": list(provided),
+        "inputs_missing": [],
+    }
+
+
+class TestCoachReconcile:
+    def _reconcile(self, monkeypatch, tmp_path, dec, posture):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        gate = ts.decision_path("2026-06-12")
+        _write_json(gate, {k: v for k, v in dec.items() if k != "degraded"})
+        args = types.SimpleNamespace(dry_run=False, timeout=60)
+        out = ts._reconcile_gate_with_coach(dec, posture, gate, "2026-06-12", args)
+        return out, json.loads(gate.read_text(encoding="utf-8"))
+
+    def test_llm_allow_clamped_to_coach_reduce_only(self, monkeypatch, tmp_path):
+        dec = {"decision": "allow", "net_exposure_ceiling_pct": 65, "degraded": False}
+        out, written = self._reconcile(monkeypatch, tmp_path, dec, _posture("REDUCE_ONLY", 45))
+        assert out["decision"] == "restrict"
+        assert out["clamped_from"] == "allow"
+        assert written["decision"] == "restrict"  # gate file rewritten for consumers
+        assert out["net_exposure_ceiling_pct"] == 45
+
+    def test_llm_stricter_than_coach_is_kept(self, monkeypatch, tmp_path):
+        # News may make the LLM MORE defensive than the coach -- that stands.
+        dec = {"decision": "restrict", "net_exposure_ceiling_pct": 30, "degraded": False}
+        out, _ = self._reconcile(monkeypatch, tmp_path, dec, _posture("NEW_ENTRY_ALLOWED", 65))
+        assert out["decision"] == "restrict"
+        assert "clamped_from" not in out
+        assert out["coach_recommendation"] == "NEW_ENTRY_ALLOWED"
+
+    def test_ceiling_never_above_coach(self, monkeypatch, tmp_path):
+        dec = {"decision": "allow", "net_exposure_ceiling_pct": 80, "degraded": False}
+        out, _ = self._reconcile(monkeypatch, tmp_path, dec, _posture("NEW_ENTRY_ALLOWED", 60))
+        assert out["decision"] == "allow"
+        assert out["net_exposure_ceiling_pct"] == 60
+
+    def test_failed_claude_step_falls_back_to_coach_gate(self, monkeypatch, tmp_path):
+        # 8/25 prod evenings timed out -> fail-safe RESTRICT with a perfectly good
+        # deterministic read available. Use the coach instead of "unknown".
+        dec = {"decision": "restrict", "degraded": True, "rationale": "fail-safe"}
+        out, written = self._reconcile(
+            monkeypatch, tmp_path, dec, _posture("NEW_ENTRY_ALLOWED", 62)
+        )
+        assert out["decision"] == "allow"
+        assert out["degraded"] is False
+        assert out["source"] == "exposure-coach"
+        assert written["decision"] == "allow"
+
+    def test_failed_claude_without_required_inputs_stays_degraded(self, monkeypatch, tmp_path):
+        dec = {"decision": "restrict", "degraded": True, "rationale": "fail-safe"}
+        posture = _posture("NEW_ENTRY_ALLOWED", 62, provided=("regime",))
+        out, _ = self._reconcile(monkeypatch, tmp_path, dec, posture)
+        assert out["degraded"] is True
+
+    def test_no_posture_leaves_gate_unchanged(self, monkeypatch, tmp_path):
+        dec = {"decision": "allow", "net_exposure_ceiling_pct": 65, "degraded": False}
+        out, _ = self._reconcile(monkeypatch, tmp_path, dec, None)
+        assert out == dec
+
+
+def test_evening_runs_deterministic_regime_inputs_before_claude(monkeypatch, tmp_path):
+    _patch_trading_dirs(monkeypatch, tmp_path)
+    order = []
+
+    def fake_script(cmd, *, label, dry_run, timeout, output_glob=None):
+        order.append(("script", label))
+        return None
+
+    def fake_claude(prompt, *, label, dry_run, timeout, expected_output=None):
+        order.append(("claude", label))
+        _gate(tmp_path, "2026-06-11", "restrict")
+        return True
+
+    monkeypatch.setattr(ts, "run_skill_script", fake_script)
+    monkeypatch.setattr(ts, "run_claude", fake_claude)
+    monkeypatch.setattr(ts, "tv_available", lambda **k: True)
+    monkeypatch.setattr(ts, "notify", lambda text, **k: None)
+    monkeypatch.delenv("TRADING_ENABLE_SHORTS", raising=False)
+    ts.main(["--slot", "evening-prep", "--date", "2026-06-11", "--no-telegram"])
+    labels = [lbl for _, lbl in order]
+    first_claude = next(i for i, (kind, _) in enumerate(order) if kind == "claude")
+    for needed in ("market-breadth", "uptrend", "macro-regime", "ftd-detector", "ibd"):
+        idx = next(i for i, lbl in enumerate(labels) if needed in lbl)
+        assert idx < first_claude, needed
+    assert any("exposure-coach" in lbl for lbl in labels[first_claude:])
+
+
+def test_regime_prompt_lists_precomputed_inputs_and_coach_bound():
+    gate = Path("/tmp/exposure_decision_2026-06-12.json")
+    inputs = {"breadth": Path("/tmp/market/market_breadth_x.json")}
+    prompt = ts.regime_prompt("2026-06-12", gate, quick=False, precomputed=inputs)
+    assert "market_breadth_x.json" in prompt
+    assert "--breadth" in prompt
+    assert "never less" in prompt.lower() or "never more permissive" in prompt.lower()
 
 
 # --------------------------------------------------------------------------- #
@@ -864,6 +1048,7 @@ _NVDA_CANDIDATE = {
     "shares": 380,
     "risk_dollars": 2356.0,
     "score": 78.5,
+    "validated": True,
 }
 
 
@@ -1031,6 +1216,8 @@ class TestEveningHybrid:
         heat_ok=True,
         universe_tickers=None,
         enable_shorts=False,
+        ftd_report=None,
+        fail_label=None,
     ):
         _patch_trading_dirs(monkeypatch, tmp_path)
         # Short trading is opt-in (TRADING_ENABLE_SHORTS). Short-branch tests set
@@ -1052,6 +1239,11 @@ class TestEveningHybrid:
         )
         if market_top is not None:
             _write_json(tmp_path / "market" / "market_top_2026-06-11_120000.json", market_top)
+            # The short branch requires a fresh ftd-detector read (built nightly).
+            _write_json(
+                tmp_path / "market" / "ftd_detector_2026-06-11_220000.json",
+                ftd_report or _NO_FTD_REPORT,
+            )
 
         script_calls = []
         script_cmds = {}
@@ -1059,6 +1251,8 @@ class TestEveningHybrid:
         def fake_run_skill_script(cmd, *, label, dry_run, timeout, output_glob=None):
             script_calls.append(label)
             script_cmds[label] = [str(c) for c in cmd]
+            if fail_label and fail_label in label:
+                return None  # the script crashed / timed out
             if "vcp" in label:
                 return _write_json(
                     tmp_path / "screeners" / "vcp_screener_2026-06-11_221000.json", {"results": []}
@@ -1122,6 +1316,34 @@ class TestEveningHybrid:
         assert wl["candidates"][0]["ticker"] == "NVDA"
         assert wl["candidates"][0]["shares"] == 380
         assert sent and "NVDA" in sent[0]
+
+    def test_screener_crash_is_reported_not_silent(self, monkeypatch, tmp_path):
+        """A crashed VCP screen must not read as "no setups today" with rc=0."""
+        rc, calls, sent = self._run(monkeypatch, tmp_path, decision="allow", fail_label="vcp")
+        assert rc == 1
+        assert sent and "vcp-screener" in sent[0] and "не отработал" in sent[0]
+
+    def test_planner_crash_is_reported_not_silent(self, monkeypatch, tmp_path):
+        rc, _, sent = self._run(monkeypatch, tmp_path, decision="allow", fail_label="planner")
+        assert rc == 1
+        assert sent and "breakout-trade-planner" in sent[0]
+
+    def test_short_screener_crash_is_reported_not_silent(self, monkeypatch, tmp_path):
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        rc, _, sent = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            enable_shorts=True,
+            fail_label="swing-short",
+        )
+        assert rc == 1
+        assert sent and "swing-short-screener" in sent[0] and "не отработал" in sent[0]
 
     def test_heat_failure_blocks_long_pipeline_fail_safe(self, monkeypatch, tmp_path):
         """No heat ledger → the planner would assume a zero-risk baseline with
@@ -1341,12 +1563,19 @@ class TestEveningHybrid:
             "components": {"distribution_days": {"effective_count": 6.0}},
             "follow_through_day": {"ftd_detected": True},
         }
+        today = dt.date.today().isoformat()
+        confirmed = {
+            "sp500": {"state": "FTD_CONFIRMED", "ftd": {"ftd_detected": True, "ftd_date": today}},
+            "nasdaq": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
+            "ftd_invalidation": {"invalidated": False},
+        }
         rc, calls, _ = self._run(
             monkeypatch,
             tmp_path,
             decision="restrict",
             market_top=market_top,
             enable_shorts=True,
+            ftd_report=confirmed,
         )
         assert rc == 0
         assert not any("short" in c for c in calls)
@@ -1727,8 +1956,16 @@ def _weekdays_ago(n: int) -> str:
     return d.isoformat()
 
 
+_NO_FTD_REPORT = {
+    "market_state": {"combined_state": "RALLY_ATTEMPT"},
+    "sp500": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
+    "nasdaq": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
+    "ftd_invalidation": {"invalidated": False},
+}
+
+
 class TestShortConditions:
-    def _setup(self, monkeypatch, tmp_path, *, market_top=None, ftd=None, ibd=None):
+    def _setup(self, monkeypatch, tmp_path, *, market_top=None, ftd=_NO_FTD_REPORT, ibd=None):
         _patch_trading_dirs(monkeypatch, tmp_path)
         if market_top is not None:
             _write_json(tmp_path / "market" / "market_top_2026-06-11_120000.json", market_top)
@@ -1758,6 +1995,23 @@ class TestShortConditions:
             "nasdaq": {"state": "RALLY_ATTEMPT", "ftd": {"ftd_detected": False}},
             "ftd_invalidation": {"invalidated": invalidated},
         }
+
+    def test_stale_ftd_report_blocks_shorts(self, monkeypatch, tmp_path):
+        """A days-old 'no FTD' cannot vouch that no FTD printed since (prod: the
+        detector only ran on Saturdays, shorts armed through fresh FTDs)."""
+        ftd = self._ftd_report("RALLY_ATTEMPT", None)
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ftd=ftd)
+        path = tmp_path / "market" / "ftd_detector_2026-06-11_130000.json"
+        old = time.time() - 3 * 86400
+        os.utime(path, (old, old))
+        active, reason = ts._short_conditions()
+        assert active is False
+        assert "FTD" in reason
+
+    def test_missing_ftd_report_blocks_shorts(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path, market_top=self._pressure_top(), ftd=None)
+        active, reason = ts._short_conditions()
+        assert active is False and "FTD" in reason
 
     def test_market_top_dd_fallback_enables_shorts(self, monkeypatch, tmp_path):
         self._setup(monkeypatch, tmp_path, market_top=self._pressure_top())
@@ -2152,6 +2406,7 @@ def test_open_short_signal_embeds_journal_commands(monkeypatch, tmp_path):
         "shares": 100,
         "risk_dollars": 1500.0,
         "score": 82.5,
+        "validated": True,
         "thesis_id": "th_nflx_pvt_20260611_cd34",
     }
     _watchlist_file(tmp_path, "2026-06-11", [short_cand])

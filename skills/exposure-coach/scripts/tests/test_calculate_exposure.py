@@ -6,6 +6,7 @@ from calculate_exposure import (
     CRITICAL_INPUTS,
     WEIGHTS,
     calculate_composite_score,
+    cap_ceiling_for_recommendation,
     determine_bias,
     determine_confidence,
     determine_exposure_ceiling,
@@ -19,6 +20,7 @@ from calculate_exposure import (
     extract_uptrend_score,
     generate_markdown_report,
     generate_rationale,
+    input_age_hours,
     load_json_file,
 )
 
@@ -237,9 +239,18 @@ class TestExtractFtdScore:
         data = {"quality_score": {"total_score": 82, "signal": "Strong FTD"}}
         assert extract_ftd_score(data) == 82
 
-    def test_nested_quality_score_no_ftd(self):
+    def test_no_ftd_is_not_applicable_not_bearish(self):
+        # "No FTD" means no rally attempt to confirm (e.g. an intact uptrend) --
+        # it must not be scored 0 like a FAILED FTD and drag the composite down.
         data = {"quality_score": {"total_score": 0, "signal": "No FTD"}}
-        assert extract_ftd_score(data) == 0
+        assert extract_ftd_score(data) is None
+
+    def test_invalidated_ftd_scores_low(self):
+        data = {
+            "quality_score": {"total_score": 70, "signal": "Strong FTD"},
+            "ftd_invalidation": {"invalidated": True},
+        }
+        assert extract_ftd_score(data) == 15
 
     def test_legacy_anomaly_level_still_supported(self):
         assert extract_ftd_score({"anomaly_level": "none"}) == 90
@@ -324,9 +335,10 @@ class TestCalculateCompositeScore:
         assert len(provided) == 6
 
     def test_no_inputs(self):
+        # No evidence at all is not a neutral 50 / 50%-ceiling market: fail safe.
         scores = {k: None for k in WEIGHTS}
         composite, provided, missing = calculate_composite_score(scores)
-        assert composite == 50.0  # Default when no inputs
+        assert composite == 0.0
         assert len(provided) == 0
         assert len(missing) == 8
 
@@ -625,3 +637,65 @@ class TestIntegration:
             assert data["exposure_ceiling_pct"] < 50
         finally:
             sys.argv = original_argv
+
+
+class TestCeilingFollowsRecommendation:
+    """The ceiling must not contradict a REDUCE_ONLY / CASH_PRIORITY override."""
+
+    def test_cash_priority_caps_ceiling(self):
+        # composite 70 would map to ~76%, but top-risk forced CASH_PRIORITY
+        assert cap_ceiling_for_recommendation(76, "CASH_PRIORITY") <= determine_exposure_ceiling(
+            29.9
+        )
+
+    def test_reduce_only_caps_ceiling(self):
+        assert cap_ceiling_for_recommendation(76, "REDUCE_ONLY") <= determine_exposure_ceiling(49.9)
+
+    def test_new_entry_allowed_keeps_ceiling(self):
+        assert cap_ceiling_for_recommendation(76, "NEW_ENTRY_ALLOWED") == 76
+
+    def test_lower_ceiling_never_raised(self):
+        assert cap_ceiling_for_recommendation(12, "REDUCE_ONLY") == 12
+
+
+class TestInputStaleness:
+    def test_age_from_generated_at(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc)
+        data = {"generated_at": (now - timedelta(hours=50)).isoformat()}
+        assert round(input_age_hours(data, tmp_path / "x.json", now=now)) == 50
+
+    def test_age_from_metadata_generated_at(self, tmp_path):
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 6, 11, 22, 0, tzinfo=timezone.utc)
+        data = {"metadata": {"generated_at": "2026-06-10T22:00:00+00:00"}}
+        assert round(input_age_hours(data, tmp_path / "x.json", now=now)) == 24
+
+    def test_stale_input_treated_as_missing(self, tmp_path, monkeypatch):
+        import calculate_exposure as ce
+
+        old = {"generated_at": "2020-01-01T00:00:00+00:00", "breadth_score": 90}
+        fresh = {"uptrend_score": 70}
+        (tmp_path / "b.json").write_text(json.dumps(old))
+        (tmp_path / "u.json").write_text(json.dumps(fresh))
+        out = tmp_path / "out"
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "calculate_exposure.py",
+                "--breadth",
+                str(tmp_path / "b.json"),
+                "--uptrend",
+                str(tmp_path / "u.json"),
+                "--output-dir",
+                str(out),
+                "--json-only",
+            ],
+        )
+        assert ce.main() == 0
+        result = json.loads(sorted(out.glob("exposure_posture_*.json"))[-1].read_text())
+        assert "breadth" in result["inputs_missing"]
+        assert "breadth" in result["inputs_stale"]
+        assert "breadth_score" not in result["component_scores"]

@@ -104,7 +104,7 @@ def short_candidate(**overrides):
         "shares": 100,
         "risk_dollars": 1500.0,
         "score": 82.5,
-        "validated": None,
+        "validated": True,
     }
     c.update(overrides)
     return c
@@ -522,6 +522,18 @@ class TestOpenSignals:
             wl, heat, {"AAPL": {"price": 94.5}}, "restrict", set(), suppress_opens=True
         )
         assert _types(signals) == [("AAPL", "STOP_HIT")]
+
+    def test_unvalidated_candidate_arms_no_open(self):
+        # Validation failed / never ran for this name (rank > top-3): the chart
+        # was not checked -> watch-only, no OPEN (used to arm like a pass).
+        wl = make_watchlist([long_candidate(validated=None)])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 156.0}}, "allow", set())
+        assert signals == []
+
+    def test_unvalidated_candidate_still_reports_missed(self):
+        wl = make_watchlist([long_candidate(validated=None)])
+        signals = sig.evaluate_signals(wl, make_heat(), {"NVDA": {"price": 170.0}}, "allow", set())
+        assert _types(signals) == [("NVDA", "MISSED")]
 
     def test_missing_heat_arms_no_open(self):
         # No heat snapshot = unknown slots/heat/open positions -> no new risk.

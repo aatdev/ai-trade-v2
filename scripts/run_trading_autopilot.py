@@ -78,9 +78,7 @@ WEEKLY_START = dt.time(12, 0)
 def _windows_local(d: dt.date) -> dict:
     """Per-date local wall-clock window boundaries for the US session."""
     close_et = schedule.us_session_close_et(d)
-    evening_et = (
-        dt.datetime.combine(d, close_et) + dt.timedelta(minutes=EVENING_DELAY_MIN)
-    ).time()
+    evening_et = (dt.datetime.combine(d, close_et) + dt.timedelta(minutes=EVENING_DELAY_MIN)).time()
     return {
         "premarket_start": schedule.et_to_local(d, PREMARKET_START_ET),
         "premarket_end": schedule.et_to_local(d, PREMARKET_END_ET),
@@ -88,6 +86,7 @@ def _windows_local(d: dt.date) -> dict:
         "intraday_end": schedule.et_to_local(d, close_et),
         "evening_start": schedule.et_to_local(d, evening_et),
     }
+
 
 MAX_ATTEMPTS = 2
 # The intraday monitor is repeatable: re-run no sooner than this many minutes
@@ -286,7 +285,10 @@ def decide_action(now: dt.datetime, state: dict) -> tuple[str, str]:
     if t < w["premarket_start"]:
         return "none", f"до премаркета шагов нет (следующий шаг в {w['premarket_start']:%H:%M})"
     if t < w["intraday_start"]:
-        return "none", f"premarket обработан; мониторинг сессии начнётся в {w['intraday_start']:%H:%M}"
+        return (
+            "none",
+            f"premarket обработан; мониторинг сессии начнётся в {w['intraday_start']:%H:%M}",
+        )
     return "none", f"интрадей-окно закрыто (вечерний прогон в {w['evening_start']:%H:%M})"
 
 
@@ -300,7 +302,7 @@ def detect_gate_change(state: dict, decision: str) -> tuple[str, str] | None:
 
 def read_gate_decision(date_str: str) -> dict:
     """Today's exposure gate via the schedule module (fail-safe restrict)."""
-    return schedule.read_decision(schedule.decision_path(date_str))
+    return schedule.read_decision(schedule.decision_path(date_str), expected_date=date_str)
 
 
 # --------------------------------------------------------------------------- #

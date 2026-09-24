@@ -68,6 +68,9 @@ def append_history(
     if len(history) > 20:
         history = history[-20:]
 
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w") as f:
         json.dump(history, f, indent=2, default=str)
 

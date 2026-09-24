@@ -41,6 +41,12 @@ class TestAppendHistory:
         assert history[0]["composite_score"] == 65.0
         assert history[0]["data_date"] == "2025-01-10"
 
+    def test_append_creates_missing_output_dir(self, tmp_path):
+        # A fresh --output-dir used to crash the whole analyzer (FileNotFoundError).
+        path = str(tmp_path / "new" / "dir" / "history.json")
+        append_history(path, 65.0, {}, "2025-01-10")
+        assert len(load_history(path)) == 1
+
     def test_append_adds_entry(self, tmp_history):
         append_history(tmp_history, 60.0, {}, "2025-01-09")
         append_history(tmp_history, 65.0, {}, "2025-01-10")

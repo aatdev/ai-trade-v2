@@ -188,6 +188,9 @@ def select_cards(wl: dict, theses: list[dict], date_str: str, gate_decision: str
     for cand in wl.get("candidates", []):
         if not isinstance(cand, dict):
             continue
+        # Mirror of the intraday OPEN rule: no card for a chart-unvalidated name.
+        if cand.get("validated") is not True:
+            continue
         thesis = match_thesis(cand, by_id, by_ts)
         if not thesis:
             continue
@@ -213,7 +216,7 @@ def _parse_date(date_str: str) -> dt.date:
 
 def cmd_send(args) -> int:
     date_str = _today_iso(args.date)
-    gate = sched.read_decision(sched.decision_path(date_str))
+    gate = sched.read_decision(sched.decision_path(date_str), expected_date=date_str)
     # Only a degraded/unknown regime blocks cards outright. A clean allow sends
     # long cards; a clean restrict/cash-priority sends short cards (per-side
     # filtering happens in select_cards).
@@ -574,7 +577,8 @@ def gate_ok_for(entry: dict) -> tuple[bool, str]:
     """Re-check the regime gate at tap time: a card sent at 15:00 can be tapped
     hours later, after the gate flipped or degraded. Longs need ``allow``,
     shorts ``restrict`` / ``cash-priority``; a degraded gate blocks both."""
-    gate = sched.read_decision(sched.decision_path(_today_iso(None)))
+    today = _today_iso(None)
+    gate = sched.read_decision(sched.decision_path(today), expected_date=today)
     decision = gate.get("decision")
     if gate.get("degraded"):
         return False, f"гейт degraded ({decision}) — новый риск не открываем"

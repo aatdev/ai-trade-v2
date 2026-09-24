@@ -270,6 +270,9 @@ WATCHLIST_ORDERS_SCRIPT = PROJECT_ROOT / "scripts" / "watchlist_orders.py"
 IBD_SCRIPT = SKILLS_DIR / "ibd-distribution-day-monitor" / "scripts" / "ibd_monitor.py"
 MACRO_SCRIPT = SKILLS_DIR / "macro-regime-detector" / "scripts" / "macro_regime_detector.py"
 FTD_SCRIPT = SKILLS_DIR / "ftd-detector" / "scripts" / "ftd_detector.py"
+BREADTH_SCRIPT = SKILLS_DIR / "market-breadth-analyzer" / "scripts" / "market_breadth_analyzer.py"
+UPTREND_SCRIPT = SKILLS_DIR / "uptrend-analyzer" / "scripts" / "uptrend_analyzer.py"
+COACH_SCRIPT = SKILLS_DIR / "exposure-coach" / "scripts" / "calculate_exposure.py"
 IB_SNAPSHOT_SCRIPT = SKILLS_DIR / "ib-portfolio-manager" / "scripts" / "fetch_ib_snapshot.py"
 
 # Intraday monitoring window: derived per date from US Eastern (see
@@ -283,8 +286,23 @@ SHORT_TOP_RISK_MIN = 41.0
 SHORT_DD_MIN = 3
 # A confirmed FTD older than this many weekdays no longer forbids shorting.
 FTD_FRESH_WEEKDAYS = 10
-# market_top / ftd reports older than this are treated as absent (fail-safe).
+# market_top reports older than this are treated as absent (fail-safe).
 MARKET_REPORT_MAX_AGE_DAYS = 7
+# FTD / IBD distribution-day reports are rebuilt every evening before the short
+# decision; older than this they cannot vouch that no FTD printed since.
+DAILY_MARKET_REPORT_MAX_AGE_HOURS = 20
+# Freshness bound for a market_top report the evening exposure-coach run may use
+# (the LLM regime step usually produces it in the same slot).
+COACH_TOP_RISK_MAX_AGE_HOURS = 30
+# exposure-coach recommendation -> gate decision, and gate strictness order.
+COACH_TO_DECISION = {
+    "NEW_ENTRY_ALLOWED": "allow",
+    "REDUCE_ONLY": "restrict",
+    "CASH_PRIORITY": "cash-priority",
+}
+DECISION_STRICTNESS = {"allow": 0, "restrict": 1, "cash-priority": 2}
+# Inputs the coach must have had for its read to replace a failed claude step.
+COACH_REQUIRED_INPUTS = ("breadth", "uptrend")
 # How many watchlist candidates get the full auto ticker-analysis + reconcile
 # pass each evening. Option C: only the single best *fresh* candidate gets the
 # deep news+fundamental+technical dive; every other candidate's levels come
@@ -707,6 +725,16 @@ def _run_claude_kill_ppid(
     return False
 
 
+def _written_since(path: Path, since_epoch: float) -> bool:
+    """Non-empty file whose mtime is at/after ``since_epoch`` (i.e. produced by
+    the run that started then, not left over from an earlier one)."""
+    try:
+        st = Path(path).stat()
+    except OSError:
+        return False
+    return Path(path).is_file() and st.st_size > 0 and st.st_mtime >= since_epoch
+
+
 def run_claude(
     prompt: str,
     *,
@@ -766,6 +794,7 @@ def run_claude(
         return True
 
     started = time.monotonic()
+    started_wall = time.time()
     try:
         res = _popen_tee(cmd, env=_child_claude_env(), timeout=timeout, stream=_stream_enabled())
     except subprocess.TimeoutExpired:
@@ -793,14 +822,13 @@ def run_claude(
     # rc==0 is not enough: a nested/failed claude-pee exits clean with no output.
     if expected_output is not None:
         out = Path(expected_output)
-        try:
-            produced = out.is_file() and out.stat().st_size > 0
-        except OSError:
-            produced = False
-        if not produced:
+        # Written BY THIS run: several slots share an output path (the premarket
+        # and evening regime runs write the same gate file), so a pre-existing
+        # file from an earlier run must not read as this run's result.
+        if not _written_since(out, started_wall):
             log(
-                f"{label}: no expected output at {_rel(out)} (rc=0, {elapsed:.0f}s) -- "
-                "claude produced nothing",
+                f"{label}: no fresh expected output at {_rel(out)} (rc=0, {elapsed:.0f}s) -- "
+                "claude produced nothing this run",
                 logging.ERROR,
             )
             return False
@@ -915,8 +943,11 @@ def decision_path(date_str: str) -> Path:
     return SCHEDULE_DIR / f"exposure_decision_{date_str}.json"
 
 
-def read_decision(path: Path) -> dict:
-    """Read the machine-readable exposure gate. Fail safe to ``restrict``."""
+def read_decision(path: Path, expected_date: str | None = None) -> dict:
+    """Read the machine-readable exposure gate. Fail safe to ``restrict``.
+
+    With ``expected_date`` a gate whose ``date`` field names another session is
+    rejected (fail-safe) — a mis-dated write is not today's regime read."""
     fallback = {
         "decision": "restrict",
         "rationale": "Файл-гейт exposure_decision отсутствует или не читается; "
@@ -937,6 +968,12 @@ def read_decision(path: Path) -> dict:
             "fail-safe restrict."
         )
         return fallback
+    gate_date = str(data.get("date") or "").strip()
+    if expected_date and gate_date and gate_date != expected_date:
+        fallback["rationale"] = (
+            f"{path.name} датирован {gate_date}, ожидался {expected_date}; fail-safe restrict."
+        )
+        return fallback
     data["decision"] = decision
     data.setdefault("degraded", False)
     return data
@@ -945,13 +982,48 @@ def read_decision(path: Path) -> dict:
 # --------------------------------------------------------------------------- #
 # Prompt builders
 # --------------------------------------------------------------------------- #
-def regime_prompt(date_str: str, gate_path: Path, *, quick: bool) -> str:
+_COACH_FLAGS = {
+    "breadth": "--breadth",
+    "uptrend": "--uptrend",
+    "regime": "--regime",
+    "ftd": "--ftd",
+}
+
+
+def _precomputed_block(precomputed: dict[str, Path]) -> str:
+    """Prompt section for the deterministic inputs the scheduler already built."""
+    lines = "\n".join(f"  - {k}: {_rel(v)}" for k, v in sorted(precomputed.items()))
+    flags = " ".join(
+        f"{_COACH_FLAGS[k]} {_rel(v)}" for k, v in sorted(precomputed.items()) if k in _COACH_FLAGS
+    )
+    return f"""
+DETERMINISTIC INPUTS ALREADY COMPUTED by the scheduler this evening -- do NOT
+re-run these skills, read/reuse the files:
+{lines}
+Run only (optional) market-top-detector and market-news-analyst, then exposure-coach
+with EVERY input above passed explicitly:
+  python3 {_rel(COACH_SCRIPT)} {flags} [--top-risk <today's market_top json>] --output-dir {_rel(MARKET_DIR)}/
+Your `decision` may be MORE defensive than exposure-coach's recommendation
+(e.g. on news), never less: NEW_ENTRY_ALLOWED -> allow, REDUCE_ONLY -> restrict,
+CASH_PRIORITY -> cash-priority. The scheduler re-runs exposure-coach on these
+inputs and clamps any more-permissive decision / higher ceiling.
+"""
+
+
+def regime_prompt(
+    date_str: str,
+    gate_path: Path,
+    *,
+    quick: bool,
+    precomputed: dict[str, Path] | None = None,
+) -> str:
     mode = (
         "Quick pre-open RE-CHECK of the market regime (the full screen ran the "
         "previous evening); be fast."
         if quick
         else "Full end-of-day market regime read on fresh EOD data."
     )
+    pre = _precomputed_block(precomputed) if precomputed else ""
     return f"""Run the scheduled `market-regime-daily` workflow for {date_str} (CET schedule, US equities).
 {mode}
 
@@ -960,7 +1032,7 @@ order by invoking the named skills: market-breadth-analyzer, uptrend-analyzer,
 (optional) market-top-detector and market-news-analyst, then exposure-coach.
 Save the report artifacts (market_breadth, uptrend, market_top, exposure_posture,
 news) under {_rel(MARKET_DIR)}/ — pass --output-dir {_rel(MARKET_DIR)}/ to every script.
-
+{pre}
 CRITICAL -- also write a machine-readable gate file to EXACTLY this path:
   {gate_path}
 as a single JSON object:
@@ -1441,8 +1513,163 @@ step. Writing the file is MANDATORY and must be your FINAL action; after writing
 Read it back to confirm it parses. Do NOT place any trades."""
 
 
+def _run_regime_inputs(args) -> dict[str, Path]:
+    """Deterministic regime inputs for the evening read, built BEFORE the claude
+    step so the gate never depends on whether the LLM chose to pass an optional
+    input (prod: macro-regime missing since 06-26 -> permanent REDUCE_ONLY).
+    breadth/uptrend read public CSVs; macro/FTD/IBD read the TradingView data
+    layer and are skipped when TV is down. Returns {coach_key: report_path}."""
+    tv_ok = args.dry_run or tv_available()
+    steps = [
+        ("market-breadth", [BREADTH_SCRIPT], "market_breadth_2*.json", "breadth", False),
+        ("uptrend", [UPTREND_SCRIPT], "uptrend_analysis_*.json", "uptrend", False),
+        ("macro-regime", [MACRO_SCRIPT], "macro_regime_*.json", "regime", True),
+        ("ftd-detector", [FTD_SCRIPT], "ftd_detector_*.json", "ftd", True),
+        (
+            "ibd-distribution-days",
+            [IBD_SCRIPT, "--symbols", "QQQ,SPY"],
+            "ibd_distribution_day_monitor_*.json",
+            None,
+            True,
+        ),
+    ]
+    produced: dict[str, Path] = {}
+    for label, cmd, pattern, key, needs_tv in steps:
+        if needs_tv and not tv_ok:
+            log(f"{label}: TradingView недоступен — пропущен", logging.WARNING)
+            continue
+        path = run_skill_script(
+            [*cmd, "--output-dir", str(MARKET_DIR)],
+            label=label,
+            dry_run=args.dry_run,
+            timeout=args.timeout,
+            output_glob=(MARKET_DIR, pattern),
+        )
+        if path is not None and key:
+            produced[key] = path
+    return produced
+
+
+def _fresh_file(directory: Path, pattern: str, max_age_hours: float) -> Path | None:
+    """Newest matching report whose own generated_at (else mtime) is recent."""
+    path = _latest(directory, pattern)
+    if path is None:
+        return None
+    age_s = _report_age_seconds(path, _read_json(path) or {})
+    return path if age_s <= max_age_hours * 3600 else None
+
+
+def _run_exposure_coach(inputs: dict[str, Path], args) -> dict | None:
+    """Deterministic exposure-coach posture on the evening inputs (+ a fresh
+    market_top when the LLM step produced one). None when it cannot run."""
+    cmd: list = [COACH_SCRIPT, "--json-only", "--output-dir", str(MARKET_DIR)]
+    for key, flag in _COACH_FLAGS.items():
+        if key in inputs:
+            cmd += [flag, str(inputs[key])]
+    top = _fresh_file(MARKET_DIR, "market_top_*.json", COACH_TOP_RISK_MAX_AGE_HOURS)
+    if top is not None:
+        cmd += ["--top-risk", str(top)]
+    path = run_skill_script(
+        cmd,
+        label="exposure-coach (deterministic check)",
+        dry_run=args.dry_run,
+        timeout=args.timeout,
+        output_glob=(MARKET_DIR, "exposure_posture_*.json"),
+    )
+    return _read_json(path) if path else None
+
+
+def _reconcile_gate_with_coach(
+    dec: dict, posture: dict | None, gate: Path, date_str: str, args
+) -> dict:
+    """Bound the LLM gate by the deterministic exposure-coach read.
+
+    * The LLM may be MORE defensive than the coach (news), never less: a more
+      permissive decision is clamped to the coach's, and the ceiling never
+      exceeds the coach ceiling.
+    * A degraded gate (claude step failed / wrote nothing this run) is replaced
+      by the coach's own read when the coach had its required inputs — a real
+      deterministic regime read beats "unknown -> fail-safe".
+    The reconciled gate is written back so every consumer reads the same thing."""
+    if not posture:
+        if not dec.get("degraded"):
+            log("exposure-coach: детерминированная проверка недоступна — гейт LLM как есть")
+        return dec
+    rec = str(posture.get("recommendation") or "")
+    coach_dec = COACH_TO_DECISION.get(rec)
+    if coach_dec is None:
+        log(
+            f"exposure-coach: неизвестная рекомендация {rec!r} — гейт LLM как есть", logging.WARNING
+        )
+        return dec
+    coach_ceiling = posture.get("exposure_ceiling_pct")
+    provided = set(posture.get("inputs_provided") or [])
+    out = dict(dec)
+    out.update(
+        {
+            "coach_recommendation": rec,
+            "coach_ceiling_pct": coach_ceiling,
+            "coach_composite": posture.get("composite_score"),
+        }
+    )
+
+    if dec.get("degraded"):
+        if not all(k in provided for k in COACH_REQUIRED_INPUTS):
+            log(
+                "exposure-coach: нет обязательных входов "
+                f"({', '.join(COACH_REQUIRED_INPUTS)}) — гейт остаётся degraded",
+                logging.WARNING,
+            )
+            return dec
+        out.update(
+            {
+                "workflow": "market-regime-daily",
+                "date": date_str,
+                "decision": coach_dec,
+                "net_exposure_ceiling_pct": coach_ceiling,
+                "degraded": False,
+                "source": "exposure-coach",
+                "rationale": (
+                    "claude-шаг режима не завершился; гейт построен детерминированно по "
+                    f"exposure-coach ({rec}, потолок {coach_ceiling}%, композит "
+                    f"{posture.get('composite_score')})."
+                ),
+            }
+        )
+        log(f"exposure-coach: degraded-гейт заменён детерминированным → {coach_dec.upper()}")
+    else:
+        llm_dec = str(dec.get("decision") or "restrict")
+        if DECISION_STRICTNESS.get(llm_dec, 1) < DECISION_STRICTNESS[coach_dec]:
+            out["decision"] = coach_dec
+            out["clamped_from"] = llm_dec
+            out["rationale"] = (
+                f"[гейт ужесточён до exposure-coach {rec}: LLM дал {llm_dec}] "
+                + str(dec.get("rationale") or "")
+            ).strip()
+            log(
+                f"exposure-coach: LLM {llm_dec.upper()} мягче коуча {rec} → {coach_dec.upper()}",
+                logging.WARNING,
+            )
+        elif DECISION_STRICTNESS.get(llm_dec, 1) > DECISION_STRICTNESS[coach_dec]:
+            log(f"exposure-coach: LLM {llm_dec.upper()} строже коуча {rec} — оставлено")
+        llm_ceiling = dec.get("net_exposure_ceiling_pct")
+        if isinstance(coach_ceiling, (int, float)):
+            if not isinstance(llm_ceiling, (int, float)) or llm_ceiling > coach_ceiling:
+                out["net_exposure_ceiling_pct"] = coach_ceiling
+
+    if not args.dry_run:
+        _atomic_write_json(gate, {k: v for k, v in out.items() if k != "degraded" or v})
+    return out
+
+
 def run_regime_gate(
-    date_str: str, gate: Path, *, quick: bool, label: str, args
+    date_str: str,
+    gate: Path,
+    *,
+    quick: bool,
+    label: str,
+    args,
+    precomputed: dict[str, Path] | None = None,
 ) -> tuple[bool, dict]:
     """Run the regime workflow and guarantee a gate-file write is attempted.
 
@@ -1452,14 +1679,15 @@ def run_regime_gate(
     exits cleanly but the gate is missing, retry once with a focused
     finish-and-write prompt before falling back to the safe default.
     """
+    started = time.time()
     ok = run_claude(
-        regime_prompt(date_str, gate, quick=quick),
+        regime_prompt(date_str, gate, quick=quick, precomputed=precomputed),
         label=label,
         dry_run=args.dry_run,
         timeout=args.timeout,
         expected_output=gate,
     )
-    if not args.dry_run and not gate.exists():
+    if not args.dry_run and not _written_since(gate, started):
         log(
             f"{label}: gate file not written on first pass -- retrying once (finish-and-write).",
             logging.WARNING,
@@ -1473,8 +1701,19 @@ def run_regime_gate(
         )
         ok = ok or ok2
 
-    if args.dry_run or ok:
-        return ok, read_decision(gate)
+    if args.dry_run:
+        return ok, read_decision(gate, expected_date=date_str)
+    if _written_since(gate, started):
+        dec = read_decision(gate, expected_date=date_str)
+        if not ok and not dec.get("degraded"):
+            # claude wrote a valid gate and then timed out / exited non-zero:
+            # the regime read itself is real — use it, not a fail-safe.
+            log(
+                f"{label}: claude step did not finish cleanly, but a valid gate was "
+                "written this run -- using it",
+                logging.WARNING,
+            )
+        return ok, dec
     return ok, {
         "decision": "restrict",
         "rationale": "workflow market-regime-daily не завершился; fail-safe.",
@@ -2320,6 +2559,14 @@ def _validation_candidates_from_plan(plan: dict | None) -> list[dict]:
     ]
 
 
+def _pipeline_failure_line(failed: list[str]) -> str:
+    """Telegram line for crashed/timed-out pipeline steps (never "no setups")."""
+    return (
+        "❗️ " + ", ".join(failed) + " не отработал(и) (ошибка/таймаут, см. лог) — "
+        "пустой список ниже НЕ означает «сетапов нет»."
+    )
+
+
 def _validation_note(wl: dict, validation: dict | None) -> str:
     rejected = wl.get("rejected_by_validation") or []
     if validation is None:
@@ -2469,6 +2716,12 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
             output_glob=(PLANS_DIR, "breakout_trade_plan_*.json"),
         )
     plan = _read_json(plan_path) if plan_path else None
+    failed: list[str] = []
+    if not args.dry_run:
+        if vcp is None:
+            failed.append("vcp-screener")
+        elif plan is None:
+            failed.append("breakout-trade-planner")
 
     validation = _run_chart_validation(date_str, _validation_candidates_from_plan(plan), args)
     wl = tsig.build_watchlist(
@@ -2479,6 +2732,8 @@ def _evening_long_branch(date_str: str, args) -> tuple[Path, dict, str]:
         validation,
         source_plan=_rel(plan_path) if plan_path else None,
     )
+    if failed:
+        wl["pipeline_errors"] = failed
     wl_path = _write_watchlist(wl, date_str, args)
     if vcp and not args.dry_run:
         _ingest_theses("vcp-screener", vcp, wl, wl_path, date_str, args, plan_path=plan_path)
@@ -2579,22 +2834,29 @@ def _short_conditions() -> tuple[bool, str]:
     # market_top's invalidation-free count is systematically overstated.
     dd_source = "ibd"
     dd_count = None
-    ibd_path = _latest(MARKET_DIR, "ibd_distribution_day_monitor_*.json")
-    if ibd_path and time.time() - ibd_path.stat().st_mtime <= max_age:
+    ibd_path = _fresh_file(
+        MARKET_DIR, "ibd_distribution_day_monitor_*.json", DAILY_MARKET_REPORT_MAX_AGE_HOURS
+    )
+    if ibd_path:
         dd_count = _dd_count_from_ibd(ibd_path)
     if dd_count is None:
         dd = (data.get("components") or {}).get("distribution_days") or {}
         dd_count = dd.get("effective_count") or (dd.get("clustering") or {}).get("total_count") or 0
         dd_source = "market_top"
 
-    # FTD: the dedicated detector wins whenever its report exists (regardless
-    # of mtime ordering); market_top's break-on-detect flag is the fallback.
-    verdict = _ftd_from_detector(_latest(MARKET_DIR, "ftd_detector_*.json"))
-    if verdict is not None:
-        ftd, ftd_note = verdict
-    else:
-        ftd = bool((data.get("follow_through_day") or {}).get("ftd_detected"))
-        ftd_note = "market_top.follow_through_day"
+    # FTD: only a FRESH ftd-detector report (rebuilt every evening) can vouch
+    # that no FTD printed since — a days-old "no FTD" (or market_top's weekly
+    # break-on-detect flag) armed shorts straight through fresh FTDs.
+    verdict = _ftd_from_detector(
+        _fresh_file(MARKET_DIR, "ftd_detector_*.json", DAILY_MARKET_REPORT_MAX_AGE_HOURS)
+    )
+    if verdict is None:
+        return (
+            False,
+            "нет свежего ftd-detector отчёта (FTD не проверен сегодня) — "
+            "шорт-скрин пропущен (fail-safe)",
+        )
+    ftd, ftd_note = verdict
 
     if not (score >= SHORT_TOP_RISK_MIN or dd_count >= SHORT_DD_MIN):
         return (
@@ -3072,6 +3334,10 @@ def _evening_short_branch(
     # (no deep ticker-analysis on the short branch — detection-only).
     wl = _apply_validation_levels(wl, wl_path, validation, args)
     msg = build_evening_short_msg(date_str, dec, _rel(wl_path), wl.get("candidates") or [], reason)
+    short_failed = short_path is None and not args.dry_run
+    if short_failed:
+        msg = _pipeline_failure_line(["swing-short-screener"]) + "\n\n" + msg
+        rc = 1
     if earnings_note:
         msg += f"\n\n{earnings_note}"
     val_note = _validation_note(wl, validation)
@@ -3094,9 +3360,16 @@ def _evening_short_branch(
 
 def slot_evening_prep(date_str: str, args) -> int:
     gate = decision_path(date_str)
+    inputs = _run_regime_inputs(args)
     ok, dec = run_regime_gate(
-        date_str, gate, quick=False, label="market-regime-daily (evening EOD)", args=args
+        date_str,
+        gate,
+        quick=False,
+        label="market-regime-daily (evening EOD)",
+        args=args,
+        precomputed=inputs,
     )
+    dec = _reconcile_gate_with_coach(dec, _run_exposure_coach(inputs, args), gate, date_str, args)
     log(
         f"exposure decision: {dec['decision'].upper()}"
         + (" (degraded/fail-safe)" if dec.get("degraded") else ""),
@@ -3167,6 +3440,9 @@ def slot_evening_prep(date_str: str, args) -> int:
     candidates = wl.get("candidates") or []
     wl_rel = _rel(wl_path) if wl_path.exists() else "(файл не создан)"
     msg = build_evening_allow_msg(date_str, dec, wl_rel, candidates)
+    pipeline_errors = wl.get("pipeline_errors") or []
+    if pipeline_errors:
+        msg = _pipeline_failure_line(pipeline_errors) + "\n\n" + msg
     if val_note:
         msg += f"\n\n🔎 Валидация: {val_note}"
     offside_note = _offside_note(terminated_offside)
@@ -3182,6 +3458,8 @@ def slot_evening_prep(date_str: str, args) -> int:
         dry_run=args.dry_run,
         no_telegram=args.no_telegram,
     )
+    if pipeline_errors:
+        return 1
     return 0 if ok or args.dry_run else 1
 
 
@@ -3220,7 +3498,7 @@ def slot_intraday(date_str: str, args) -> int:
         wl = None
     heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
     heat = _read_json(heat_path) if heat_path else None
-    dec = read_decision(decision_path(date_str))
+    dec = read_decision(decision_path(date_str), expected_date=date_str)
     # New risk needs a complete, recent capacity snapshot (premarket / evening
     # rebuild it); a stale one would hand out slots/heat that are already gone.
     heat_ok, heat_why = tsig.heat_usable(heat, max_age_hours=HEAT_MAX_AGE_HOURS)
