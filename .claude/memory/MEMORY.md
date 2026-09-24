@@ -1,7 +1,7 @@
 # Memory Index
 
 - [Corrupted theses exit-price sentinel](corrupted-theses-exit-price-sentinel.md) — 4 CLOSED theses closed at $1.0 (false ~99% win); doctor flags them, need real exit prices re-recorded
-- [Trading-logic audit remaining backlog](trading-logic-audit-remaining-backlog.md) — verified-but-unfixed findings from 2026-07-07 audit (order lifecycle + screener/exposure/market-top/trader-memory scoring)
+- [Trading-logic audit remaining backlog](trading-logic-audit-remaining-backlog.md) — unfixed findings from 2026-07-07 + 2026-09-24 audits: sizing 1% leak, gate staleness, VCP scoring, dead FMP skills, cron off since 07-08
 - [TV scanner /symbol fundamentals](tv-scanner-symbol-fundamentals.md) — single-ticker profile+perf via public scanner; no description in scanner, but business blurb scrapeable from symbol-page JSON-LD; EN only
 - [Respond in Russian](respond-in-russian.md) — user wants all replies in Russian
 - [Commit on main, no branch](commit-on-main-no-branch.md) — commit directly to current branch; never create a branch for changes
@@ -27,3 +27,4 @@
 - [Thesis IDEA→ENTRY_READY ручной гейт](thesis-idea-entryready-manual-gate.md) — ingest даёт IDEA; повышение до ENTRY_READY ручное (CLI/UI), автопромоушна нет; карточки/кнопка Шага 2 требуют ENTRY_READY
 - [Scheduler claude steps ambient IB MCP hang](scheduler-claude-steps-ambient-ib-mcp-hang.md) — regime/chart/weekly шаги грузили .mcp.json (interactive-brokers); IB Gateway cold-boot на ПЕРВОМ шаге слота виснет → StopTimeout (rc=2, полный бюджет, нет транскрипта) → fail-safe RESTRICT; фикс — дефолтный --strict-mcp-config
 - [TV CDP remote endpoint](tv-cdp-remote-endpoint.md) — TradingView на удалённом хосте (VPN) через TV_CDP_HOST в .env; на Mac TV не установлен; старый ssh-туннель :9222 ведёт на мёртвый сервер
+- [No test/prod isolation](no-test-prod-isolation.md) — пользователь не хочет разделять тесты и боевой trading-data; не предлагать
