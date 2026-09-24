@@ -53,8 +53,9 @@ TH_TAG = "[TH]"
 # INVALIDATED / unknown) is treated as dropped and its [TH] alerts are purged.
 OPEN_THESIS_STATUSES = frozenset({"IDEA", "ENTRY_READY", "ACTIVE", "PARTIALLY_CLOSED"})
 
-CDP_HOST = "127.0.0.1"
+DEFAULT_CDP_HOST = "127.0.0.1"
 DEFAULT_CDP_PORT = 9222
+ENV_FILE = REPO_ROOT / ".env"
 
 NODE_FALLBACK_PATHS = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
 
@@ -62,10 +63,34 @@ NODE_FALLBACK_PATHS = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
 # --------------------------------------------------------------------------- #
 # TradingView availability probe
 # --------------------------------------------------------------------------- #
+def cdp_endpoint(env=None, env_file: Path | None = None) -> tuple[str, int]:
+    """Resolve the CDP (host, port): TV_CDP_HOST/TV_CDP_PORT env > .env > default.
+
+    Mirrors vendor/tradingview-mcp/src/cdp_config.js. TV_CDP_HOST may carry a
+    port suffix ("10.0.0.1:9222").
+    """
+    env = os.environ if env is None else env
+    env_file = ENV_FILE if env_file is None else env_file
+    vals: dict[str, str] = {}
+    if env_file.is_file():
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip().removeprefix("export ").strip()
+            key, sep, value = line.partition("=")
+            if sep and key.strip() in ("TV_CDP_HOST", "TV_CDP_PORT"):
+                vals[key.strip()] = value.strip().strip("'\"")
+    host = env.get("TV_CDP_HOST") or vals.get("TV_CDP_HOST") or DEFAULT_CDP_HOST
+    port_raw = env.get("TV_CDP_PORT") or vals.get("TV_CDP_PORT") or ""
+    port = int(port_raw) if port_raw.isdigit() else DEFAULT_CDP_PORT
+    h, sep, p = host.rpartition(":")
+    if sep and p.isdigit():
+        host, port = h, int(p)
+    return host, port
+
+
 def tv_available(*, timeout: float = 3.0) -> bool:
     """True when TradingView Desktop is reachable over CDP (tv launch)."""
-    port = os.environ.get("TV_CDP_PORT", str(DEFAULT_CDP_PORT))
-    url = f"http://{CDP_HOST}:{port}/json/version"
+    host, port = cdp_endpoint()
+    url = f"http://{host}:{port}/json/version"
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # nosec B310
             return bool(resp.read())

@@ -19,6 +19,7 @@
 // earning_calendar (eps/revenue для будущих отчётов = null).
 
 import CDP from 'chrome-remote-interface';
+import { CDP_HOST, CDP_PORT } from '../src/cdp_config.js';
 
 const argv = process.argv.slice(2);
 function arg(name) {
@@ -50,14 +51,14 @@ const COLUMNS = [
 ];
 
 // --- CDP к TradingView Desktop (любой таргет tradingview.com годится) ---
-const targets = await (await fetch('http://localhost:9222/json/list')).json();
+const targets = await (await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`)).json();
 const tvTargets = targets.filter((x) => x.url?.includes('tradingview.com') && x.type === 'page');
 const t = tvTargets.find((x) => x.url.includes('/chart/')) || tvTargets[0];
 if (!t) {
-  console.error('Нет открытой вкладки TradingView на localhost:9222.');
+  console.error(`Нет открытой вкладки TradingView на ${CDP_HOST}:${CDP_PORT}.`);
   process.exit(1);
 }
-const c = await CDP({ host: 'localhost', port: 9222, target: t.id });
+const c = await CDP({ host: CDP_HOST, port: CDP_PORT, target: t.id });
 await c.Runtime.enable();
 
 async function evalAsync(expr) {

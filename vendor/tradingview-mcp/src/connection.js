@@ -1,9 +1,8 @@
 import CDP from 'chrome-remote-interface';
+import { CDP_HOST, CDP_PORT } from './cdp_config.js';
 
 let client = null;
 let targetInfo = null;
-const CDP_HOST = 'localhost';
-const CDP_PORT = 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
 

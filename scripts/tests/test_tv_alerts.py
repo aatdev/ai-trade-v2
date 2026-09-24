@@ -114,6 +114,41 @@ class TestTvAvailable:
         monkeypatch.setattr(ta.urllib.request, "urlopen", boom)
         assert ta.tv_available() is False
 
+    def test_probe_uses_resolved_endpoint(self, monkeypatch):
+        seen = {}
+
+        def fake_urlopen(url, *a, **k):
+            seen["url"] = url
+            raise OSError("down")
+
+        monkeypatch.setattr(ta, "cdp_endpoint", lambda: ("10.0.0.5", 9333))
+        monkeypatch.setattr(ta.urllib.request, "urlopen", fake_urlopen)
+        ta.tv_available()
+        assert seen["url"] == "http://10.0.0.5:9333/json/version"
+
+
+# --------------------------------------------------------------------------- #
+# cdp_endpoint (TV_CDP_HOST / TV_CDP_PORT: env > .env > default)
+# --------------------------------------------------------------------------- #
+class TestCdpEndpoint:
+    def test_default_when_nothing_configured(self, tmp_path):
+        assert ta.cdp_endpoint(env={}, env_file=tmp_path / ".env") == ("127.0.0.1", 9222)
+
+    def test_env_vars_win(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text("TV_CDP_HOST=1.1.1.1\nTV_CDP_PORT=1111\n")
+        env = {"TV_CDP_HOST": "10.99.0.1", "TV_CDP_PORT": "9222"}
+        assert ta.cdp_endpoint(env=env, env_file=f) == ("10.99.0.1", 9222)
+
+    def test_dotenv_fallback(self, tmp_path):
+        f = tmp_path / ".env"
+        f.write_text("# c\nexport TV_CDP_HOST='10.99.0.1'\nTV_CDP_PORT=9223\nOTHER=x\n")
+        assert ta.cdp_endpoint(env={}, env_file=f) == ("10.99.0.1", 9223)
+
+    def test_host_with_port_suffix(self, tmp_path):
+        env = {"TV_CDP_HOST": "10.99.0.1:9444"}
+        assert ta.cdp_endpoint(env=env, env_file=tmp_path / ".env") == ("10.99.0.1", 9444)
+
 
 # --------------------------------------------------------------------------- #
 # sync / purge orchestration (node subprocess mocked)
