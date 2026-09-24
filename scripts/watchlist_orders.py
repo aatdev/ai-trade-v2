@@ -496,24 +496,90 @@ def _now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _heat_now() -> dt.datetime:
+    return dt.datetime.now().astimezone()
+
+
+def _parse_ts(value) -> dt.datetime | None:
+    """Tz-aware datetime from an ISO string (naive = local time); None if bad."""
+    try:
+        ts = dt.datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo else ts.astimezone()
+
+
+def _placed_since(since: dt.datetime, exclude_tid: str | None) -> tuple[int, float]:
+    """(count, risk $) of entry brackets placed AFTER the heat snapshot was built.
+
+    The snapshot already reserves brackets placed before it; ones tapped since
+    (this session or a UI open-now) are invisible to it, so N taps would each
+    pass against the same remaining slots / heat."""
+    count, risk = 0, 0.0
+    for path in sorted(_logs_dir().glob("pending_orders_*.json")):
+        try:
+            ledger_date = dt.date.fromisoformat(path.stem.removeprefix("pending_orders_"))
+        except ValueError:
+            continue
+        if ledger_date < since.date() - dt.timedelta(days=1):
+            continue
+        ledger = _read_json_file(path) or {}
+        for tid, entry in (ledger.get("orders") or {}).items():
+            if not isinstance(entry, dict) or entry.get("kind", "open") != "open":
+                continue
+            if (entry.get("thesis_id") or tid) == exclude_tid:
+                continue
+            if entry.get("status") not in {"placed", "filled"}:
+                continue
+            placed_at = _parse_ts(entry.get("placed_at"))
+            if placed_at is None or placed_at <= since:
+                continue
+            count += 1
+            r = entry.get("risk_dollars")
+            risk += float(r) if isinstance(r, (int, float)) else 0.0
+    return count, risk
+
+
 def heat_ok_for(card: dict) -> tuple[bool, str]:
     """Backstop the plan's heat rule (≥6% / 6 positions -> no new orders).
 
-    A missing heat file does NOT block (the human just confirmed the tap), but it
-    is logged. A present file that shows no free slot, or insufficient remaining
-    heat for this candidate's risk, blocks placement.
+    Fail-closed: a missing, incomplete or stale (> HEAT_MAX_AGE_HOURS) heat
+    snapshot blocks placement — capacity is unknown. So does a card with no
+    recorded risk. Brackets placed after the snapshot was built are deducted
+    from its remaining slots / heat before the check.
     """
     heat_file = sched._latest(sched.JOURNAL_DIR, "portfolio_heat_*.json")
     heat = _read_json_file(heat_file) if heat_file else None
-    if not heat:
-        return True, "нет свежего heat-файла (heat-гейт пропущен)"
+    now = _heat_now()
+    ok, why = sched.tsig.heat_usable(heat, now=now, max_age_hours=sched.HEAT_MAX_AGE_HOURS)
+    if not ok:
+        return False, why
+    risk = card.get("risk_dollars")
+    if not isinstance(risk, (int, float)):
+        return False, "риск кандидата неизвестен (нет risk_dollars)"
+    since = _parse_ts(heat.get("generated_at")) or now
+    placed_n, placed_risk = _placed_since(since, card.get("thesis_id"))
     slots = heat.get("remaining_position_slots")
-    if isinstance(slots, (int, float)) and slots <= 0:
+    if isinstance(slots, (int, float)) and slots - placed_n <= 0:
         return False, "нет свободных слотов позиций (heat)"
     remaining = heat.get("remaining_heat_dollars")
-    risk = card.get("risk_dollars")
-    if isinstance(remaining, (int, float)) and isinstance(risk, (int, float)) and risk > remaining:
-        return False, f"риск ${risk:g} > свободного heat ${remaining:g}"
+    if isinstance(remaining, (int, float)):
+        remaining -= placed_risk
+        if risk > remaining:
+            return False, f"риск ${risk:g} > свободного heat ${remaining:g}"
+    return True, "ok"
+
+
+def gate_ok_for(entry: dict) -> tuple[bool, str]:
+    """Re-check the regime gate at tap time: a card sent at 15:00 can be tapped
+    hours later, after the gate flipped or degraded. Longs need ``allow``,
+    shorts ``restrict`` / ``cash-priority``; a degraded gate blocks both."""
+    gate = sched.read_decision(sched.decision_path(_today_iso(None)))
+    decision = gate.get("decision")
+    if gate.get("degraded"):
+        return False, f"гейт degraded ({decision}) — новый риск не открываем"
+    if not _side_allowed(entry.get("side", "long"), decision):
+        return False, f"гейт {decision}: сторона {entry.get('side', 'long')} запрещена"
     return True, "ok"
 
 
@@ -537,6 +603,8 @@ def handle_open(entry: dict, port: int | None, *, live: bool, bot_token: str) ->
         return  # idempotent: already acted
 
     ok, reason = heat_ok_for(entry)
+    if ok:
+        ok, reason = gate_ok_for(entry)
     if not ok:
         entry["status"] = "skipped"
         entry["error"] = reason

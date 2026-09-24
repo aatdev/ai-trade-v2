@@ -296,6 +296,11 @@ AUTO_ANALYZE_TOP_N = 1
 FRESH_ANALYSIS_WEEKDAYS = 5
 # Model for ticker-analysis (mirrors ui/server/src/config.ts ANALYZE_MODEL).
 TICKER_ANALYSIS_MODEL = "claude-opus-4-8"
+# Max age of the portfolio-heat snapshot that may gate NEW risk (intraday OPEN
+# signals, order-card taps). Premarket and evening-prep rebuild it, so a healthy
+# schedule never exceeds ~24h; older means a slot failed and capacity is unknown.
+HEAT_MAX_AGE_HOURS = 30
+
 # Per-ticker timeout cap so one slow analysis doesn't block the whole slot.
 TICKER_ANALYSIS_TIMEOUT_S = 1100
 
@@ -1990,27 +1995,35 @@ def _offside_note(terminated: list[str] | None) -> str:
     )
 
 
-def _profile_sized_shares(profile: dict, pivot, stop) -> tuple[int | None, float | None]:
-    """Risk-budget sizing for an analysis-updated candidate (mirrors the UI's
-    reconcile.ts): shares = account x risk% / |pivot - stop|, capped at
-    max_position_pct of the account. Never inherits the candidate's previous
-    risk_dollars — that is the *achieved post-cap* risk of the old geometry,
-    not a budget (a capped 0.1%-risk short once resized a flipped long to 1/9
-    of the intended risk). Returns (None, None) when the profile cannot size."""
+def _profile_sized_shares(
+    profile: dict, pivot, stop, *, worst=None, side: str | None = None
+) -> tuple[int | None, float | None]:
+    """Risk-budget sizing for a chart/analysis-updated candidate (mirrors the UI's
+    reconcile.ts), via the shared ``tsig.risk_sized_shares``: shares = account x
+    risk% / |worst fill - stop|, capped at max_position_pct of the account.
+    Measured at ``worst`` (the far edge of the chase band) because the OPEN fires
+    anywhere inside it. Shorts use ``short_risk_pct`` when set, else ``risk_pct``.
+    Never inherits the candidate's previous risk_dollars — that is the *achieved
+    post-cap* risk of the old geometry, not a budget (a capped 0.1%-risk short
+    once resized a flipped long to 1/9 of the intended risk). ``side`` defaults
+    from the geometry. Returns (None, None) when the profile cannot size."""
     try:
-        account = float(profile.get("account_size") or 0)
-        pivot_f = float(pivot)
-        dist = abs(pivot_f - float(stop))
+        pivot_f, stop_f = float(pivot), float(stop)
     except (TypeError, ValueError):
         return None, None
-    if account <= 0 or pivot_f <= 0 or dist <= 0:
-        return None, None
+    side = side or ("short" if stop_f > pivot_f else "long")
     risk_pct = float(profile.get("risk_pct") or 1.0)
-    cap_pct = float(profile.get("max_position_pct") or 25.0)
-    shares = min(int(account * risk_pct / 100 / dist), int(account * cap_pct / 100 / pivot_f))
-    if shares <= 0:
-        return None, None
-    return shares, round(shares * dist, 2)
+    if side == "short":
+        risk_pct = float(profile.get("short_risk_pct") or risk_pct)
+    return tsig.risk_sized_shares(
+        float(profile.get("account_size") or 0),
+        side,
+        pivot_f,
+        stop_f,
+        worst_entry=worst,
+        risk_pct=risk_pct,
+        max_position_pct=float(profile.get("max_position_pct") or 25.0),
+    )
 
 
 def _coerce_price(x) -> float | None:
@@ -2056,7 +2069,6 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
     if not verdicts:
         return wl
     profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
-    account = float(profile.get("account_size") or 0)
     chase = tsig.DEFAULT_CHASE_PCT / 100
     candidates = list(wl.get("candidates") or [])
     changed = False
@@ -2081,8 +2093,18 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
                 )
                 continue
             worst = round(entry * (1 - chase), 2)
-            shares = tsig.size_short(account, entry, stop) or None
-            risk_dollars = round(shares * (stop - entry), 2) if shares else None
+            # Profile risk budget at the worst fill — NOT size_short's 1% default
+            # (validated shorts were re-inflated to 3x the 0.33% budget).
+            shares, risk_dollars = _profile_sized_shares(
+                profile, entry, stop, worst=worst, side="short"
+            )
+            if shares is None:
+                log(
+                    f"chart-validation: {ticker} cannot size short from profile "
+                    "— keeping planner levels",
+                    logging.WARNING,
+                )
+                continue
         else:
             if stop >= entry or (target is not None and target <= entry):
                 log(
@@ -2092,7 +2114,9 @@ def _apply_validation_levels(wl: dict, wl_path: Path, validation: dict | None, a
                 )
                 continue
             worst = round(entry * (1 + chase), 2)
-            shares, risk_dollars = _profile_sized_shares(profile, entry, stop)
+            shares, risk_dollars = _profile_sized_shares(
+                profile, entry, stop, worst=worst, side="long"
+            )
             if shares is None:
                 shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
 
@@ -2209,17 +2233,25 @@ def _auto_analyze_reconcile(wl: dict, wl_path: Path, date_str: str, args) -> dic
                 f"trigger={signal['trigger']} stop={signal['stop']} t1={signal['t1']}"
             )
             profile = _read_json(TRADING_DATA_DIR / "trading_profile.json") or {}
-            shares, risk_dollars = _profile_sized_shares(profile, signal["trigger"], signal["stop"])
-            if shares is None:
-                shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
-            # worst_entry from the analysis Entry range when present, else the
-            # standard chase band — never the trigger itself (zero chase room
+            # worst_entry from the analysis Entry range when it lies on the chase
+            # side of the trigger, else the standard chase band — never the
+            # trigger itself or a wrong-side bound (zero/negative chase room
             # turns the first tick past the trigger into MISSED + alert purge).
             chase = tsig.DEFAULT_CHASE_PCT / 100
+            trigger = float(signal["trigger"])
             if cand_side == "short":
-                worst = signal.get("entry_low") or round(signal["trigger"] * (1 - chase), 2)
+                worst = signal.get("entry_low")
+                if not worst or float(worst) >= trigger:
+                    worst = round(trigger * (1 - chase), 2)
             else:
-                worst = signal.get("entry_high") or round(signal["trigger"] * (1 + chase), 2)
+                worst = signal.get("entry_high")
+                if not worst or float(worst) <= trigger:
+                    worst = round(trigger * (1 + chase), 2)
+            shares, risk_dollars = _profile_sized_shares(
+                profile, trigger, signal["stop"], worst=worst, side=cand_side
+            )
+            if shares is None:
+                shares, risk_dollars = cand.get("shares"), cand.get("risk_dollars")
             screener_origin = cand.get("screener_origin") or {
                 "side": cand.get("side"),
                 "pivot": cand.get("pivot"),
@@ -2943,14 +2975,42 @@ def _evening_short_branch(
         return 1
 
     # Fresh heat snapshot (mirrors the long branch): tomorrow's intraday
-    # monitor needs today's open positions and the capacity budget.
-    run_skill_script(
+    # monitor needs today's open positions and the capacity budget. No heat ->
+    # no short screen and no new risk (fail-safe, same as the long branch).
+    heat = run_skill_script(
         [TRADER_MEMORY_CLI, "heat"],
         label="portfolio-heat (short branch)",
         dry_run=args.dry_run,
         timeout=args.timeout,
         output_glob=(JOURNAL_DIR, "portfolio_heat_*.json"),
     )
+    if heat is None and not args.dry_run:
+        log(
+            "portfolio-heat недоступен — шорт-пайплайн пропущен "
+            "(fail-safe: без heat-леджера новый риск не планируем)",
+            logging.ERROR,
+        )
+        wl = tsig.build_watchlist(
+            date_str,
+            dec["decision"],
+            None,
+            None,
+            None,
+            notes="heat-отчёт не построился — шорт-скрин пропущен, новый риск заблокирован (fail-safe)",
+        )
+        _write_watchlist(wl, date_str, args)
+        msg = build_evening_closed_msg(
+            date_str,
+            dec,
+            extra=(
+                "⚠️ heat-отчёт не построился — шорт-скрин пропущен, "
+                "новый риск заблокирован (fail-safe). Проверь trader_memory_cli heat вручную."
+            ),
+        )
+        if offside_note:
+            msg += f"\n\n{offside_note}"
+        notify(msg, dry_run=args.dry_run, no_telegram=args.no_telegram)
+        return 1
 
     short_cmd = [SHORT_SCREEN_SCRIPT, "--min-grade", "B", "--top", "10"]
     universe = _read_vcp_universe()
@@ -3161,6 +3221,14 @@ def slot_intraday(date_str: str, args) -> int:
     heat_path = _latest(JOURNAL_DIR, "portfolio_heat_*.json")
     heat = _read_json(heat_path) if heat_path else None
     dec = read_decision(decision_path(date_str))
+    # New risk needs a complete, recent capacity snapshot (premarket / evening
+    # rebuild it); a stale one would hand out slots/heat that are already gone.
+    heat_ok, heat_why = tsig.heat_usable(heat, max_age_hours=HEAT_MAX_AGE_HOURS)
+    if not heat_ok:
+        log(
+            f"intraday: {heat_why} — OPEN-сигналы не армируются, мониторим только открытые позиции",
+            logging.WARNING,
+        )
 
     tickers = sorted(
         (
@@ -3196,6 +3264,7 @@ def slot_intraday(date_str: str, args) -> int:
         # A degraded/fail-safe gate (regime step failed or file missing) is not a
         # real regime read — manage open positions, but arm no new OPEN either side.
         suppress_opens=bool(dec.get("degraded")),
+        capacity_ok=heat_ok,
         # Short trading is opt-in: never arm OPEN_SHORT from a stale short
         # candidate unless TRADING_ENABLE_SHORTS is set (managing open shorts
         # is unaffected).

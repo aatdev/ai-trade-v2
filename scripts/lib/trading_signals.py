@@ -275,6 +275,103 @@ def size_short(
     return min(shares, cap)
 
 
+def risk_sized_shares(
+    account_size: float,
+    side: str,
+    entry: float,
+    stop: float,
+    *,
+    worst_entry: float | None = None,
+    risk_pct: float,
+    max_position_pct: float,
+) -> tuple[int | None, float | None]:
+    """Risk-budget sizing shared by longs and shorts, measured at the WORST fill.
+
+    An OPEN fires anywhere inside the chase band (long: [entry, worst]; short:
+    [worst, entry]), so the budget must hold at the band's far edge — sizing on
+    the trigger understates real risk by the chase distance (+40..67% at a 2%
+    band). A ``worst_entry`` on the wrong side of the trigger is not a chase
+    bound and is ignored. The notional cap uses the larger of trigger/fill.
+    Returns ``(shares, risk_dollars)`` or ``(None, None)`` when the geometry
+    (stop on the wrong side) or inputs cannot be sized."""
+    try:
+        account = float(account_size or 0)
+        entry_f = float(entry)
+        stop_f = float(stop)
+        worst_f = float(worst_entry) if worst_entry not in (None, "") else None
+    except (TypeError, ValueError):
+        return None, None
+    if account <= 0 or entry_f <= 0 or stop_f <= 0:
+        return None, None
+    is_short = str(side or "long").lower() == "short"
+    if is_short:
+        fill = min(entry_f, worst_f) if worst_f and worst_f > 0 else entry_f
+        risk_per_share = stop_f - fill
+    else:
+        fill = max(entry_f, worst_f) if worst_f and worst_f > 0 else entry_f
+        risk_per_share = fill - stop_f
+    if risk_per_share <= 0:
+        return None, None
+    shares = min(
+        int(account * risk_pct / 100 / risk_per_share),
+        int(account * max_position_pct / 100 / max(entry_f, fill)),
+    )
+    if shares <= 0:
+        return None, None
+    return shares, round(shares * risk_per_share, 2)
+
+
+def geometry_ok(candidate: dict) -> bool:
+    """Stop (and target, when present) on the correct side of the pivot."""
+    try:
+        pivot = float(candidate.get("pivot"))
+        stop = float(candidate.get("stop"))
+    except (TypeError, ValueError):
+        return False
+    if pivot <= 0 or stop <= 0:
+        return False
+    target = candidate.get("target")
+    try:
+        target_f = float(target) if target not in (None, "") else None
+    except (TypeError, ValueError):
+        target_f = None
+    if str(candidate.get("side") or "long").lower() == "short":
+        return stop > pivot and (target_f is None or target_f < pivot)
+    return stop < pivot and (target_f is None or target_f > pivot)
+
+
+def heat_usable(
+    heat: dict | None,
+    *,
+    now: dt.datetime | None = None,
+    max_age_hours: float | None = None,
+) -> tuple[bool, str]:
+    """Can this heat snapshot gate NEW risk? ``(ok, reason)``.
+
+    Missing -> no (slots / heat / open tickers are unknown); ``heat_complete:
+    false`` -> no (some open risk is unknown, remaining heat is overstated);
+    with ``max_age_hours`` the snapshot's ``generated_at`` must be at most that
+    old (an undated snapshot fails the age check)."""
+    if not heat:
+        return False, "нет heat-снимка"
+    if heat.get("heat_complete") is False:
+        return False, "heat-снимок неполный (риск части позиций неизвестен)"
+    if max_age_hours is not None:
+        try:
+            generated = dt.datetime.fromisoformat(str(heat.get("generated_at")))
+        except (TypeError, ValueError):
+            return False, "heat-снимок без даты генерации"
+        now = now or dt.datetime.now()
+        if generated.tzinfo is not None and now.tzinfo is None:
+            now = now.astimezone()
+        elif generated.tzinfo is None and now.tzinfo is not None:
+            generated = generated.astimezone()
+        age_h = (now - generated).total_seconds() / 3600
+        if age_h > max_age_hours:
+            return False, f"heat-снимок устарел ({age_h:.0f}ч > {max_age_hours:g}ч)"
+    return True, "ok"
+
+
 def _validation_index(validation: dict | None) -> dict[str, dict]:
     verdicts = (validation or {}).get("verdicts") or []
     return {
@@ -321,8 +418,16 @@ def build_watchlist(
     verdicts = _validation_index(validation)
     candidates: list[dict] = []
     rejected: list[dict] = []
+    bad_geometry: list[dict] = []
 
     def add(candidate: dict) -> None:
+        # Inverted/incomplete geometry (stop or target on the wrong side, or an
+        # unsizable short) never reaches the monitor: it would arm an OPEN whose
+        # "risk" is meaningless.
+        unsized_short = candidate["side"] == "short" and not candidate.get("shares")
+        if not geometry_ok(candidate) or unsized_short:
+            bad_geometry.append(candidate)
+            return
         kept = _apply_validation(candidate, verdicts)
         if kept is None:
             rejected.append(candidate)
@@ -367,28 +472,28 @@ def build_watchlist(
     for cand in short_candidates or []:
         levels = cand.get("trade_levels") or {}
         entry, stop = levels.get("entry"), levels.get("stop")
+        worst = round(entry * (1 - DEFAULT_CHASE_PCT / 100), 2) if entry else None
         shares = None
         risk_dollars = None
         if account_size and entry and stop:
-            shares = (
-                size_short(
-                    account_size,
-                    entry,
-                    stop,
-                    risk_pct=short_risk_pct,
-                    max_position_pct=short_max_position_pct,
-                )
-                or None
+            # Sized at the worst fill of the chase band (OPEN_SHORT fires anywhere
+            # in [worst, entry]), not at the trigger.
+            shares, risk_dollars = risk_sized_shares(
+                account_size,
+                "short",
+                entry,
+                stop,
+                worst_entry=worst,
+                risk_pct=short_risk_pct,
+                max_position_pct=short_max_position_pct,
             )
-            if shares:
-                risk_dollars = round(shares * (stop - entry), 2)
         add(
             {
                 "ticker": str(cand.get("symbol", "")).upper(),
                 "side": "short",
                 "setup": f"Stage 4 (grade {cand.get('grade', '?')})",
                 "pivot": entry,
-                "worst_entry": round(entry * (1 - DEFAULT_CHASE_PCT / 100), 2) if entry else None,
+                "worst_entry": worst,
                 "stop": stop,
                 "target": levels.get("target_2r"),
                 "shares": shares,
@@ -404,6 +509,7 @@ def build_watchlist(
         "exposure_decision": gate_decision,
         "candidates": candidates,
         "rejected_by_validation": rejected,
+        "rejected_by_geometry": bad_geometry,
         "notes": notes,
         "source_plan": source_plan,
     }
@@ -524,6 +630,7 @@ def evaluate_signals(
     armed_tickers: set[str] | None = None,
     suppress_opens: bool = False,
     allow_shorts: bool = True,
+    capacity_ok: bool = True,
 ) -> list[dict]:
     """Compute the actionable signals for this monitoring round.
 
@@ -548,6 +655,11 @@ def evaluate_signals(
     OPEN_SHORT is armed even for an in-band short candidate (short trading is
     opt-in in the scheduler). Existing short positions are still managed — the
     manage-open path below is never gated.
+
+    OPEN signals also require a usable heat snapshot (present and
+    ``heat_complete``); ``capacity_ok=False`` lets the caller veto it further
+    (e.g. a stale snapshot). Without capacity only OPENs are dropped — MISSED
+    and position management still fire.
     """
     today = today or dt.date.today()
     signals: list[dict] = []
@@ -581,6 +693,16 @@ def evaluate_signals(
     # A degraded gate manages existing positions but never opens new risk.
     if suppress_opens:
         return signals
+    # Capacity is unknowable without a complete (and, per the caller, fresh)
+    # heat snapshot: slots, remaining heat, even which tickers are already held.
+    # Then no OPEN is armed; MISSED (entry ran away -> drop its alerts) still is.
+    capacity_known = capacity_ok and heat_usable(heat)[0]
+    # Resting (placed, unfilled) brackets already hold heat in the snapshot.
+    armed |= {
+        str(p.get("ticker", "")).upper()
+        for p in (heat or {}).get("pending_entries") or []
+        if isinstance(p, dict)
+    }
 
     # --- opening signals from the watchlist ---------------------------------
     slots_left = (heat or {}).get("remaining_position_slots")
@@ -616,6 +738,8 @@ def evaluate_signals(
                     days_to_earnings=earnings[1],
                 )
         if not signal or signal["key"] in sent:
+            continue
+        if signal["type"] in (OPEN_LONG, OPEN_SHORT) and not capacity_known:
             continue
         if signal["type"] in (OPEN_LONG, OPEN_SHORT):
             risk = candidate.get("risk_dollars")

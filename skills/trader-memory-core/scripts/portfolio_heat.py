@@ -28,7 +28,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Sibling import (thesis_store lives in the same scripts/ directory)
@@ -39,6 +39,13 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import thesis_store  # noqa: E402
 
 OPEN_STATUSES = ("ACTIVE", "PARTIALLY_CLOSED")
+
+# Placed-but-unfilled entry brackets (GTC) rest at the broker across days and
+# can fill at any time: they hold heat and a position slot until filled or
+# cancelled. Read from watchlist_orders' ledgers (logs/pending_orders_<date>.json).
+PENDING_LEDGER_GLOB = "pending_orders_*.json"
+PENDING_LOOKBACK_DAYS = 30
+TERMINAL_STATUSES = ("CLOSED", "INVALIDATED")
 
 # Parameter-profile keys shared across the trading scripts (planner, sizer,
 # heat ledger). Keys outside this union trigger a warning (typo guard); keys
@@ -225,6 +232,107 @@ def collect_positions(state_dir: Path) -> tuple[list[dict], list[dict]]:
     return positions, warnings
 
 
+def _pending_risk(order: dict) -> float | None:
+    """Recorded risk of a resting entry, else shares x |worst fill - stop|."""
+    if order.get("risk_dollars") is not None:
+        try:
+            return round(float(order["risk_dollars"]), 2)
+        except (TypeError, ValueError):
+            return None
+    try:
+        shares = float(order.get("shares"))
+        stop = float(order.get("stop"))
+        fill = float(order.get("worst_entry") or order.get("pivot"))
+    except (TypeError, ValueError):
+        return None
+    return round(abs(fill - stop) * shares, 2)
+
+
+def collect_pending_entries(
+    state_dir: Path,
+    orders_dir: Path | None,
+    *,
+    today: datetime | None = None,
+    lookback_days: int = PENDING_LOOKBACK_DAYS,
+) -> tuple[list[dict], list[dict]]:
+    """Entry brackets placed at the broker but not (yet) filled.
+
+    Scans the order ledgers of the last ``lookback_days`` (newest ledger wins
+    per thesis). An entry counts while its ledger status is ``placed`` and its
+    thesis has not become a live position (ACTIVE/PARTIALLY_CLOSED rows are
+    already in the positions ledger). A terminated thesis whose bracket is still
+    ``placed`` is counted too — the GTC order may still rest at the broker — and
+    flagged ORPHAN_PENDING_ORDER. Unknown thesis ids are skipped (warned)."""
+    pending: list[dict] = []
+    warnings: list[dict] = []
+    if orders_dir is None or not Path(orders_dir).is_dir():
+        return pending, warnings
+    today = today or datetime.now()
+    cutoff = (today - timedelta(days=lookback_days)).date()
+
+    latest: dict[str, tuple[str, dict]] = {}
+    for path in sorted(Path(orders_dir).glob(PENDING_LEDGER_GLOB)):
+        date_str = path.stem.removeprefix("pending_orders_")
+        try:
+            ledger_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            ledger = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+        if ledger_date < cutoff or not isinstance(ledger, dict):
+            continue
+        for tid, order in (ledger.get("orders") or {}).items():
+            if not isinstance(order, dict) or order.get("kind", "open") != "open":
+                continue
+            latest[order.get("thesis_id") or tid] = (date_str, order)
+
+    for tid, (date_str, order) in sorted(latest.items()):
+        if order.get("status") != "placed":
+            continue
+        ticker = str(order.get("ticker") or "").upper()
+        try:
+            thesis = thesis_store.get(state_dir, tid)
+        except (KeyError, FileNotFoundError, ValueError):
+            warnings.append(
+                {
+                    "thesis_id": tid,
+                    "ticker": ticker,
+                    "code": "PENDING_ORDER_UNKNOWN_THESIS",
+                    "message": f"placed bracket ({date_str}) for an unknown thesis — not counted",
+                }
+            )
+            continue
+        status = str(thesis.get("status") or "").upper()
+        if status in OPEN_STATUSES:
+            continue  # filled: already a live position in the ledger
+        if status in TERMINAL_STATUSES:
+            warnings.append(
+                {
+                    "thesis_id": tid,
+                    "ticker": ticker,
+                    "code": "ORPHAN_PENDING_ORDER",
+                    "message": (
+                        f"thesis is {status} but its entry bracket ({date_str}) is still "
+                        "'placed' — cancel it at the broker; counted as pending heat"
+                    ),
+                }
+            )
+        pending.append(
+            {
+                "thesis_id": tid,
+                "ticker": ticker,
+                "side": str(order.get("side") or thesis.get("side") or "long").lower(),
+                "thesis_status": status,
+                "ledger_date": date_str,
+                "shares": order.get("shares"),
+                "pivot": order.get("pivot"),
+                "worst_entry": order.get("worst_entry"),
+                "stop_loss": order.get("stop"),
+                "risk_dollars": _pending_risk(order),
+            }
+        )
+    return pending, warnings
+
+
 def build_report(
     positions: list[dict],
     warnings: list[dict],
@@ -232,10 +340,20 @@ def build_report(
     account_size: float,
     max_heat_pct: float,
     max_positions: int | None,
+    pending_entries: list[dict] | None = None,
 ) -> dict:
-    """Aggregate ledger rows into the heat report (planner-compatible top level)."""
+    """Aggregate ledger rows into the heat report (planner-compatible top level).
+
+    ``pending_entries`` (placed, unfilled entry brackets) are reserved like open
+    positions: their risk is included in ``open_risk_pct`` (what the planner
+    reads) and they consume position slots, but they are listed separately so
+    the intraday monitor never manages them as held positions."""
+    pending_entries = list(pending_entries or [])
     known = [p for p in positions if p["risk_dollars"] is not None]
-    open_risk_dollars = round(sum(p["risk_dollars"] for p in known), 2)
+    pending_known = [p for p in pending_entries if p.get("risk_dollars") is not None]
+    live_risk_dollars = round(sum(p["risk_dollars"] for p in known), 2)
+    pending_risk_dollars = round(sum(p["risk_dollars"] for p in pending_known), 2)
+    open_risk_dollars = round(live_risk_dollars + pending_risk_dollars, 2)
     open_risk_pct = round(open_risk_dollars / account_size * 100, 2) if account_size else 0.0
 
     sector_exposure: dict[str, float] = {}
@@ -262,16 +380,24 @@ def build_report(
         "sector_exposure": sector_exposure,
         # Ledger detail
         "open_risk_dollars": open_risk_dollars,
+        "live_risk_dollars": live_risk_dollars,
+        "pending_risk_dollars": pending_risk_dollars,
         "positions_count": len(positions),
-        "heat_complete": len(known) == len(positions),
+        "pending_count": len(pending_entries),
+        "heat_complete": (
+            len(known) == len(positions) and len(pending_known) == len(pending_entries)
+        ),
         "max_portfolio_heat_pct": max_heat_pct,
         "remaining_heat_pct": remaining_heat_pct,
         "remaining_heat_dollars": round(remaining_heat_pct / 100 * account_size, 2),
         "max_positions": max_positions,
         "remaining_position_slots": (
-            max(0, int(max_positions) - len(positions)) if max_positions is not None else None
+            max(0, int(max_positions) - len(positions) - len(pending_entries))
+            if max_positions is not None
+            else None
         ),
         "positions": enriched,
+        "pending_entries": pending_entries,
         "warnings": warnings,
     }
 
@@ -300,8 +426,12 @@ def generate_markdown(report: dict) -> str:
 
     if report["positions"]:
         lines.append("## Open Positions\n")
-        lines.append("| Ticker | Side | Status | Shares | Entry | Stop | Risk $ | Risk % | Sector |")
-        lines.append("|--------|------|--------|--------|-------|------|--------|--------|--------|")
+        lines.append(
+            "| Ticker | Side | Status | Shares | Entry | Stop | Risk $ | Risk % | Sector |"
+        )
+        lines.append(
+            "|--------|------|--------|--------|-------|------|--------|--------|--------|"
+        )
         for p in report["positions"]:
             risk_d = f"${p['risk_dollars']:,.2f}" if p["risk_dollars"] is not None else "?"
             risk_p = f"{p['risk_pct_of_account']}%" if p["risk_pct_of_account"] is not None else "?"
@@ -309,6 +439,19 @@ def generate_markdown(report: dict) -> str:
             lines.append(
                 f"| {p['ticker']} | {p.get('side', 'long')} | {p['status']} | {p['shares']} | "
                 f"${p['entry_price']:.2f} | {stop} | {risk_d} | {risk_p} | {p['sector']} |"
+            )
+        lines.append("")
+
+    if report.get("pending_entries"):
+        lines.append("## Pending Entry Brackets (placed, unfilled — heat reserved)\n")
+        lines.append("| Ticker | Side | Thesis | Placed | Shares | Stop | Risk $ |")
+        lines.append("|--------|------|--------|--------|--------|------|--------|")
+        for p in report["pending_entries"]:
+            risk_d = f"${p['risk_dollars']:,.2f}" if p.get("risk_dollars") is not None else "?"
+            lines.append(
+                f"| {p['ticker']} | {p.get('side', 'long')} | {p.get('thesis_status', '?')} | "
+                f"{p.get('ledger_date', '?')} | {p.get('shares')} | {p.get('stop_loss')} | "
+                f"{risk_d} |"
             )
         lines.append("")
 
@@ -376,6 +519,14 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Max concurrent positions (reports remaining slots when set)",
     )
+    parser.add_argument(
+        "--orders-dir",
+        default=_default_output_dir("logs", None),
+        help=(
+            "Dir with watchlist_orders ledgers (pending_orders_<date>.json); placed, "
+            "unfilled entry brackets reserve heat + slots (default: $TRADING_DATE_DIR/logs)"
+        ),
+    )
     parser.add_argument("--output-dir", default=_default_output_dir("journal"))
     parser.add_argument(
         "--json-only", action="store_true", help="Write only the JSON report (skip markdown)"
@@ -398,12 +549,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     positions, warnings = collect_positions(state_dir)
+    pending, pending_warnings = collect_pending_entries(
+        state_dir, Path(args.orders_dir) if args.orders_dir else None
+    )
     report = build_report(
         positions,
-        warnings,
+        warnings + pending_warnings,
         account_size=float(args.account_size),
         max_heat_pct=float(args.max_portfolio_heat_pct),
         max_positions=(int(args.max_positions) if args.max_positions is not None else None),
+        pending_entries=pending,
     )
 
     os.makedirs(args.output_dir, exist_ok=True)

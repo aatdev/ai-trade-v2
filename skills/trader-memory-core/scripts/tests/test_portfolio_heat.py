@@ -291,3 +291,154 @@ class TestMain:
             ]
         )
         assert rc == 1
+
+
+# -- Pending (placed, unfilled) entry brackets ------------------------------------
+
+
+def _make_entry_ready(state_dir: Path, ticker: str, side: str | None = None) -> str:
+    data = {
+        "ticker": ticker,
+        "thesis_type": "pivot_breakout",
+        "thesis_statement": f"{ticker} pending-entry heat test thesis",
+        "origin": {"skill": "test-skill", "output_file": "t.json"},
+    }
+    if side:
+        data["side"] = side
+    tid = thesis_store.register(state_dir, data)
+    thesis_store.transition(state_dir, tid, "ENTRY_READY", reason="test")
+    return tid
+
+
+def _ledger(orders_dir: Path, date_str: str, orders: dict) -> None:
+    orders_dir.mkdir(parents=True, exist_ok=True)
+    (orders_dir / f"pending_orders_{date_str}.json").write_text(
+        json.dumps({"date": date_str, "orders": orders})
+    )
+
+
+def _order(tid, ticker, *, status="placed", **kw):
+    o = {
+        "thesis_id": tid,
+        "ticker": ticker,
+        "side": "long",
+        "kind": "open",
+        "pivot": 100.0,
+        "worst_entry": 102.0,
+        "stop": 97.0,
+        "shares": 99,
+        "risk_dollars": 495.0,
+        "status": status,
+    }
+    o.update(kw)
+    return o
+
+
+class TestPendingEntries:
+    TODAY = datetime(2026, 6, 11)
+
+    def test_placed_unfilled_bracket_from_earlier_day_counts(self, tmp_path):
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_entry_ready(state, "NVDA")
+        _ledger(orders, "2026-06-09", {tid: _order(tid, "NVDA")})
+        pending, warnings = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert [p["ticker"] for p in pending] == ["NVDA"]
+        assert pending[0]["risk_dollars"] == 495.0
+        assert warnings == []
+
+    def test_filled_skipped_or_card_only_entries_ignored(self, tmp_path):
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        a, b, c = (_make_entry_ready(state, t) for t in ("AAA", "BBB", "CCC"))
+        _ledger(
+            orders,
+            "2026-06-10",
+            {
+                a: _order(a, "AAA", status="filled"),
+                b: _order(b, "BBB", status="skipped"),
+                c: _order(c, "CCC", status="pending"),
+            },
+        )
+        pending, _ = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert pending == []
+
+    def test_active_thesis_is_a_position_not_pending(self, tmp_path):
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_active(state, "AAPL", entry=100.0, stop=97.0, shares=99)
+        _ledger(orders, "2026-06-10", {tid: _order(tid, "AAPL")})
+        pending, _ = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert pending == []
+
+    def test_latest_ledger_wins_per_thesis(self, tmp_path):
+        # Placed on 06-08, recorded filled/cancelled later -> not pending.
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_entry_ready(state, "NVDA")
+        _ledger(orders, "2026-06-08", {tid: _order(tid, "NVDA")})
+        _ledger(orders, "2026-06-10", {tid: _order(tid, "NVDA", status="cancelled")})
+        pending, _ = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert pending == []
+
+    def test_ledgers_older_than_lookback_ignored(self, tmp_path):
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_entry_ready(state, "NVDA")
+        _ledger(orders, "2026-04-01", {tid: _order(tid, "NVDA")})
+        pending, _ = portfolio_heat.collect_pending_entries(
+            state, orders, today=self.TODAY, lookback_days=30
+        )
+        assert pending == []
+
+    def test_risk_derived_from_worst_entry_when_missing(self, tmp_path):
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_entry_ready(state, "NVDA")
+        _ledger(orders, "2026-06-10", {tid: _order(tid, "NVDA", risk_dollars=None)})
+        pending, _ = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert pending[0]["risk_dollars"] == round(99 * (102.0 - 97.0), 2)
+
+    def test_terminated_thesis_with_resting_order_counts_and_warns(self, tmp_path):
+        # The thesis was invalidated but the GTC bracket may still rest at IB.
+        state, orders = tmp_path / "theses", tmp_path / "logs"
+        state.mkdir()
+        tid = _make_entry_ready(state, "NVDA")
+        thesis_store.terminate(state, tid, "INVALIDATED", "regime flip")
+        _ledger(orders, "2026-06-10", {tid: _order(tid, "NVDA")})
+        pending, warnings = portfolio_heat.collect_pending_entries(state, orders, today=self.TODAY)
+        assert [p["ticker"] for p in pending] == ["NVDA"]
+        assert warnings and warnings[0]["code"] == "ORPHAN_PENDING_ORDER"
+
+    def test_report_reserves_pending_heat_and_slots(self, tmp_path):
+        _make_active(tmp_path, "AAPL", entry=50.0, stop=45.0, shares=100)
+        positions, warnings = portfolio_heat.collect_positions(tmp_path)
+        pending = [{"thesis_id": "th_x", "ticker": "NVDA", "risk_dollars": 400.0}]
+        report = portfolio_heat.build_report(
+            positions,
+            warnings,
+            account_size=100_000.0,
+            max_heat_pct=6.0,
+            max_positions=6,
+            pending_entries=pending,
+        )
+        # 500 live + 400 pending = 900 -> planner-compatible open_risk_pct
+        assert report["open_risk_dollars"] == 900.0
+        assert report["open_risk_pct"] == 0.9
+        assert report["live_risk_dollars"] == 500.0
+        assert report["pending_risk_dollars"] == 400.0
+        assert report["remaining_position_slots"] == 4
+        assert report["positions_count"] == 1  # live positions only
+        assert report["pending_entries"][0]["ticker"] == "NVDA"
+
+    def test_unknown_pending_risk_marks_incomplete(self):
+        pending = [{"thesis_id": "th_x", "ticker": "NVDA", "risk_dollars": None}]
+        report = portfolio_heat.build_report(
+            [],
+            [],
+            account_size=100_000.0,
+            max_heat_pct=6.0,
+            max_positions=6,
+            pending_entries=pending,
+        )
+        assert report["heat_complete"] is False

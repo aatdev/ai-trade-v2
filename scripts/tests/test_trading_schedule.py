@@ -839,10 +839,12 @@ def _watchlist_file(tmp_path, date_str, candidates):
     )
 
 
-def _heat_file(tmp_path, positions=(), slots=6, heat_dollars=9000.0):
+def _heat_file(tmp_path, positions=(), slots=6, heat_dollars=9000.0, generated_at=None):
     return _write_json(
         tmp_path / "journal" / "portfolio_heat_2026-06-11_120000.json",
         {
+            # Intraday checks the snapshot's age against the wall clock.
+            "generated_at": generated_at or dt.datetime.now().isoformat(timespec="seconds"),
             "account_size": 150000.0,
             "remaining_position_slots": slots,
             "remaining_heat_dollars": heat_dollars,
@@ -896,6 +898,42 @@ class TestIntradaySlot:
         rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
         assert rc == 0
         assert len(sent) == 1
+
+    def test_stale_heat_arms_no_open_but_manages_positions(self, monkeypatch, tmp_path):
+        # A 3-day-old heat snapshot cannot vouch for today's slots / heat.
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+        old = (dt.datetime.now() - dt.timedelta(days=3)).isoformat(timespec="seconds")
+        _heat_file(
+            tmp_path,
+            positions=[{"ticker": "AAPL", "entry_price": 100.0, "shares": 100, "stop_loss": 95.0}],
+            generated_at=old,
+        )
+        monkeypatch.setattr(
+            ts.tsig,
+            "fetch_quotes",
+            lambda tickers, **k: {"NVDA": {"price": 156.0}, "AAPL": {"price": 94.0}},
+        )
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert sent and "AAPL" in sent[0]
+        assert "ОТКРОЙ ЛОНГ NVDA" not in sent[0]
+
+    def test_missing_heat_arms_no_open(self, monkeypatch, tmp_path):
+        _patch_trading_dirs(monkeypatch, tmp_path)
+        _gate(tmp_path, "2026-06-11", "allow")
+        _watchlist_file(tmp_path, "2026-06-11", [_NVDA_CANDIDATE])
+        monkeypatch.setattr(
+            ts.tsig, "fetch_quotes", lambda tickers, **k: {"NVDA": {"price": 156.0}}
+        )
+        sent = []
+        monkeypatch.setattr(ts, "notify", lambda text, **k: sent.append(text))
+        rc = ts.main(["--slot", "intraday", "--date", "2026-06-11", "--force", "--no-telegram"])
+        assert rc == 0
+        assert not any("ОТКРОЙ ЛОНГ" in m for m in sent)
 
     def test_stop_hit_signal_for_open_position(self, monkeypatch, tmp_path):
         _patch_trading_dirs(monkeypatch, tmp_path)
@@ -1150,8 +1188,39 @@ class TestEveningHybrid:
             (tmp_path / "schedule" / "watchlist_2026-06-11.json").read_text(encoding="utf-8")
         )
         assert wl["candidates"][0]["side"] == "short"
-        assert wl["candidates"][0]["shares"] == 100  # 1% of 150k / 15
+        # 1% of 150k at the worst fill (245 × 0.98 = 240.10): 1500 / 19.90 = 75
+        assert wl["candidates"][0]["shares"] == 75
         assert sent and "ШОРТ" in sent[0]
+
+    def test_short_branch_heat_failure_is_fail_safe(self, monkeypatch, tmp_path):
+        """Mirror of the long branch: no heat ledger → no short screen, no new risk."""
+        market_top = {
+            "composite": {"composite_score": 51.5},
+            "components": {"distribution_days": {"effective_count": 6.0}},
+            "follow_through_day": {"ftd_detected": False},
+        }
+        shorts = [
+            {
+                "symbol": "NFLX",
+                "grade": "A",
+                "composite_score": 82.5,
+                "trade_levels": {"entry": 245.0, "stop": 260.0, "target_2r": 215.0},
+            }
+        ]
+        rc, calls, sent = self._run(
+            monkeypatch,
+            tmp_path,
+            decision="restrict",
+            market_top=market_top,
+            short_candidates=shorts,
+            heat_ok=False,
+            enable_shorts=True,
+        )
+        assert not any("swing-short" in c for c in calls)
+        wl_file = tmp_path / "schedule" / "watchlist_2026-06-11.json"
+        if wl_file.exists():
+            assert json.loads(wl_file.read_text(encoding="utf-8"))["candidates"] == []
+        assert any("fail-safe" in m for m in sent)
 
     def test_short_branch_without_universe_file_falls_back_to_full_sp500(
         self, monkeypatch, tmp_path
@@ -1812,8 +1881,9 @@ class TestAutoAnalyzeReconcile:
         }
         out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=_AOS_SIGNAL)
         c = out["candidates"][0]
-        assert c["shares"] == 375  # 150000×1% / |60−56| — budget, not 517.59/4≈129
-        assert c["risk_dollars"] == 1500.0
+        # 150000×1% at the worst fill: 1500 / |60.5−56| = 333 — budget, not 517.59/4≈129
+        assert c["shares"] == 333
+        assert c["risk_dollars"] == 1498.5
         assert c["worst_entry"] == 60.5  # Entry-range high, not == trigger
         assert c["pivot"] == 60.0 and c["stop"] == 56.0
         assert c["screener_origin"]["pivot"] == 59.0
@@ -1843,6 +1913,27 @@ class TestAutoAnalyzeReconcile:
         assert rej["source"] == "analysis-excluded"
         assert rej["side"] == "short"  # original side kept for the audit trail
         assert invalidated == ["th_aos_pvt_20260611_ab12"]
+
+    def test_wrong_side_entry_high_clamped_to_chase_band(self, monkeypatch, tmp_path):
+        # entry_high below the long trigger is not a chase bound: it would turn
+        # the first tick past the trigger into MISSED. Use the 2% band instead.
+        cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}
+        signal = {**_AOS_SIGNAL, "entry_high": 59.0}
+        out = self._reconcile(monkeypatch, tmp_path, candidates=[cand], signal=signal)
+        c = out["candidates"][0]
+        assert c["worst_entry"] == 61.2
+        assert c["shares"] == 288  # sized at the 61.2 worst fill
+
+    def test_profile_sized_shares_at_worst_entry(self):
+        profile = {"account_size": 150000, "risk_pct": 0.33, "max_position_pct": 25}
+        shares, risk = ts._profile_sized_shares(profile, 100.0, 97.0, worst=102.0)
+        assert shares == 99 and risk <= 495
+
+    def test_profile_sized_shares_short_uses_short_risk_pct(self):
+        profile = {"account_size": 150000, "risk_pct": 0.33, "short_risk_pct": 0.2}
+        shares, risk = ts._profile_sized_shares(profile, 100.0, 105.0, worst=98.0, side="short")
+        assert shares == 42  # 300 / 7
+        assert risk == 294.0
 
     def test_profile_sized_shares_caps_tight_stop(self):
         profile = {"account_size": 150000, "risk_pct": 1, "max_position_pct": 25}
@@ -1927,8 +2018,9 @@ class TestApplyValidationLevels:
         c = out["candidates"][0]
         assert c["pivot"] == 60.0 and c["stop"] == 56.0 and c["target"] == 66.0
         assert c["source"] == "chart-validation"
-        assert c["shares"] == 375  # 150000×1% / |60−56| risk budget
-        assert c["risk_dollars"] == 1500.0
+        # 150000×1% at the worst fill: 1500 / |61.2−56| = 288
+        assert c["shares"] == 288
+        assert c["risk_dollars"] == 1497.6
         assert c["worst_entry"] == 61.2  # 60 × 1.02 chase band
         assert c["screener_origin"]["pivot"] == 59.0  # planner number preserved
 
@@ -1960,6 +2052,18 @@ class TestApplyValidationLevels:
         assert c["source"] == "chart-validation"
         assert c["shares"] and c["shares"] > 0
         assert c["worst_entry"] == 19.11  # 19.5 × 0.98 chase band
+
+    def test_short_pass_sized_at_profile_risk_not_one_percent(self, monkeypatch, tmp_path):
+        # Regression (prod XP/SHAK $1.5k): validated shorts were re-sized with
+        # size_short's 1% default instead of the profile's 0.33%.
+        cand = {"ticker": "WBA", "side": "short", "pivot": 20.0, "stop": 21.0, "shares": 100}
+        v = [{"ticker": "WBA", "verdict": "pass", "entry": 19.5, "stop": 20.6, "target": 17.3}]
+        profile = {"account_size": 150000, "risk_pct": 0.33, "max_position_pct": 25}
+        out = self._apply(monkeypatch, tmp_path, candidates=[cand], verdicts=v, profile=profile)
+        c = out["candidates"][0]
+        # $495 / (20.6 − 19.11 worst fill) = 332 shares
+        assert c["shares"] == 332
+        assert c["risk_dollars"] <= 150000 * 0.33 / 100
 
     def test_no_verdict_for_candidate_is_untouched(self, monkeypatch, tmp_path):
         cand = {"ticker": "AOS", "side": "long", "pivot": 59.0, "stop": 56.5, "shares": 100}

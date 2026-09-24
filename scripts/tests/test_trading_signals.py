@@ -43,6 +43,8 @@ def make_plan(**overrides):
                 "pivot": 150.0,
                 "current_price": 152.5,
                 "max_entry_price": 153.0,
+                "stop_loss_price": 146.0,
+                "target_price": 162.0,
             }
         ],
     }
@@ -168,6 +170,81 @@ class TestSizeShort:
 
 
 # --------------------------------------------------------------------------- #
+# risk_sized_shares — one sizing rule for longs and shorts, at the WORST fill
+# --------------------------------------------------------------------------- #
+class TestRiskSizedShares:
+    def test_long_sized_at_worst_entry(self):
+        # $495 budget / (102 worst - 97 stop) = 99 shares (not 165 at the trigger)
+        shares, risk = sig.risk_sized_shares(
+            150000, "long", 100.0, 97.0, worst_entry=102.0, risk_pct=0.33, max_position_pct=25
+        )
+        assert shares == 99
+        assert risk == round(99 * 5.0, 2)
+        assert risk <= 495
+
+    def test_short_sized_at_worst_entry(self):
+        # $495 / (105 stop - 98 worst) = 70 shares (not 99 at the trigger)
+        shares, risk = sig.risk_sized_shares(
+            150000, "short", 100.0, 105.0, worst_entry=98.0, risk_pct=0.33, max_position_pct=25
+        )
+        assert shares == 70
+        assert risk == round(70 * 7.0, 2)
+
+    def test_wrong_side_worst_entry_falls_back_to_trigger(self):
+        # A long "worst" below the trigger is not a chase bound -> size at the trigger.
+        shares, _ = sig.risk_sized_shares(
+            150000, "long", 100.0, 97.0, worst_entry=98.0, risk_pct=0.33, max_position_pct=25
+        )
+        assert shares == 165
+
+    def test_invalid_geometry_returns_none(self):
+        assert sig.risk_sized_shares(
+            150000, "long", 100.0, 101.0, risk_pct=0.33, max_position_pct=25
+        ) == (None, None)
+        assert sig.risk_sized_shares(
+            150000, "short", 100.0, 95.0, risk_pct=0.33, max_position_pct=25
+        ) == (None, None)
+
+    def test_position_cap_binds(self):
+        # 1% of 150k / 1.0 = 1500 shares -> capped at 25% of 150k / 100 = 375
+        shares, risk = sig.risk_sized_shares(
+            150000, "long", 100.0, 99.0, risk_pct=1.0, max_position_pct=25
+        )
+        assert shares == 375 and risk == 375.0
+
+
+# --------------------------------------------------------------------------- #
+# heat_usable — the capacity gate needs a real, complete, fresh snapshot
+# --------------------------------------------------------------------------- #
+class TestHeatUsable:
+    NOW = dt.datetime(2026, 6, 11, 17, 0)
+
+    def test_missing_heat_is_not_usable(self):
+        ok, reason = sig.heat_usable(None)
+        assert ok is False and "heat" in reason
+
+    def test_incomplete_heat_is_not_usable(self):
+        ok, reason = sig.heat_usable(make_heat(heat_complete=False))
+        assert ok is False and "неполный" in reason
+
+    def test_age_ignored_without_max_age(self):
+        assert sig.heat_usable(make_heat())[0] is True
+
+    def test_stale_heat_is_not_usable(self):
+        heat = make_heat(generated_at="2026-06-09T22:00:00")
+        ok, reason = sig.heat_usable(heat, now=self.NOW, max_age_hours=30)
+        assert ok is False and "устарел" in reason
+
+    def test_undated_heat_is_not_usable_when_age_checked(self):
+        ok, _ = sig.heat_usable(make_heat(), now=self.NOW, max_age_hours=30)
+        assert ok is False
+
+    def test_fresh_heat_is_usable(self):
+        heat = make_heat(generated_at="2026-06-10T22:30:00")
+        assert sig.heat_usable(heat, now=self.NOW, max_age_hours=30)[0] is True
+
+
+# --------------------------------------------------------------------------- #
 # build_watchlist
 # --------------------------------------------------------------------------- #
 class TestBuildWatchlist:
@@ -203,8 +280,9 @@ class TestBuildWatchlist:
         assert nflx["pivot"] == 245.0
         assert nflx["stop"] == 260.0
         assert nflx["target"] == 215.0
-        # Default fallback 1% of 150k = 1500 / (260-245) = 100 shares
-        assert nflx["shares"] == 100
+        # Default fallback 1% of 150k = 1500, sized at the WORST fill of the
+        # chase band: 245 x 0.98 = 240.10 -> 1500 / (260 - 240.10) = 75 shares
+        assert nflx["shares"] == 75
 
     def test_short_risk_pct_follows_profile_budget(self):
         # Profile risk 0.33% must size shorts at the same budget as longs, not
@@ -219,8 +297,9 @@ class TestBuildWatchlist:
             short_risk_pct=0.33,
         )
         nflx = wl["candidates"][0]
-        assert nflx["shares"] == 33
-        assert nflx["risk_dollars"] == round(33 * (260.0 - 245.0), 2)
+        # 0.33% of 150k = $495 / (260 - 240.10 worst fill) = 24 shares
+        assert nflx["shares"] == 24
+        assert nflx["risk_dollars"] == round(24 * (260.0 - 240.10), 2)
         assert nflx["risk_dollars"] <= 150000 * 0.33 / 100
 
     def test_short_max_position_pct_from_profile_caps_shares(self):
@@ -239,12 +318,33 @@ class TestBuildWatchlist:
             ],
             None,
             account_size=150000,
-            short_risk_pct=0.33,
+            short_risk_pct=1.0,
             short_max_position_pct=25.0,
         )
         tgt = wl["candidates"][0]
         # 25% of 150k / 200 = 187 shares cap binds before the risk-based count.
         assert tgt["shares"] == 187
+
+    def test_short_with_stop_below_entry_is_rejected(self):
+        # Inverted short geometry must never reach the intraday monitor (it used
+        # to stay a candidate with shares=None and still fire OPEN_SHORT).
+        bad = [{"symbol": "BAD", "grade": "A", "trade_levels": {"entry": 100.0, "stop": 95.0}}]
+        wl = sig.build_watchlist("2026-06-11", "restrict", None, bad, None, account_size=150000)
+        assert wl["candidates"] == []
+        assert [c["ticker"] for c in wl["rejected_by_geometry"]] == ["BAD"]
+
+    def test_long_with_stop_above_pivot_is_rejected(self):
+        plan = make_plan()
+        plan["actionable_orders"][0]["trade_plan"]["stop_loss_price"] = 160.0
+        wl = sig.build_watchlist("2026-06-11", "allow", plan, None, None)
+        assert "NVDA" not in [c["ticker"] for c in wl["candidates"]]
+        assert "NVDA" in [c["ticker"] for c in wl["rejected_by_geometry"]]
+
+    def test_short_without_account_is_rejected_unsized(self):
+        # No account size -> cannot size -> never armed.
+        wl = sig.build_watchlist("2026-06-11", "restrict", None, make_short_candidates(), None)
+        assert wl["candidates"] == []
+        assert wl["rejected_by_geometry"][0]["ticker"] == "NFLX"
 
     def test_validation_reject_drops_candidate(self):
         validation = {
@@ -423,6 +523,26 @@ class TestOpenSignals:
         )
         assert _types(signals) == [("AAPL", "STOP_HIT")]
 
+    def test_missing_heat_arms_no_open(self):
+        # No heat snapshot = unknown slots/heat/open positions -> no new risk.
+        wl = make_watchlist([long_candidate()])
+        signals = sig.evaluate_signals(wl, None, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert signals == []
+
+    def test_incomplete_heat_arms_no_open(self):
+        wl = make_watchlist([long_candidate()])
+        heat = make_heat(heat_complete=False)
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert signals == []
+
+    def test_pending_entry_ticker_is_treated_as_armed(self):
+        # A resting (placed, unfilled) bracket from an earlier day already holds
+        # heat in the snapshot -> no second OPEN for the same ticker.
+        wl = make_watchlist([long_candidate()])
+        heat = make_heat(pending_entries=[{"ticker": "NVDA", "risk_dollars": 490.0}])
+        signals = sig.evaluate_signals(wl, heat, {"NVDA": {"price": 156.0}}, "allow", set())
+        assert signals == []
+
     def test_missing_quote_is_silent(self):
         wl = make_watchlist([long_candidate()])
         assert sig.evaluate_signals(wl, make_heat(), {}, "allow", set()) == []
@@ -525,27 +645,27 @@ class TestEarningsRules:
     def test_open_short_blocked_before_earnings(self):
         wl = make_watchlist([short_candidate()])
         quotes = {"NFLX": {"price": 244.0, "earnings_date": "2026-06-18"}}  # 5 weekdays
-        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        signals = sig.evaluate_signals(wl, make_heat(), quotes, "restrict", set(), today=_THU)
         assert _types(signals) == [("NFLX", "SKIPPED_EARNINGS")]
         assert signals[0]["days_to_earnings"] == 5
 
     def test_open_short_allowed_when_earnings_far(self):
         wl = make_watchlist([short_candidate()])
         quotes = {"NFLX": {"price": 244.0, "earnings_date": "2026-07-30"}}
-        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        signals = sig.evaluate_signals(wl, make_heat(), quotes, "restrict", set(), today=_THU)
         assert _types(signals) == [("NFLX", "OPEN_SHORT")]
 
     def test_open_short_allowed_when_earnings_unknown(self):
         wl = make_watchlist([short_candidate()])
         quotes = {"NFLX": {"price": 244.0, "earnings_date": None}}
-        signals = sig.evaluate_signals(wl, None, quotes, "restrict", set(), today=_THU)
+        signals = sig.evaluate_signals(wl, make_heat(), quotes, "restrict", set(), today=_THU)
         assert _types(signals) == [("NFLX", "OPEN_SHORT")]
 
     def test_open_long_not_blocked_by_earnings(self):
         # The long side is already gated at plan time by the breakout planner.
         wl = make_watchlist([long_candidate()])
         quotes = {"NVDA": {"price": 156.0, "earnings_date": "2026-06-18"}}
-        signals = sig.evaluate_signals(wl, None, quotes, "allow", set(), today=_THU)
+        signals = sig.evaluate_signals(wl, make_heat(), quotes, "allow", set(), today=_THU)
         assert _types(signals) == [("NVDA", "OPEN_LONG")]
 
     def test_earnings_soon_warns_open_position(self):

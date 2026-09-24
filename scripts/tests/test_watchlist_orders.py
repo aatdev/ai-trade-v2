@@ -10,6 +10,21 @@ sys.path.insert(0, str(_SCRIPTS))
 
 import watchlist_orders as wo  # noqa: E402
 
+_REAL_GATE_OK_FOR = getattr(wo, "gate_ok_for", None)
+
+
+@pytest.fixture(autouse=True)
+def _gate_open_by_default(monkeypatch):
+    """handle_open re-checks the regime gate at tap time; tests that are not
+    about the gate run against an open gate (TestGateOkFor uses the real one)."""
+    monkeypatch.setattr(wo, "gate_ok_for", lambda entry: (True, "ok"), raising=False)
+
+
+def _now_iso():
+    import datetime as _dt
+
+    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
 
 # --------------------------------------------------------------------------- #
 # Fixtures
@@ -318,10 +333,85 @@ def _entry(status="pending", **kw):
     return e
 
 
-def test_heat_ok_for_no_file_passes(monkeypatch):
+def test_heat_ok_for_no_file_blocks(monkeypatch):
+    # Fail-closed: without a heat snapshot slots/heat are unknown -> no new risk.
     monkeypatch.setattr(wo.sched, "_latest", lambda d, p: None)
     ok, reason = wo.heat_ok_for(_entry())
-    assert ok is True and "heat-гейт пропущен" in reason
+    assert ok is False and "heat" in reason
+
+
+def test_heat_ok_for_stale_snapshot_blocks(monkeypatch, tmp_path):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: tmp_path / "h.json")
+    monkeypatch.setattr(
+        wo,
+        "_read_json_file",
+        lambda p: {
+            "generated_at": "2026-01-02T10:00:00+01:00",
+            "remaining_position_slots": 3,
+            "remaining_heat_dollars": 9000,
+        },
+    )
+    ok, reason = wo.heat_ok_for(_entry())
+    assert ok is False and "устарел" in reason
+
+
+def test_heat_ok_for_unknown_risk_blocks(monkeypatch, tmp_path):
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: tmp_path / "h.json")
+    monkeypatch.setattr(
+        wo,
+        "_read_json_file",
+        lambda p: {
+            "generated_at": _now_iso(),
+            "remaining_position_slots": 3,
+            "remaining_heat_dollars": 9000,
+        },
+    )
+    ok, reason = wo.heat_ok_for(_entry(risk_dollars=None))
+    assert ok is False and "риск" in reason
+
+
+def test_heat_ok_for_counts_brackets_placed_after_snapshot(monkeypatch, tmp_path):
+    # Two taps against the same snapshot must not both claim the last slot /
+    # the same remaining heat: brackets placed after the snapshot are deducted.
+    import json as _json
+
+    monkeypatch.setattr(wo.sched, "TRADING_DATA_DIR", tmp_path)
+    heat = tmp_path / "h.json"
+    heat.write_text(
+        _json.dumps(
+            {
+                "generated_at": "2026-06-15T15:00:00+02:00",
+                "remaining_position_slots": 1,
+                "remaining_heat_dollars": 600,
+            }
+        )
+    )
+    monkeypatch.setattr(wo.sched, "_latest", lambda d, p: heat)
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "pending_orders_2026-06-15.json").write_text(
+        _json.dumps(
+            {
+                "date": "2026-06-15",
+                "orders": {
+                    "th_other": _entry(
+                        thesis_id="th_other",
+                        ticker="AMD",
+                        status="placed",
+                        risk_dollars=495.0,
+                        placed_at="2026-06-15T16:05:00+02:00",
+                    ),
+                },
+            }
+        )
+    )
+    import datetime as _dt
+
+    monkeypatch.setattr(
+        wo, "_heat_now", lambda: _dt.datetime.fromisoformat("2026-06-15T17:00:00+02:00")
+    )
+    ok, reason = wo.heat_ok_for(_entry(risk_dollars=50.0))
+    assert ok is False and "слот" in reason
 
 
 def test_heat_ok_for_blocks_no_slots(monkeypatch, tmp_path):
@@ -329,7 +419,11 @@ def test_heat_ok_for_blocks_no_slots(monkeypatch, tmp_path):
     monkeypatch.setattr(
         wo,
         "_read_json_file",
-        lambda p: {"remaining_position_slots": 0, "remaining_heat_dollars": 9000},
+        lambda p: {
+            "generated_at": _now_iso(),
+            "remaining_position_slots": 0,
+            "remaining_heat_dollars": 9000,
+        },
     )
     ok, reason = wo.heat_ok_for(_entry())
     assert ok is False and "слотов" in reason
@@ -340,7 +434,11 @@ def test_heat_ok_for_blocks_insufficient_heat(monkeypatch, tmp_path):
     monkeypatch.setattr(
         wo,
         "_read_json_file",
-        lambda p: {"remaining_position_slots": 3, "remaining_heat_dollars": 40},
+        lambda p: {
+            "generated_at": _now_iso(),
+            "remaining_position_slots": 3,
+            "remaining_heat_dollars": 40,
+        },
     )
     ok, reason = wo.heat_ok_for(_entry(risk_dollars=50.0))
     assert ok is False and "heat" in reason
@@ -351,10 +449,54 @@ def test_heat_ok_for_passes(monkeypatch, tmp_path):
     monkeypatch.setattr(
         wo,
         "_read_json_file",
-        lambda p: {"remaining_position_slots": 3, "remaining_heat_dollars": 9000},
+        lambda p: {
+            "generated_at": _now_iso(),
+            "remaining_position_slots": 3,
+            "remaining_heat_dollars": 9000,
+        },
     )
     ok, _ = wo.heat_ok_for(_entry())
     assert ok is True
+
+
+class TestGateOkFor:
+    """Regime gate re-checked at tap time (cards live for hours; the gate may flip)."""
+
+    def _gate(self, monkeypatch, decision, degraded=False):
+        monkeypatch.setattr(
+            wo.sched,
+            "read_decision",
+            lambda path: {"decision": decision, "degraded": degraded},
+        )
+
+    def test_long_allowed_under_allow(self, monkeypatch):
+        self._gate(monkeypatch, "allow")
+        assert _REAL_GATE_OK_FOR(_entry())[0] is True
+
+    def test_long_blocked_after_flip_to_restrict(self, monkeypatch):
+        self._gate(monkeypatch, "restrict")
+        ok, reason = _REAL_GATE_OK_FOR(_entry())
+        assert ok is False and "restrict" in reason
+
+    def test_short_allowed_under_restrict(self, monkeypatch):
+        self._gate(monkeypatch, "restrict")
+        assert _REAL_GATE_OK_FOR(_entry(side="short"))[0] is True
+
+    def test_degraded_gate_blocks(self, monkeypatch):
+        self._gate(monkeypatch, "allow", degraded=True)
+        ok, reason = _REAL_GATE_OK_FOR(_entry())
+        assert ok is False and "degraded" in reason
+
+
+def test_handle_open_blocked_by_gate(monkeypatch):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
+    monkeypatch.setattr(wo, "gate_ok_for", lambda e: (False, "гейт restrict: лонг запрещён"))
+    monkeypatch.setattr(
+        wo.pib, "submit_brackets", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no place"))
+    )
+    entry = _entry()
+    wo.handle_open(entry, port=9000, live=True, bot_token="B")
+    assert entry["status"] == "skipped" and "restrict" in entry["error"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1350,6 +1492,7 @@ def _seed(tmp_path, **entry):
 
 # -- open-now ---------------------------------------------------------------- #
 def test_open_now_preview_when_not_live(monkeypatch, patched):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
     monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (False, "preview mode"))
     assert wo.cmd_open_now(_OpenArgs(live=False)) == 0
     entry = wo.load_ledger("2026-06-15")["orders"][_TID]
@@ -1359,6 +1502,7 @@ def test_open_now_preview_when_not_live(monkeypatch, patched):
 
 
 def test_open_now_places_bracket_when_live(monkeypatch, patched):
+    monkeypatch.setattr(wo, "heat_ok_for", lambda e: (True, "ok"))
     monkeypatch.setattr(wo.pib, "order_placement_status", lambda live: (True, "ok"))
     monkeypatch.setattr(wo.pib, "connect", lambda timeout=20.0: 5000)
     monkeypatch.setattr(wo.pib, "live_order_refs", lambda port: set())
