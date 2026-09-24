@@ -26,3 +26,4 @@
 - [IB headless autologin](ib-headless-autologin.md) — логин в IB = вызвать authenticate MCP-тул; IB_HEADLESS_MODE в .mcp.json, IB_PASSWORD фолбэк, ленивый логин при первом вызове, может требовать mobile-approval
 - [Thesis IDEA→ENTRY_READY ручной гейт](thesis-idea-entryready-manual-gate.md) — ingest даёт IDEA; повышение до ENTRY_READY ручное (CLI/UI), автопромоушна нет; карточки/кнопка Шага 2 требуют ENTRY_READY
 - [Scheduler claude steps ambient IB MCP hang](scheduler-claude-steps-ambient-ib-mcp-hang.md) — regime/chart/weekly шаги грузили .mcp.json (interactive-brokers); IB Gateway cold-boot на ПЕРВОМ шаге слота виснет → StopTimeout (rc=2, полный бюджет, нет транскрипта) → fail-safe RESTRICT; фикс — дефолтный --strict-mcp-config
+- [TV CDP remote endpoint](tv-cdp-remote-endpoint.md) — TradingView на удалённом хосте (VPN) через TV_CDP_HOST в .env; на Mac TV не установлен; старый ssh-туннель :9222 ведёт на мёртвый сервер
