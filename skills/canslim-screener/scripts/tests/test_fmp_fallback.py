@@ -289,7 +289,7 @@ class TestCallerRegression:
                         screen_canslim.main()
                     assert exc_info.value.code == 1
 
-    def test_canslim_continues_on_historical_failure(self, capsys):
+    def test_canslim_continues_on_historical_failure(self, capsys, tmp_path):
         """get_historical_prices("^GSPC") → None prints EMA fallback warning and continues."""
         with patch.dict(os.environ, {"FMP_API_KEY": "test_key"}):  # pragma: allowlist secret
             import screen_canslim
@@ -321,7 +321,16 @@ class TestCallerRegression:
                 patch.object(FMPClient, "get_profile", return_value=None),
                 patch.object(FMPClient, "get_institutional_holders", return_value=None),
                 patch(
-                    "sys.argv", ["screen_canslim.py", "--max-candidates", "1", "--universe", "AAPL"]
+                    "sys.argv",
+                    [
+                        "screen_canslim.py",
+                        "--max-candidates",
+                        "1",
+                        "--universe",
+                        "AAPL",
+                        "--output-dir",
+                        str(tmp_path),  # never write reports into the repo
+                    ],
                 ),
             ):
                 # Should NOT raise SystemExit — historical failure is non-fatal
