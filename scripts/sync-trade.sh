@@ -43,6 +43,9 @@ EXCLUDES=(
   "venv/"
   ".venv/"
   "node_modules/"
+  # Runtime state generated ON the server — a --delete push must not wipe it:
+  ".vertx/"                              # IB Gateway TLS keystore / file cache
+  "/vendor/tradingview-mcp/screenshots/" # chart captures from server-side analyses
 )
 
 # Server-authoritative: generated ON the box and pulled back to local. Excluded
